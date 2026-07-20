@@ -474,9 +474,27 @@ def complete_role_activation_intent(
     task id.
     """
     current_time = now or _utcnow()
+    organization_id = (
+        db.query(Role.organization_id)
+        .filter(Role.id == int(role_id), Role.deleted_at.is_(None))
+        .scalar()
+    )
+    if organization_id is None:
+        return {"status": "missing"}
+    from .workspace_agent_control import workspace_agent_control_snapshot
+
+    workspace_agent_control_snapshot(
+        db,
+        organization_id=int(organization_id),
+        lock=True,
+    )
     role = (
         db.query(Role)
-        .filter(Role.id == int(role_id), Role.deleted_at.is_(None))
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+        )
         .with_for_update()
         .one_or_none()
     )

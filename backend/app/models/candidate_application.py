@@ -196,5 +196,7 @@ class CandidateApplication(Base):
         "CvScoreJob",
         back_populates="application",
         cascade="all, delete-orphan",
-        order_by="CvScoreJob.queued_at.desc()",
+        # The append-only primary key is the causal attempt sequence. queued_at
+        # is retained for age/metrics and can move backwards across writers.
+        order_by="CvScoreJob.id.desc()",
     )

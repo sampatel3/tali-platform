@@ -3,7 +3,7 @@
 Split from the read-side ``hub_routes`` so each module stays under the
 500-LOC architecture gate.
 
-  POST /agent-decisions/{id}/snooze   hide a pending row for 1h
+  POST /agent-decisions/{id}/snooze   hide an actionable row for 1h
   POST /agent/feedback                "Send back & teach" — creates a decision_feedback
   POST /agent/feedback/{id}/cosign    second-admin co-sign for org-scope teach
   POST /agent/feedback/{id}/revert    1h grace-window undo
@@ -71,10 +71,13 @@ def snooze_decision(
     )
     if decision is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
-    if decision.status != "pending":
+    if decision.status not in ("pending", "reverted_for_feedback"):
         raise HTTPException(
             status_code=409,
-            detail=f"only pending decisions can be snoozed (got {decision.status})",
+            detail=(
+                "only pending or reverted decisions can be snoozed "
+                f"(got {decision.status})"
+            ),
         )
 
     decision.snoozed_until = now_utc() + SNOOZE_DURATION

@@ -17,30 +17,35 @@ logger = logging.getLogger("taali.corroboration_tasks")
 
 @celery_app.task(
     name="app.tasks.corroboration_tasks.enrich_corroboration_job",
-    max_retries=0,
+    bind=True,
+    max_retries=2,
     queue="scoring",
+    acks_late=True,
+    reject_on_worker_lost=True,
 )
-def enrich_corroboration_job(application_id: int) -> dict:
-    from ..models.candidate_application import CandidateApplication
+def enrich_corroboration_job(
+    self,
+    application_id: int,
+) -> dict:
     from ..platform.database import SessionLocal
-    from ..services.corroboration_enrichment import enrich_corroboration, should_enrich
+    from ..services.corroboration_enrichment import run_corroboration_enrichment
 
     db = SessionLocal()
     try:
-        application = (
-            db.query(CandidateApplication)
-            .filter(CandidateApplication.id == application_id)
-            .first()
+        result = run_corroboration_enrichment(
+            db,
+            application_id=int(application_id),
         )
-        if application is None:
-            return {"status": "missing", "application_id": application_id}
-        if not should_enrich(application):
-            return {"status": "skipped", "application_id": application_id}
-        triangulation = enrich_corroboration(application, db)
-        return {
-            "status": "ok" if triangulation else "no_signal",
-            "application_id": application_id,
-            "verdict": (triangulation or {}).get("verdict"),
-        }
+        if result.get("status") in {"leased", "retry_wait"}:
+            retry_after = max(
+                1,
+                min(1800, int(result.get("retry_after_seconds") or 60)),
+            )
+            if int(self.request.retries or 0) < int(self.max_retries or 0):
+                raise self.retry(
+                    countdown=retry_after,
+                    args=[int(application_id)],
+                )
+        return result
     finally:
         db.close()

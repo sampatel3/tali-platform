@@ -7,7 +7,6 @@ from unittest.mock import patch
 from app.actions import override_decision
 from app.actions.types import Actor
 from app.models.agent_decision import AgentDecision
-from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.user import User
 
@@ -140,6 +139,137 @@ def test_reclassify_to_advance_queue_is_noop_when_already_advance(db):
     db.refresh(decision)
     assert decision.status == "pending"
     assert decision.decision_type == "advance_to_interview"
+
+
+def test_reclassify_refuses_processing_card_without_rewriting_accepted_work(db):
+    import pytest
+    from fastapi import HTTPException
+
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    decision = _make_decision(db, org, role, app, "send_assessment")
+    decision.status = "processing"
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        override_decision.reclassify_to_advance_queue(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+        )
+
+    assert exc.value.status_code == 409
+    db.refresh(decision)
+    assert decision.status == "processing"
+    assert decision.decision_type == "send_assessment"
+
+
+def test_reclassify_refreshes_cached_pending_row_after_intent_discard(db):
+    import pytest
+    from fastapi import HTTPException
+
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    decision = _make_decision(db, org, role, app, "send_assessment")
+    db.commit()
+    cached = db.query(AgentDecision).filter_by(id=int(decision.id)).one()
+    db.query(AgentDecision).filter_by(id=int(decision.id)).update(
+        {AgentDecision.status: "discarded"}, synchronize_session=False
+    )
+    assert cached.status == "pending"
+
+    with pytest.raises(HTTPException) as exc:
+        override_decision.reclassify_to_advance_queue(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+        )
+
+    assert exc.value.status_code == 409
+    assert "discarded" in str(exc.value.detail)
+
+
+def test_override_enqueue_refreshes_cached_pending_row_after_intent_discard(db):
+    import pytest
+    from fastapi import HTTPException
+
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    decision = _make_decision(db, org, role, app, "send_assessment")
+    db.commit()
+    cached = db.query(AgentDecision).filter_by(id=int(decision.id)).one()
+    db.query(AgentDecision).filter_by(id=int(decision.id)).update(
+        {AgentDecision.status: "discarded"}, synchronize_session=False
+    )
+    assert cached.status == "pending"
+
+    with patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue:
+        with pytest.raises(HTTPException) as exc:
+            override_decision.enqueue(
+                db,
+                Actor.recruiter(user),
+                organization_id=int(org.id),
+                decision_id=int(decision.id),
+                override_action="advance",
+            )
+
+    assert exc.value.status_code == 409
+    assert "discarded" in str(exc.value.detail)
+    enqueue.assert_not_called()
+
+
+def test_reclassify_refuses_resolved_application_without_rewriting_audit_row(db):
+    import pytest
+    from fastapi import HTTPException
+
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    decision = _make_decision(db, org, role, app, "send_assessment")
+    app.application_outcome = "hired"
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        override_decision.reclassify_to_advance_queue(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "application_resolved"
+    db.refresh(decision)
+    assert decision.status == "pending"
+    assert decision.decision_type == "send_assessment"
+
+
+def test_override_enqueue_refuses_resolved_application_before_job_creation(db):
+    import pytest
+    from fastapi import HTTPException
+
+    org, role, _, app = make_world(db)
+    user = _make_user(db, org)
+    decision = _make_decision(db, org, role, app, "send_assessment")
+    app.application_outcome = "withdrawn"
+    db.commit()
+
+    with patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue:
+        with pytest.raises(HTTPException) as exc:
+            override_decision.enqueue(
+                db,
+                Actor.recruiter(user),
+                organization_id=int(org.id),
+                decision_id=int(decision.id),
+                override_action="advance",
+            )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "application_resolved"
+    enqueue.assert_not_called()
+    db.refresh(decision)
+    assert decision.status == "pending"
 
 
 def test_override_to_send_assessment_on_reject_dispatches_send(db):

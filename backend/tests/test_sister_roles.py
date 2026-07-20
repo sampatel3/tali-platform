@@ -2,7 +2,10 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy import event, inspect as sa_inspect
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import Query
 
 from app.domains.assessments_runtime.role_support import (
     role_family_load_options,
@@ -20,7 +23,7 @@ from app.models.role_criterion import RoleCriterion
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.services.sister_role_service import related_role_advance_note
-from tests.conftest import auth_headers
+from tests.conftest import TestingSessionLocal, auth_headers
 
 
 def test_related_role_advance_note_names_both_role_references():
@@ -914,6 +917,340 @@ def test_sister_evaluation_task_persists_holistic_score(client, db):
     cycle.assert_called_once_with(sister.id, evaluation_id=evaluation.id)
 
 
+@pytest.mark.parametrize("provider_mode", ["success", "exception"])
+def test_sister_score_cannot_overwrite_recruiter_spec_reset_during_provider(
+    client, db, provider_mode
+):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    evaluation_id = int(evaluation.id)
+    role_id = int(evaluation.role_id)
+    replacement_spec = (
+        "A replacement related-role specification requiring Rust services, "
+        "distributed consensus, production observability, and incident ownership."
+    )
+
+    def reset_generation(*_args, **_kwargs):
+        from app.services.related_role_spec_lifecycle import (
+            reset_related_role_spec_evaluations,
+        )
+
+        with TestingSessionLocal() as concurrent:
+            role = (
+                concurrent.query(Role)
+                .filter(Role.id == role_id)
+                .with_for_update()
+                .one()
+            )
+            role.job_spec_text = replacement_spec
+            reset_related_role_spec_evaluations(concurrent, role)
+            concurrent.commit()
+        if provider_mode == "exception":
+            raise RuntimeError("provider failed after the recruiter reset")
+        return _match_output(ok=True)
+
+    from app.services.sister_role_service import text_fingerprint
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=reset_generation,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch("app.tasks.sister_role_tasks.related_role_agent_cycle.delay") as cycle,
+    ):
+        result = score_sister_evaluation.run(evaluation_id)
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation_id)
+    assert result == {
+        "status": "superseded",
+        "reason": "evaluation_generation_changed",
+        "evaluation_id": evaluation_id,
+    }
+    assert saved.status == "pending"
+    assert saved.spec_fingerprint == text_fingerprint(replacement_spec)
+    assert saved.role_fit_score is None
+    assert saved.summary is None
+    cycle.assert_not_called()
+
+
+def test_sister_score_cannot_overwrite_shared_input_reset_during_provider(
+    client, db
+):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    evaluation_id = int(evaluation.id)
+    application_id = int(evaluation.source_application_id)
+
+    def reset_generation(*_args, **_kwargs):
+        from app.services.sister_role_evaluation_lifecycle import (
+            reset_related_evaluations_for_application,
+        )
+
+        with TestingSessionLocal() as concurrent:
+            application = concurrent.get(CandidateApplication, application_id)
+            application.workable_comments = [
+                {
+                    "body": "The candidate now has a twelve-week notice period.",
+                    "member": {"name": "Recruiter"},
+                }
+            ]
+            reset_related_evaluations_for_application(
+                concurrent,
+                application,
+                reason="workable_context_changed",
+            )
+            concurrent.commit()
+        return _match_output(ok=True)
+
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=reset_generation,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch("app.tasks.sister_role_tasks.related_role_agent_cycle.delay") as cycle,
+    ):
+        result = score_sister_evaluation.run(evaluation_id)
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation_id)
+    assert result == {
+        "status": "superseded",
+        "reason": "evaluation_generation_changed",
+        "evaluation_id": evaluation_id,
+    }
+    assert saved.status == "stale_held"
+    assert saved.attempts == 0
+    assert saved.started_at is None
+    assert saved.role_fit_score is None
+    assert saved.summary is None
+    assert saved.details is None
+    cycle.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "authority_change",
+    ["role_pause", "role_off", "workspace_pause", "ats_closed"],
+)
+@pytest.mark.parametrize("provider_mode", ["success", "exception"])
+def test_sister_score_holds_result_when_authority_changes_during_provider(
+    client, db, authority_change, provider_mode
+):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    source, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    evaluation_id = int(evaluation.id)
+    role_id = int(evaluation.role_id)
+
+    def revoke_authority(*_args, **_kwargs):
+        with TestingSessionLocal() as concurrent:
+            if authority_change == "workspace_pause":
+                organization = (
+                    concurrent.query(Organization)
+                    .filter(Organization.id == int(user.organization_id))
+                    .with_for_update()
+                    .one()
+                )
+                organization.agent_workspace_paused_at = datetime.now(timezone.utc)
+                organization.agent_workspace_paused_reason = (
+                    "paused while related-role scoring was in flight"
+                )
+            else:
+                target_role_id = (
+                    int(source.id)
+                    if authority_change == "ats_closed"
+                    else role_id
+                )
+                role = (
+                    concurrent.query(Role)
+                    .filter(Role.id == target_role_id)
+                    .with_for_update()
+                    .one()
+                )
+                if authority_change == "role_pause":
+                    role.agent_paused_at = datetime.now(timezone.utc)
+                    role.agent_paused_reason = (
+                        "paused while related-role scoring was in flight"
+                    )
+                elif authority_change == "role_off":
+                    role.agentic_mode_enabled = False
+                else:
+                    role.workable_job_data = {"state": "closed"}
+            concurrent.commit()
+        if provider_mode == "exception":
+            raise RuntimeError("provider failed after authority was revoked")
+        output = _match_output(ok=True)
+        output.model_dump = lambda **_: {
+            "role_fit_score": output.role_fit_score,
+            "summary": output.summary,
+        }
+        return output
+
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=revoke_authority,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch("app.tasks.sister_role_tasks.related_role_agent_cycle.delay") as cycle,
+    ):
+        result = score_sister_evaluation.run(evaluation_id)
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation_id)
+    assert result == {
+        "status": "authority_blocked",
+        "evaluation_id": evaluation_id,
+    }
+    assert saved.status == "retry_wait"
+    assert saved.last_error_code == "authority_blocked"
+    assert saved.next_attempt_at is not None
+    assert saved.role_fit_score is None
+    assert saved.summary is None
+    assert saved.details is None
+    cycle.assert_not_called()
+
+
+@pytest.mark.parametrize("changed_input", ["cv", "context"])
+def test_sister_score_requeues_when_candidate_inputs_change_during_provider(
+    client, db, changed_input
+):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    evaluation_id = int(evaluation.id)
+    application_id = int(evaluation.source_application_id)
+
+    def change_candidate_generation(*_args, **_kwargs):
+        with TestingSessionLocal() as concurrent:
+            application = (
+                concurrent.query(CandidateApplication)
+                .filter(CandidateApplication.id == application_id)
+                .with_for_update()
+                .one()
+            )
+            if changed_input == "cv":
+                application.cv_text = (
+                    "Replacement CV with Rust, consensus, distributed tracing, "
+                    "and production incident-command experience."
+                )
+            else:
+                application.workable_answers = [
+                    {
+                        "question": {"body": "Availability"},
+                        "answer": {
+                            "body": "Available after a twelve-week notice period"
+                        },
+                    }
+                ]
+            concurrent.commit()
+        return _match_output(ok=True)
+
+    from app.services.sister_role_service import text_fingerprint
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            side_effect=change_candidate_generation,
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch("app.tasks.sister_role_tasks.related_role_agent_cycle.delay") as cycle,
+    ):
+        result = score_sister_evaluation.run(evaluation_id)
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation_id)
+    current_application = db.get(CandidateApplication, application_id)
+    assert result == {
+        "status": "superseded",
+        "reason": "scoring_inputs_changed",
+        "evaluation_id": evaluation_id,
+    }
+    assert saved.status == "pending"
+    assert saved.role_fit_score is None
+    assert saved.last_error_code == "inputs_superseded"
+    if changed_input == "cv":
+        assert saved.cv_fingerprint == text_fingerprint(current_application.cv_text)
+    cycle.assert_not_called()
+
+
+def test_sister_score_claim_and_publish_use_canonical_lock_order(client, db, monkeypatch):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    compiled: list[str] = []
+    original = Query.with_for_update
+
+    def record_lock(query, *args, **kwargs):
+        locked = original(query, *args, **kwargs)
+        compiled.append(str(locked.statement.compile(dialect=postgresql.dialect())))
+        return locked
+
+    monkeypatch.setattr(Query, "with_for_update", record_lock)
+    from app.tasks.sister_role_tasks import score_sister_evaluation
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            return_value=_match_output(ok=True),
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+    ):
+        score_sister_evaluation.run(evaluation.id)
+
+    first_claim = [
+        next(index for index, sql in enumerate(compiled) if marker in sql)
+        for marker in (
+            "FOR UPDATE OF organizations",
+            "FOR UPDATE OF roles",
+            "FOR UPDATE OF candidates",
+            "FOR UPDATE OF candidate_applications",
+            "FOR UPDATE OF sister_role_evaluations",
+        )
+    ]
+    assert first_claim == sorted(first_claim)
+
+
 def test_related_role_transient_failures_continue_after_fast_retry_budget(
     client, db
 ):
@@ -1083,7 +1420,7 @@ def test_related_role_pause_holds_then_recovers_without_paid_work(client, db):
     assert db.get(SisterRoleEvaluation, evaluation.id).status == "done"
 
 
-def test_related_role_resume_kick_immediately_releases_authority_wait(client, db):
+def test_related_role_retry_wait_requires_explicit_resume_release(client, db):
     headers, email = auth_headers(client)
     del headers
     user = db.query(User).filter(User.email == email).first()
@@ -1098,6 +1435,9 @@ def test_related_role_resume_kick_immediately_releases_authority_wait(client, db
         score_sister_evaluation,
         score_sister_role,
     )
+    from app.services.sister_role_evaluation_lifecycle import (
+        release_sister_role_score_holds,
+    )
 
     assert score_sister_evaluation.run(evaluation.id)["status"] == "authority_blocked"
     sister = db.get(Role, evaluation.role_id)
@@ -1110,14 +1450,297 @@ def test_related_role_resume_kick_immediately_releases_authority_wait(client, db
         "apply_async",
         lambda *, args, queue: published.append(args[0]),
     ):
+        ordinary = score_sister_role.run(sister.id)
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert ordinary["queued"] == 0
+    assert published == []
+    assert saved.status == "retry_wait"
+    assert saved.next_attempt_at is not None
+
+    saved.next_attempt_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    db.commit()
+    with patch.object(
+        score_sister_evaluation,
+        "apply_async",
+        lambda *, args, queue: published.append(args[0]),
+    ):
+        due = score_sister_role.run(sister.id)
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert due["queued"] == 1
+    assert published == [evaluation.id]
+    assert saved.status == "pending"
+
+    # A later retry still needs an explicit recruiter authority boundary to
+    # bypass its fresh backoff window.
+    saved.status = "retry_wait"
+    saved.next_attempt_at = datetime.now(timezone.utc) + timedelta(hours=1)
+    saved.dispatch_attempted_at = None
+    db.commit()
+    published.clear()
+    with patch.object(
+        score_sister_evaluation,
+        "apply_async",
+        lambda *, args, queue: published.append(args[0]),
+    ):
+        released = release_sister_role_score_holds(
+            organization_id=int(user.organization_id),
+            role_id=int(sister.id),
+        )
         result = score_sister_role.run(sister.id)
 
     db.expire_all()
     saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert released == 1
     assert result["queued"] == 1
     assert published == [evaluation.id]
     assert saved.status == "pending"
     assert saved.next_attempt_at is None
+
+
+@pytest.mark.parametrize("held_status", ["retry_wait", "stale_held"])
+def test_explicit_sister_rescore_releases_durable_score_holds(
+    client, db, held_status
+):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).first()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    evaluation.status = held_status
+    evaluation.attempts = 2
+    evaluation.next_attempt_at = datetime.now(timezone.utc) + timedelta(hours=4)
+    db.commit()
+
+    from app.tasks.sister_role_tasks import score_sister_role
+
+    with patch.object(score_sister_role, "apply_async") as dispatch:
+        response = client.post(
+            f"/api/v1/roles/{evaluation.role_id}/sister-rescore",
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    dispatch.assert_called_once_with(
+        args=[evaluation.role_id],
+        queue="scoring",
+    )
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert saved.status == "pending"
+    assert saved.attempts == 0
+    assert saved.next_attempt_at is None
+
+
+def test_retry_release_is_tenant_scoped_idempotent_and_uses_canonical_locks(
+    client, db, monkeypatch
+):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).one()
+    _, evaluation = _scorable_evaluation(
+        db, organization_id=int(user.organization_id)
+    )
+    evaluation.status = "retry_wait"
+    evaluation.attempts = 3
+    evaluation.next_attempt_at = datetime.now(timezone.utc) + timedelta(hours=6)
+    db.commit()
+
+    compiled: list[str] = []
+    original = Query.with_for_update
+
+    def record_lock(query, *args, **kwargs):
+        locked = original(query, *args, **kwargs)
+        compiled.append(str(locked.statement.compile(dialect=postgresql.dialect())))
+        return locked
+
+    monkeypatch.setattr(Query, "with_for_update", record_lock)
+    from app.services.sister_role_evaluation_lifecycle import (
+        release_sister_role_score_holds,
+    )
+
+    assert release_sister_role_score_holds(
+        organization_id=int(user.organization_id) + 99_999,
+        role_id=int(evaluation.role_id),
+    ) == 0
+    assert release_sister_role_score_holds(
+        organization_id=int(user.organization_id),
+        role_id=int(evaluation.role_id),
+    ) == 1
+    assert release_sister_role_score_holds(
+        organization_id=int(user.organization_id),
+        role_id=int(evaluation.role_id),
+    ) == 0
+
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert saved.status == "pending"
+    assert saved.attempts == 3
+    assert saved.next_attempt_at is None
+    first_release = [
+        next(index for index, sql in enumerate(compiled) if marker in sql)
+        for marker in (
+            "FOR UPDATE OF organizations",
+            "FOR UPDATE OF roles",
+            "FOR UPDATE OF sister_role_evaluations",
+        )
+    ]
+    assert first_release == sorted(first_release)
+
+
+def test_role_score_kick_eager_loads_source_applications_once(client, db):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    source, first = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    next_attempt_at = datetime.now(timezone.utc) + timedelta(hours=4)
+    first.status = "retry_wait"
+    first.next_attempt_at = next_attempt_at
+    role_id = int(first.role_id)
+    for index in range(2):
+        candidate = Candidate(
+            organization_id=user.organization_id,
+            email=f"related-role-query-{index}@example.com",
+            full_name=f"Related Role Query {index}",
+            cv_text="Production Python and distributed systems experience.",
+        )
+        db.add(candidate)
+        db.flush()
+        application = CandidateApplication(
+            organization_id=user.organization_id,
+            candidate_id=candidate.id,
+            role_id=source.id,
+            source="manual",
+            application_outcome="open",
+            cv_text=candidate.cv_text,
+        )
+        db.add(application)
+        db.flush()
+        db.add(
+            SisterRoleEvaluation(
+                organization_id=user.organization_id,
+                role_id=first.role_id,
+                source_application_id=application.id,
+                status="retry_wait",
+                spec_fingerprint=f"query-shape-{index}",
+                next_attempt_at=next_attempt_at,
+            )
+        )
+    db.commit()
+
+    statements: list[str] = []
+
+    def capture_statement(_conn, _cursor, statement, *_args):
+        if statement.lstrip().upper().startswith("SELECT"):
+            statements.append(" ".join(str(statement).lower().split()))
+
+    from app.tasks.sister_role_tasks import score_sister_role
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", capture_statement)
+    try:
+        with patch(
+            "app.platform.database.SessionLocal",
+            new=TestingSessionLocal,
+        ):
+            result = score_sister_role.run(role_id)
+    finally:
+        event.remove(engine, "before_cursor_execute", capture_statement)
+
+    assert result["queued"] == 0
+    application_reads = [
+        statement
+        for statement in statements
+        if "candidate_applications" in statement
+    ]
+    assert len(application_reads) == 1
+    assert "sister_role_evaluations" in application_reads[0]
+
+
+def test_success_cycle_preserves_another_rows_future_retry(client, db):
+    headers, email = auth_headers(client)
+    del headers
+    user = db.query(User).filter(User.email == email).first()
+    source, completed = _scorable_evaluation(
+        db, organization_id=user.organization_id
+    )
+    waiting_candidate = Candidate(
+        organization_id=user.organization_id,
+        email="related-role-backoff@example.com",
+        full_name="Related Role Backoff",
+        cv_text="Production Python and distributed systems experience.",
+    )
+    db.add(waiting_candidate)
+    db.flush()
+    waiting_application = CandidateApplication(
+        organization_id=user.organization_id,
+        candidate_id=waiting_candidate.id,
+        role_id=source.id,
+        source="manual",
+        application_outcome="open",
+        cv_text=waiting_candidate.cv_text,
+    )
+    db.add(waiting_application)
+    db.flush()
+    next_attempt_at = datetime.now(timezone.utc) + timedelta(hours=4)
+    waiting = SisterRoleEvaluation(
+        organization_id=user.organization_id,
+        role_id=completed.role_id,
+        source_application_id=waiting_application.id,
+        status="retry_wait",
+        spec_fingerprint="waiting-spec",
+        attempts=2,
+        next_attempt_at=next_attempt_at,
+        last_error_code="provider_scoring_failed",
+    )
+    db.add(waiting)
+    db.commit()
+
+    from app.tasks.sister_role_tasks import (
+        related_role_agent_cycle,
+        score_sister_evaluation,
+    )
+
+    with (
+        patch(
+            "app.cv_matching.holistic.run_holistic_match",
+            return_value=_match_output(ok=True),
+        ),
+        patch(
+            "app.services.claude_client_resolver.get_metered_client",
+            return_value=object(),
+        ),
+        patch(
+            "app.services.related_role_runtime.run_related_role_cycle",
+            return_value={"status": "ok", "created": [completed.id]},
+        ),
+        patch.object(score_sister_evaluation, "apply_async") as paid_dispatch,
+        patch.object(
+            related_role_agent_cycle,
+            "delay",
+            side_effect=lambda role_id, **kwargs: related_role_agent_cycle.run(
+                role_id, **kwargs
+            ),
+        ) as decision_cycle,
+    ):
+        result = score_sister_evaluation.run(completed.id)
+
+    db.expire_all()
+    saved_waiting = db.get(SisterRoleEvaluation, waiting.id)
+    assert result["status"] == "done"
+    decision_cycle.assert_called_once_with(
+        completed.role_id,
+        evaluation_id=completed.id,
+    )
+    paid_dispatch.assert_not_called()
+    assert saved_waiting.status == "retry_wait"
+    assert saved_waiting.attempts == 2
+    assert saved_waiting.next_attempt_at == next_attempt_at.replace(tzinfo=None)
 
 
 def test_related_role_stale_worker_and_secret_broker_error_self_recover(

@@ -15,18 +15,24 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import event
 
-from app.actions import approve_decision, queue_decision
+from app.actions import approve_decision, post_workable_note, queue_decision
 from app.actions.types import Actor
 from app.agent_runtime import tool_registry
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
+from app.components.scoring.freshness import (
+    capture_score_generation,
+    capture_score_generations,
+)
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
 from app.models.assessment import Assessment
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
@@ -127,6 +133,19 @@ def _make_application(
     )
     db.add(app)
     db.flush()
+    # These tests exercise queue/action mechanics rather than cold scoring.
+    # Give the fixture a canonical completed attempt without injecting numeric
+    # values that would alter search/policy expectations. The deliberately old
+    # timestamp ensures explicit newer stale attempts in freshness tests win.
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="done",
+            queued_at=datetime(2000, 1, 1, tzinfo=timezone.utc),
+        )
+    )
+    db.flush()
     return app
 
 
@@ -141,7 +160,27 @@ def _make_agent_run(db, role: Role) -> AgentRun:
     )
     db.add(run)
     db.flush()
+    application_ids = [
+        int(row[0])
+        for row in db.query(CandidateApplication.id)
+        .filter(CandidateApplication.role_id == int(role.id))
+        .all()
+    ]
+    generations = capture_score_generations(
+        db, role=role, application_ids=application_ids
+    )
+    run.__engine_policy_snapshots__ = {  # type: ignore[attr-defined]
+        application_id: {
+            "_score_generation": generation,
+            "_persisted_decision_type": "send_assessment",
+        }
+        for application_id, generation in generations.items()
+    }
     return run
+
+
+def _score_generation(db, role: Role, app: CandidateApplication):
+    return capture_score_generation(db, role=role, application_id=int(app.id))
 
 
 def _make_assessment(
@@ -761,6 +800,39 @@ def test_post_workable_note_dispatch_returns_not_found_for_unknown_id(db):
     assert not mock_action.called
 
 
+@pytest.mark.parametrize("authority_change", ("paused", "permission_removed"))
+def test_post_workable_note_action_rechecks_live_agent_authority(
+    db, monkeypatch, authority_change
+):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, name="X", email="x@x.test")
+    run = _make_agent_run(db, role)
+    app.workable_candidate_id = "workable-candidate"
+    if authority_change == "paused":
+        role.agent_paused_at = datetime.now(timezone.utc)
+    else:
+        role.agent_action_allowlist = [
+            name
+            for name in role.agent_action_allowlist
+            if name != "post_workable_note"
+        ]
+    monkeypatch.setattr("app.actions.post_workable_note.settings.MVP_DISABLE_WORKABLE", False)
+
+    with patch("app.actions.post_workable_note.build_workable_adapter") as adapter:
+        result = post_workable_note.run(
+            db,
+            Actor.agent(int(run.id)),
+            organization_id=int(org.id),
+            application_id=int(app.id),
+            body="Agent note that must be held.",
+        )
+
+    assert result.status == "blocked"
+    assert "held" in str(result.detail).lower()
+    adapter.assert_not_called()
+
+
 def test_create_application_dispatch_refuses_cross_role(db):
     """An agent running for role A must not create an application under
     role B in the same org. Same single-role-execution-boundary that
@@ -1221,6 +1293,7 @@ def test_approve_reject_decision_sets_outcome_rejected(db):
         confidence=0.7,
         model_version="m",
         prompt_version="p",
+        expected_score_generation=_score_generation(db, role, app),
     )
     db.flush()
 
@@ -1264,6 +1337,7 @@ def test_approve_skip_assessment_reject_sets_outcome_rejected(db):
         confidence=0.85,
         model_version="m",
         prompt_version="p",
+        expected_score_generation=_score_generation(db, role, app),
     )
     db.flush()
 
@@ -1418,6 +1492,7 @@ def test_auto_execute_decision_refuses_irreversible_reject(db):
         confidence=0.8,
         model_version="m",
         prompt_version="p",
+        expected_score_generation=_score_generation(db, role, app),
     )
     db.flush()
 
@@ -1451,10 +1526,13 @@ def test_auto_execute_allows_deterministic_full_scoring_reject(db):
             "decision_source": "policy",
             "decision_stage": "full_scoring",
             "source": "score_time_decision",
+            "effective_threshold": 50.0,
+            "has_assessment_task": False,
         },
         confidence=1.0,
         model_version="bulk-deterministic",
         prompt_version="single_threshold_v1",
+        expected_score_generation=_score_generation(db, role, app),
     )
     db.flush()
 
@@ -1519,6 +1597,7 @@ def test_auto_reject_does_not_execute_deterministic_assessment_reject(db):
     org = _make_org(db)
     role = _make_role(db, org)
     role.auto_reject = True
+    _attach_task(db, org, role)
     app = _make_application(
         db,
         org=org,
@@ -1540,10 +1619,13 @@ def test_auto_reject_does_not_execute_deterministic_assessment_reject(db):
             "decision_source": "policy",
             "decision_stage": "assessment",
             "source": "score_time_decision",
+            "effective_threshold": 50.0,
+            "has_assessment_task": True,
         },
         confidence=1.0,
         model_version="bulk-deterministic",
         prompt_version="single_threshold_v1",
+        expected_score_generation=_score_generation(db, role, app),
     )
     db.flush()
 
@@ -1581,6 +1663,7 @@ def test_auto_execute_reloads_live_role_and_holds_after_turn_off(db):
         confidence=0.95,
         model_version="m",
         prompt_version="p",
+        expected_score_generation=_score_generation(db, role, app),
     )
     db.flush()
 
@@ -1604,6 +1687,181 @@ def test_auto_execute_reloads_live_role_and_holds_after_turn_off(db):
     assert decision.status == "pending"
     assert decision.evidence["auto_execute_hold"]["status"] == "role_not_runnable"
     assert "disabled" in decision.evidence["auto_execute_hold"]["detail"]
+
+
+def test_auto_execute_reloads_decision_and_stops_after_recruiter_claim(db):
+    """A stale pending snapshot cannot execute after recruiter processing wins."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Claimed", email="claimed@x.test"
+    )
+    run = _make_agent_run(db, role)
+    generation = _score_generation(db, role, app)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Strong fit",
+        confidence=0.95,
+        model_version="bulk-deterministic",
+        prompt_version="single_threshold_v1",
+        expected_score_generation=generation,
+    )
+    db.flush()
+
+    # Simulate another committed transaction claiming the row while this
+    # worker retains its old pending instance in the identity map.
+    db.query(AgentDecision).filter(AgentDecision.id == decision.id).update(
+        {"status": "processing"}, synchronize_session=False
+    )
+    assert decision.status == "pending"
+
+    with patch.object(tool_registry.advance_stage, "run") as advance:
+        outcome = tool_registry.maybe_auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="advance_to_interview",
+            expected_score_generation=generation,
+        )
+
+    assert outcome["executed"] is False
+    assert outcome["action_held"] is True
+    advance.assert_not_called()
+    db.refresh(decision)
+    assert decision.status == "processing"
+
+
+def test_auto_execute_reloads_fresh_decision_and_still_executes(db):
+    """The live-row fence preserves the normal just-created auto path."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Fresh", email="fresh@x.test"
+    )
+    run = _make_agent_run(db, role)
+    generation = _score_generation(db, role, app)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Strong fit",
+        confidence=0.95,
+        model_version="bulk-deterministic",
+        prompt_version="single_threshold_v1",
+        expected_score_generation=generation,
+    )
+
+    with patch.object(tool_registry.advance_stage, "run") as advance, patch.object(
+        tool_registry, "apply_decision_side_effects"
+    ):
+        outcome = tool_registry.maybe_auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="advance_to_interview",
+            expected_score_generation=generation,
+        )
+
+    assert outcome["executed"] is True
+    advance.assert_called_once()
+    assert decision.status == "approved"
+
+
+def test_auto_execute_holds_when_newer_score_attempt_supersedes_older_done(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Stale score", email="stale-score@x.test"
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Older score cleared the bar.",
+        confidence=0.95,
+        model_version="bulk-deterministic",
+        prompt_version="single_threshold_v1",
+        expected_score_generation=_score_generation(db, role, app),
+    )
+    db.add_all(
+        [
+            CvScoreJob(
+                application_id=int(app.id),
+                role_id=int(role.id),
+                status="done",
+                queued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            ),
+            CvScoreJob(
+                application_id=int(app.id),
+                role_id=int(role.id),
+                status="stale",
+                queued_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            ),
+        ]
+    )
+    db.flush()
+
+    with patch.object(tool_registry.advance_stage, "run") as advance:
+        executed = tool_registry._auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="advance_to_interview",
+        )
+
+    assert executed is False
+    advance.assert_not_called()
+    assert decision.status == "pending"
+    assert decision.evidence["auto_execute_hold"]["status"] == "score_refresh_required"
+
+
+def test_auto_execute_discards_decision_after_application_resolves(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Resolved", email="resolved@x.test"
+    )
+    run = _make_agent_run(db, role)
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Strong fit",
+        confidence=0.95,
+        model_version="m",
+        prompt_version="p",
+        expected_score_generation=_score_generation(db, role, app),
+    )
+    app.application_outcome = "hired"
+    db.flush()
+
+    with patch.object(tool_registry.advance_stage, "run") as advance:
+        executed = tool_registry._auto_execute_decision(
+            db,
+            role=role,
+            decision=decision,
+            decision_type="advance_to_interview",
+        )
+
+    assert executed is False
+    advance.assert_not_called()
+    assert decision.status == "discarded"
+    assert "resolved" in (decision.resolution_note or "")
 
 
 def test_superseded_assessment_task_result_cannot_auto_advance(db):
@@ -1655,6 +1913,7 @@ def test_superseded_assessment_task_result_cannot_auto_advance(db):
         confidence=0.95,
         model_version="m",
         prompt_version="p",
+        expected_score_generation=_score_generation(db, role, app),
     )
     db.flush()
 
@@ -1694,6 +1953,7 @@ def test_auto_send_noop_stays_pending_instead_of_false_approval(db):
         confidence=0.95,
         model_version="m",
         prompt_version="p",
+        expected_score_generation=_score_generation(db, role, app),
     )
     db.flush()
 
@@ -1734,6 +1994,7 @@ def test_auto_action_exception_rolls_back_partial_candidate_mutations(db):
         confidence=0.95,
         model_version="m",
         prompt_version="p",
+        expected_score_generation=_score_generation(db, role, app),
     )
     db.flush()
 
@@ -1922,6 +2183,185 @@ def test_evaluate_policy_then_advance_auto_executes_end_to_end(db):
     )
 
 
+def test_evaluate_policy_generation_cannot_queue_after_newer_done_score(db):
+    from app.decision_policy.engine import PolicyDecision
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Generation A", email="generation-a@x.test",
+        taali=88.0,
+    )
+    run = _make_agent_run(db, role)
+    verdict = PolicyDecision(
+        decision_type="queue_advance_decision",
+        confidence=0.95,
+        reasoning="generation A clears the threshold",
+        rule_path=["advance_rule"],
+        decision_point="advance_to_interview",
+    )
+    with patch.object(
+        tool_registry.policy_evaluator,
+        "evaluate_for_application",
+        return_value=(verdict, {}),
+    ):
+        tool_registry.dispatch(
+            "evaluate_policy", {"application_id": int(app.id)},
+            db=db, agent_run=run, role=role,
+        )
+
+    captured = run.__engine_policy_snapshots__[int(app.id)]["_score_generation"]
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="done",
+            queued_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+    )
+    db.flush()
+
+    with patch.object(tool_registry.advance_stage, "run") as advance:
+        with pytest.raises(HTTPException) as exc:
+            tool_registry.dispatch(
+                "queue_advance_decision",
+                {
+                    "application_id": int(app.id),
+                    "reasoning": "generation A verdict",
+                    "evidence": {"taali_score": 88},
+                    "confidence": 0.95,
+                },
+                db=db, agent_run=run, role=role,
+            )
+
+    assert exc.value.status_code == 409
+    assert captured.job_id is not None
+    advance.assert_not_called()
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .count()
+        == 0
+    )
+
+
+def test_evaluate_policy_forced_refresh_queues_durable_score_without_subagents(
+    db, monkeypatch
+):
+    from app.services import cv_score_orchestrator
+
+    monkeypatch.setattr(
+        cv_score_orchestrator.settings, "ANTHROPIC_API_KEY", "test-api-key"
+    )
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Durable refresh",
+        email="durable-refresh@x.test",
+        taali=88.0,
+    )
+    app.cv_text = "Senior backend engineer with production Python experience."
+    app.genuine_pre_screen_score_100 = 80.0
+    app.pre_screen_score_100 = 80.0
+    app.pre_screen_run_at = datetime.now(timezone.utc)
+    db.flush()
+    run = _make_agent_run(db, role)
+    run.__engine_verdicts__ = {int(app.id): "send_assessment"}
+
+    broker_receipt = MagicMock(id="durable-score-task")
+    with patch.object(
+        tool_registry.policy_evaluator,
+        "evaluate_for_application",
+        side_effect=AssertionError("forced refresh must not run ephemeral subagents"),
+    ) as evaluator, patch(
+        "app.tasks.scoring_tasks.score_application_job.delay",
+        return_value=broker_receipt,
+    ) as dispatch_score:
+        first = tool_registry.dispatch(
+            "evaluate_policy",
+            {"application_id": int(app.id), "skip_cache": True},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+        assert first["decision_type"] == "score_refresh_queued"
+        assert first["status"] == "pending"
+        assert int(app.id) not in run.__engine_policy_snapshots__
+        assert int(app.id) not in run.__engine_verdicts__
+        evaluator.assert_not_called()
+        dispatch_score.assert_called_once()
+
+        with pytest.raises(HTTPException) as exc:
+            tool_registry.dispatch(
+                "queue_advance_decision",
+                {
+                    "application_id": int(app.id),
+                    "reasoning": "must not use the pre-refresh verdict",
+                    "confidence": 0.95,
+                },
+                db=db,
+                agent_run=run,
+                role=role,
+            )
+        assert exc.value.status_code == 409
+
+        second = tool_registry.dispatch(
+            "evaluate_policy",
+            {"application_id": int(app.id), "skip_cache": True},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert second["decision_type"] == "score_refresh_pending"
+    assert second["score_job_id"] == first["score_job_id"]
+    assert (
+        db.query(CvScoreJob)
+        .filter(
+            CvScoreJob.application_id == int(app.id),
+            CvScoreJob.status == "pending",
+        )
+        .count()
+        == 1
+    )
+    dispatch_score.assert_called_once()
+
+
+def test_standard_queue_tool_refuses_missing_server_generation_snapshot(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="No evaluation", email="no-eval@x.test",
+        taali=88.0,
+    )
+    run = _make_agent_run(db, role)
+    run.__engine_policy_snapshots__ = {}
+
+    with pytest.raises(HTTPException) as exc:
+        tool_registry.dispatch(
+            "queue_advance_decision",
+            {
+                "application_id": int(app.id),
+                "reasoning": "attempted without evaluation",
+                "evidence": {"taali_score": 88},
+                "confidence": 0.95,
+            },
+            db=db, agent_run=run, role=role,
+        )
+
+    assert exc.value.status_code == 409
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .count()
+        == 0
+    )
+
+
 def test_evaluate_policy_escalated_verdict_withholds_advance(db):
     """The escalation noun is captured, but never blesses an auto-advance."""
     from app.decision_policy.engine import PolicyDecision
@@ -1988,9 +2428,31 @@ def test_evaluate_policy_must_have_reject_freezes_authoritative_factors(db):
     """A matching hard-rule reject carries server-derived factors; the model
     cannot replace them with its own policy story."""
     from app.decision_policy.engine import PolicyDecision
+    from app.models.decision_policy import DecisionPolicy
+    from app.models.rubric_revision import RubricRevision
 
     org = _make_org(db)
     role = _make_role(db, org)
+    db.add_all(
+        [
+            RubricRevision(
+                id=42,
+                organization_id=int(org.id),
+                role_id=None,
+                cause="human_edit",
+                feedback_ids=[],
+            ),
+            DecisionPolicy(
+                id=42,
+                organization_id=int(org.id),
+                role_id=None,
+                revision_id=42,
+                policy_json={},
+                activated_at=datetime.now(timezone.utc),
+            ),
+        ]
+    )
+    db.flush()
     app = _make_application(
         db, org=org, role=role, name="Blocked", email="blocked@x.test", taali=72.0
     )

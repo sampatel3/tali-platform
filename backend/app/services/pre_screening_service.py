@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..components.scoring.role_intent_inputs import job_spec_with_active_role_intent
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
@@ -19,7 +20,6 @@ from .fraud_detection import (
     persist_fraud_filtered_prescreen,
 )
 from .pricing_service import Feature
-from .taali_scoring import compute_role_fit_score
 from .usage_metering_service import record_event as _meter_record_event
 from .workable_actions_service import render_workable_note_template
 from .workable_context_service import format_workable_context
@@ -227,6 +227,10 @@ def execute_pre_screen_only(
     if not job_spec_text:
         return {"status": "skipped", "reason": "no_job_spec"}
 
+    scoring_job_spec_text = job_spec_with_active_role_intent(
+        db, role_id=getattr(role, "id", None), job_spec_text=job_spec_text
+    )
+
     from ..cv_matching import MODEL_VERSION as PRE_SCREEN_MODEL_VERSION
     from ..cv_matching.runner_pre_screen import run_pre_screen
     from .pre_screen_usage_admission import run_with_pre_screen_admission
@@ -277,7 +281,7 @@ def execute_pre_screen_only(
     try:
         pre, credit_reservation = run_with_pre_screen_admission(
             lambda admitted: run_pre_screen(
-                cv_text, job_spec_text, requirements, client=client,
+                cv_text, scoring_job_spec_text, requirements, client=client,
                 workable_context=workable_context or None,
                 metering_context=admitted,
             ),

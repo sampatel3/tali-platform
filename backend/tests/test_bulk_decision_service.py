@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
 from sqlalchemy import event
 
 from app.decision_policy.bootstrap import bootstrap_org
@@ -14,7 +15,9 @@ from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.decision_policy import DecisionPolicy
+from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.rubric_revision import RubricRevision
@@ -82,6 +85,56 @@ def _add_app(db, org, role, *, role_fit, pre_screen=70.0, cv_match_details=None)
     return app
 
 
+def _done_score_generation(db, *, app, role, queued_at):
+    job = CvScoreJob(
+        application_id=int(app.id),
+        role_id=int(role.id),
+        status="done",
+        queued_at=queued_at,
+    )
+    db.add(job)
+    db.flush()
+    return job
+
+
+def _publish_new_done_before_post_handover_lock(
+    monkeypatch,
+    *,
+    app,
+    role,
+    role_fit,
+):
+    """Publish B after the producer captured A but before its lock boundary."""
+    from app.services.bulk_decision_service import post_handover
+
+    original_lock = post_handover.lock_live_role
+
+    def lock_after_publishing_b(db, *, role_id, organization_id):
+        db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(app.id)
+        ).update(
+            {
+                CandidateApplication.cv_match_score: float(role_fit),
+                CandidateApplication.role_fit_score_cache_100: float(role_fit),
+                CandidateApplication.pre_screen_score_100: float(role_fit),
+            },
+            synchronize_session=False,
+        )
+        _done_score_generation(
+            db,
+            app=app,
+            role=role,
+            queued_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+        return original_lock(
+            db,
+            role_id=role_id,
+            organization_id=organization_id,
+        )
+
+    monkeypatch.setattr(post_handover, "lock_live_role", lock_after_publishing_b)
+
+
 def _pending(db, role):
     return (
         db.query(AgentDecision)
@@ -142,6 +195,41 @@ def test_every_candidate_decided_no_task_advances_strong(db):
     assert db.query(UsageEvent).count() == 0
 
 
+def test_bulk_cohort_never_decides_from_a_non_done_latest_score_job(db):
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    stale = _add_app(db, org, role, role_fit=80.0)
+    fresh = _add_app(db, org, role, role_fit=75.0)
+    db.add(CvScoreJob(application_id=stale.id, role_id=role.id, status="stale"))
+    db.add(CvScoreJob(application_id=fresh.id, role_id=role.id, status="done"))
+    db.commit()
+
+    summary = decide_role_cohort(db, role=role)
+
+    decisions = _pending(db, role)
+    assert [d.application_id for d in decisions] == [fresh.id]
+    assert summary["skipped_stale_score"] == 1
+
+
+def test_bulk_autonomy_does_not_execute_pending_positive_on_stale_score(db):
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    role.agentic_mode_enabled = False
+    app = _add_app(db, org, role, role_fit=80.0)
+    decide_role_cohort(db, role=role)
+    pending = _pending(db, role)[0]
+    role.agentic_mode_enabled = True
+    role.auto_promote = True
+    db.add(CvScoreJob(application_id=app.id, role_id=role.id, status="stale"))
+    db.commit()
+
+    summary = decide_role_cohort(db, role=role)
+
+    db.refresh(app)
+    db.refresh(pending)
+    assert app.pipeline_stage == "applied"
+    assert pending.status == "pending"
+    assert summary["existing_auto_executed"] == 0
+
+
 def test_bulk_auto_promote_executes_positive_and_holds_reject(db):
     """The deterministic cohort producer shares the same autonomy rail:
     reversible positives execute, irreversible rejects remain reviewable."""
@@ -183,6 +271,45 @@ def test_activation_recovery_drains_existing_deterministic_positive(db):
     assert recovered["existing_auto_executed"] == 1
     assert strong.pipeline_stage == "advanced"
     assert _pending(db, role) == []
+
+
+def test_activation_recovery_does_not_relabel_old_card_with_new_score_job(db):
+    """A same-verdict B score cannot grant card A unattended authority."""
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    role.agentic_mode_enabled = False
+    strong = _add_app(db, org, role, role_fit=80.0)
+    job_a = _done_score_generation(
+        db,
+        app=strong,
+        role=role,
+        queued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    db.commit()
+
+    first = decide_role_cohort(db, role=role)
+    pending = _pending(db, role)[0]
+    assert first["created"] == 1
+    assert pending.input_fingerprint["score_generation"]["job_id"] == int(job_a.id)
+
+    role.agentic_mode_enabled = True
+    role.auto_promote = True
+    job_b = _done_score_generation(
+        db,
+        app=strong,
+        role=role,
+        queued_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+    )
+    db.commit()
+
+    recovered = decide_role_cohort(db, role=role)
+
+    db.refresh(strong)
+    db.refresh(pending)
+    assert int(job_b.id) != int(job_a.id)
+    assert recovered["existing_auto_executed"] == 0
+    assert recovered["existing_stale_skipped"] == 1
+    assert strong.pipeline_stage == "applied"
+    assert pending.status == "pending"
 
 
 def test_reasoning_sourced_from_cv_match_summary(db):
@@ -645,6 +772,12 @@ def test_decide_post_handover_mid_interview_reject_cards(db):
     app.workable_stage = "Final Interview"
     app.pipeline_stage = "advanced"
     app.pipeline_stage_source = "sync"
+    generation = _done_score_generation(
+        db,
+        app=app,
+        role=role,
+        queued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
     db.commit()
 
     result = decide_post_handover(db, app=app, role=role)
@@ -655,6 +788,289 @@ def test_decide_post_handover_mid_interview_reject_cards(db):
     pending = _pending(db, role)
     assert len(pending) == 1
     assert pending[0].status == "pending"  # HITL — never auto-applied
+    assert pending[0].input_fingerprint["score_generation"]["job_id"] == int(
+        generation.id
+    )
+
+
+def test_post_handover_new_done_generation_defers_positive_advance(
+    db, monkeypatch
+):
+    """A newer DONE B after positive A capture cannot freeze the candidate."""
+    from app.domains.assessments_runtime.pipeline_service import (
+        reconcile_post_handover_advanced,
+    )
+    from app.services.bulk_decision_service.post_handover import (
+        POST_HANDOVER_SCORE_REFRESH_REQUIRED,
+    )
+
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=80.0, pre_screen=80.0)
+    app.workable_stage = "Offer"
+    generation_a = _done_score_generation(
+        db,
+        app=app,
+        role=role,
+        queued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    db.commit()
+    _publish_new_done_before_post_handover_lock(
+        monkeypatch,
+        app=app,
+        role=role,
+        role_fit=90.0,
+    )
+    actions = []
+    original_decide = bulk_decision_service.decide_post_handover
+
+    def record_action(db, *, app, role):
+        action = original_decide(db, app=app, role=role)
+        actions.append(action)
+        return action
+
+    monkeypatch.setattr(
+        bulk_decision_service,
+        "decide_post_handover",
+        record_action,
+    )
+
+    assert reconcile_post_handover_advanced(db, app=app, role=role) is False
+
+    db.flush()
+    db.refresh(app)
+    assert generation_a.id is not None
+    assert actions == [POST_HANDOVER_SCORE_REFRESH_REQUIRED]
+    assert app.pipeline_stage == "applied"
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .count()
+        == 0
+    )
+
+
+def test_post_handover_new_done_generation_defers_reject_pullback(
+    db, monkeypatch
+):
+    """A newer passing B after reject A capture cannot pull back or card."""
+    from app.services.bulk_decision_service.post_handover import (
+        POST_HANDOVER_SCORE_REFRESH_REQUIRED,
+    )
+    from app.services.bulk_decision_service import decide_post_handover
+
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=20.0, pre_screen=20.0)
+    app.workable_stage = "Final Interview"
+    app.pipeline_stage = "advanced"
+    app.pipeline_stage_source = "sync"
+    generation_a = _done_score_generation(
+        db,
+        app=app,
+        role=role,
+        queued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    db.commit()
+    _publish_new_done_before_post_handover_lock(
+        monkeypatch,
+        app=app,
+        role=role,
+        role_fit=85.0,
+    )
+
+    result = decide_post_handover(db, app=app, role=role)
+
+    db.flush()
+    db.refresh(app)
+    assert generation_a.id is not None
+    assert result == POST_HANDOVER_SCORE_REFRESH_REQUIRED
+    assert app.pipeline_stage == "advanced"
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == int(app.id))
+        .count()
+        == 0
+    )
+
+
+@pytest.mark.parametrize("latest_status", ["pending", "running", "stale", "error"])
+def test_post_handover_non_done_entry_requires_score_refresh(
+    db, monkeypatch, latest_status
+):
+    """Every ledger-backed non-DONE entry state defers before any lock/mutation."""
+    from app.services.bulk_decision_service import post_handover
+
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=80.0, pre_screen=80.0)
+    app.workable_stage = "Offer"
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status=latest_status,
+        )
+    )
+    db.commit()
+    monkeypatch.setattr(
+        post_handover,
+        "lock_live_role",
+        lambda *_args, **_kwargs: pytest.fail("non-DONE entry reached locks"),
+    )
+
+    result = post_handover.decide_post_handover(db, app=app, role=role)
+
+    db.refresh(app)
+    assert result == post_handover.POST_HANDOVER_SCORE_REFRESH_REQUIRED
+    assert app.pipeline_stage == "applied"
+    assert db.query(AgentDecision).filter_by(application_id=int(app.id)).count() == 0
+
+
+def test_post_handover_queue_409_rolls_back_reject_unit(db, monkeypatch):
+    """A queue-time generation race leaves no pullback, run, event, or card."""
+    from fastapi import HTTPException
+    from app.services.bulk_decision_service import post_handover
+
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=20.0, pre_screen=20.0)
+    app.workable_stage = "Final Interview"
+    app.pipeline_stage = "advanced"
+    app.pipeline_stage_source = "sync"
+    _done_score_generation(
+        db,
+        app=app,
+        role=role,
+        queued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    db.commit()
+
+    def refuse_queue(*_args, **_kwargs):
+        raise HTTPException(status_code=409, detail="score generation changed")
+
+    monkeypatch.setattr(post_handover.queue_decision, "run", refuse_queue)
+
+    result = post_handover.decide_post_handover(db, app=app, role=role)
+
+    db.refresh(app)
+    assert result == post_handover.POST_HANDOVER_SCORE_REFRESH_REQUIRED
+    assert app.pipeline_stage == "advanced"
+    assert db.query(AgentDecision).filter_by(application_id=int(app.id)).count() == 0
+    assert (
+        db.query(AgentRun)
+        .filter(AgentRun.trigger == "post_handover_second_opinion")
+        .count()
+        == 0
+    )
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == int(app.id),
+            CandidateApplicationEvent.idempotency_key
+            == f"posthandover_reject_review:{int(app.id)}",
+        )
+        .count()
+        == 0
+    )
+
+
+def test_post_handover_human_suppression_rolls_back_reject_unit(
+    db, monkeypatch
+):
+    """A non-live human-suppression return is not a secured reject card."""
+    from app.services.bulk_decision_service import post_handover
+
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=20.0, pre_screen=20.0)
+    app.workable_stage = "Final Interview"
+    app.pipeline_stage = "advanced"
+    app.pipeline_stage_source = "sync"
+    suppressed = AgentDecision(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="reject",
+        recommendation="reject",
+        status="overridden",
+        reasoning="Recruiter kept the candidate.",
+        model_version="m",
+        prompt_version="p",
+        idempotency_key=f"suppressed:{int(app.id)}",
+    )
+    db.add(suppressed)
+    db.commit()
+    monkeypatch.setattr(
+        post_handover.queue_decision,
+        "run",
+        lambda *_args, **_kwargs: suppressed,
+    )
+
+    result = post_handover.decide_post_handover(db, app=app, role=role)
+
+    db.refresh(app)
+    db.refresh(suppressed)
+    assert result is None
+    assert app.pipeline_stage == "advanced"
+    assert suppressed.status == "overridden"
+    assert (
+        db.query(AgentRun)
+        .filter(AgentRun.trigger == "post_handover_second_opinion")
+        .count()
+        == 0
+    )
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == int(app.id),
+            CandidateApplicationEvent.idempotency_key
+            == f"posthandover_reject_review:{int(app.id)}",
+        )
+        .count()
+        == 0
+    )
+
+
+def test_post_handover_contradictory_live_card_is_not_claimed_as_reject(
+    db, monkeypatch
+):
+    """A pending positive blocks a reject without pullback or false success."""
+    from app.services.bulk_decision_service import post_handover
+
+    org, role = _seed_role(db, score_threshold=50, with_task=False)
+    app = _add_app(db, org, role, role_fit=20.0, pre_screen=20.0)
+    app.workable_stage = "Final Interview"
+    app.pipeline_stage = "advanced"
+    app.pipeline_stage_source = "sync"
+    positive = AgentDecision(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="pending",
+        reasoning="Advance candidate.",
+        model_version="m",
+        prompt_version="p",
+        idempotency_key=f"positive:{int(app.id)}",
+    )
+    db.add(positive)
+    db.commit()
+    monkeypatch.setattr(
+        post_handover.queue_decision,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("contradictory card reached queue"),
+    )
+
+    result = post_handover.decide_post_handover(db, app=app, role=role)
+
+    db.refresh(app)
+    db.refresh(positive)
+    assert result is None
+    assert app.pipeline_stage == "advanced"
+    assert positive.status == "pending"
+    assert (
+        db.query(AgentRun)
+        .filter(AgentRun.trigger == "post_handover_second_opinion")
+        .count()
+        == 0
+    )
 
 
 def test_decide_post_handover_terminal_reject_still_surfaces(db):

@@ -750,6 +750,18 @@ def _writeback_intent(
         fetch_active_intent,
     )
 
+    previous_provider_generation = None
+    if chips:
+        from ..services.role_provider_generation import (
+            capture_role_provider_generation,
+        )
+
+        previous_provider_generation = capture_role_provider_generation(
+            db,
+            role_id=int(role.id),
+            organization_id=int(role.organization_id),
+        )
+
     # 1. Append the answer onto RoleIntent.free_text so the agent prompt
     #    picks it up next cycle via `_render_role_intent`.
     active = fetch_active_intent(db, role_id=int(role.id))
@@ -772,30 +784,54 @@ def _writeback_intent(
     # 2. Add chips prepared before the Role lock was acquired. A parser
     #    failure deliberately yields no chips; the free-text version above
     #    remains the canonical answer.
-    if not chips:
-        return
-    existing_ordering = [
-        int(c.ordering)
-        for c in (role.criteria or [])
-        if c.deleted_at is None
-    ]
-    next_ordering = (max(existing_ordering) + 1) if existing_ordering else 0
-    now = datetime.now(timezone.utc)
-    for chip in chips:
-        db.add(
-            RoleCriterion(
-                role_id=int(role.id),
-                source=CRITERION_SOURCE_RECRUITER,
-                ordering=next_ordering,
-                weight=1.0,
-                must_have=(chip.bucket == BUCKET_MUST),
-                bucket=chip.bucket,
-                org_criterion_id=None,
-                customized_at=now,
-                text=chip.text,
+    if chips:
+        existing_ordering = [
+            int(c.ordering)
+            for c in (role.criteria or [])
+            if c.deleted_at is None
+        ]
+        next_ordering = (max(existing_ordering) + 1) if existing_ordering else 0
+        now = datetime.now(timezone.utc)
+        for chip in chips:
+            db.add(
+                RoleCriterion(
+                    role_id=int(role.id),
+                    source=CRITERION_SOURCE_RECRUITER,
+                    ordering=next_ordering,
+                    weight=1.0,
+                    must_have=(chip.bucket == BUCKET_MUST),
+                    bucket=chip.bucket,
+                    org_criterion_id=None,
+                    customized_at=now,
+                    text=chip.text,
+                )
             )
+            next_ordering += 1
+        db.flush()
+        from ..services.role_provider_artifact_lifecycle import (
+            invalidate_role_provider_artifacts_if_changed,
         )
-        next_ordering += 1
+
+        invalidate_role_provider_artifacts_if_changed(
+            db,
+            role=role,
+            previous=previous_provider_generation,
+        )
+
+    # 3. The active RoleIntent is a scoring input even when the optional chip
+    #    parser returned nothing. Invalidate every unresolved scored app and
+    #    its pending decision in this same answer savepoint. Do not dispatch
+    #    paid work from an uncommitted transaction. After commit, only the
+    #    existing active-agent, spend-guarded, per-tick drain may recover these
+    #    durable ``role_intent_changed`` jobs. Tech questions only depend on JD
+    #    + criteria, so a free-text-only answer leaves that cache valid.
+    from ..services.cv_score_orchestrator import mark_role_scores_stale
+
+    mark_role_scores_stale(
+        db,
+        int(role.id),
+        reason="role_intent_changed",
+    )
 
 
 def dismiss(

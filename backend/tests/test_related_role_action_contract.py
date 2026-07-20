@@ -14,7 +14,6 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-from app.agent_chat import controls as agent_chat_controls
 from app.agent_chat import tools as agent_chat_tools
 from app.domains.assessments_runtime.applications_routes import (
     move_application_in_active_ats,
@@ -180,6 +179,13 @@ def test_job_chat_blocks_both_automatic_rejects_for_every_family_member(
 def test_related_role_api_persists_positive_settings_and_activation(client, db):
     headers, _user, _owner, related_roles, _application = _family(client, db)
     related = related_roles[0]
+    evaluation = (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == int(related.id))
+        .one()
+    )
+    evaluation.status = "retry_wait"
+    db.commit()
 
     with patch(
         "app.services.agent_activation_readiness.activation_readiness",
@@ -210,13 +216,22 @@ def test_related_role_api_persists_positive_settings_and_activation(client, db):
     assert persisted.auto_advance is True
     assert persisted.auto_reject is False
     assert persisted.auto_reject_pre_screen is False
+    assert db.get(SisterRoleEvaluation, evaluation.id).status == "pending"
     assert dispatch.call_count == 1
     assert dispatch.call_args.args[0].id == related.id
+    assert "release_sister_retries" not in dispatch.call_args.kwargs
 
 
 def test_related_role_job_chat_persists_positive_settings_and_activation(client, db):
     _headers, user, _owner, related_roles, _application = _family(client, db)
     related = related_roles[0]
+    evaluation = (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == int(related.id))
+        .one()
+    )
+    evaluation.status = "retry_wait"
+    db.commit()
 
     settings = agent_chat_tools.dispatch_tool(
         "adjust_agent_settings",
@@ -233,9 +248,9 @@ def test_related_role_job_chat_persists_positive_settings_and_activation(client,
     with patch(
         "app.services.agent_activation_readiness.activation_readiness",
         return_value={"ready": True, "checks": []},
-    ), patch.object(
-        agent_chat_controls, "_kick_cycle", return_value=True
-    ) as kick:
+    ), patch(
+        "app.services.role_agent_dispatch.dispatch_role_agent_cycle"
+    ) as dispatch:
         activation = agent_chat_tools.dispatch_tool(
             "set_agent_state",
             {"action": "activate"},
@@ -255,7 +270,12 @@ def test_related_role_job_chat_persists_positive_settings_and_activation(client,
     assert persisted.auto_advance is True
     assert persisted.auto_reject is False
     assert persisted.auto_reject_pre_screen is False
-    kick.assert_called_once()
+    assert db.get(SisterRoleEvaluation, evaluation.id).status == "pending"
+    dispatch.assert_called_once_with(
+        related,
+        activation=True,
+        role_version=int(related.version or 1),
+    )
 
 
 @pytest.mark.parametrize(

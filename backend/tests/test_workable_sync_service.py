@@ -623,6 +623,90 @@ def test_post_handover_workable_stage_does_not_advance_tali(db):
     assert (app.workable_stage or "").lower().startswith("technical")
 
 
+def test_post_handover_sync_commits_before_reconciliation(db, monkeypatch):
+    """Reconciliation starts after releasing the sync's earlier App ownership."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import event
+
+    from app.components.integrations.workable import sync_service
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+    from app.models.organization import Organization
+    from app.models.role import Role
+
+    org = Organization(name="Boundary", slug=f"boundary-{id(db)}")
+    db.add(org)
+    db.flush()
+    role = Role(organization_id=int(org.id), name="R", source="workable")
+    db.add(role)
+    db.flush()
+    candidate = Candidate(
+        organization_id=int(org.id),
+        email="boundary@example.com",
+        full_name="Boundary Candidate",
+        workable_candidate_id="cand-boundary",
+    )
+    db.add(candidate)
+    db.flush()
+    app = CandidateApplication(
+        organization_id=int(org.id),
+        candidate_id=int(candidate.id),
+        role_id=int(role.id),
+        status="applied",
+        pipeline_stage="applied",
+        pipeline_stage_source="sync",
+        application_outcome="open",
+        source="workable",
+        workable_candidate_id="cand-boundary",
+        cv_match_score=80.0,
+    )
+    db.add(app)
+    db.commit()
+
+    order = []
+
+    def after_commit(_session):
+        order.append("commit")
+
+    def observe_reconcile(worker_db, *, app, role):
+        order.append("reconcile")
+        assert app not in worker_db.dirty
+        assert role not in worker_db.dirty
+        assert not worker_db.new
+        assert app.workable_stage == "Technical Interview"
+        return False
+
+    event.listen(db, "after_commit", after_commit)
+    monkeypatch.setattr(
+        sync_service,
+        "reconcile_post_handover_advanced",
+        observe_reconcile,
+    )
+    try:
+        service = WorkableSyncService(
+            WorkableService(access_token="x", subdomain="test")
+        )
+        service._sync_candidate_for_role(
+            db=db,
+            org=org,
+            role=role,
+            job={"id": "J1", "shortcode": "J1"},
+            candidate_ref={
+                "id": "cand-boundary",
+                "email": "boundary@example.com",
+                "name": "Boundary Candidate",
+                "stage": "Technical Interview",
+            },
+            now=datetime.now(timezone.utc),
+            mode="metadata",
+        )
+    finally:
+        event.remove(db, "after_commit", after_commit)
+
+    assert order == ["commit", "reconcile"]
+
+
 def test_sync_stores_per_application_workable_created_at(db):
     """The payload's created_at is per JOB APPLICATION (Workable candidate ids
     are per-application), so the applied date must land on the application row

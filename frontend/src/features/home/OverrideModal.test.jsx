@@ -157,6 +157,50 @@ describe('OverrideModal', () => {
     expect(payload.override_action).toBeUndefined();
   });
 
+  it('blocks primary approval when the decision inputs changed', () => {
+    render(
+      <OverrideModal
+        decision={{
+          ...baseDecision,
+          decision_type: 'advance_to_interview',
+          is_stale: true,
+          staleness_reasons: ['score_generation_changed'],
+        }}
+        alternative={primaryAdvance}
+        workableStages={stages}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
+    expect(screen.getByRole('button', { name: 'Advance' })).toBeDisabled();
+    expect(agentApi.approveDecision).not.toHaveBeenCalled();
+  });
+
+  it('forces only the bounded old-engine approval', async () => {
+    render(
+      <OverrideModal
+        decision={{
+          ...baseDecision,
+          decision_type: 'advance_to_interview',
+          is_stale: true,
+          staleness_reasons: ['engine_outdated'],
+        }}
+        alternative={primaryAdvance}
+        workableStages={stages}
+        onClose={vi.fn()}
+        onSubmitted={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /Phone screen/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Advance' }));
+
+    await waitFor(() => expect(agentApi.approveDecision).toHaveBeenCalled());
+    expect(agentApi.approveDecision.mock.calls[0][2]).toEqual({ force: true });
+  });
+
   it('silently reconciles an approval timeout that the server already accepted', async () => {
     const onClose = vi.fn();
     const onSubmitted = vi.fn();

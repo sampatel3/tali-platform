@@ -77,8 +77,17 @@ def _trigger_rescreen(
     from ..services.cv_score_orchestrator import mark_role_scores_stale
 
     invalidated = mark_role_scores_stale(
-        db, int(role.id), reason=reason, application_ids=application_ids
+        db,
+        int(role.id),
+        reason=reason,
+        application_ids=application_ids,
     )
+    # An explicit empty scope means the recruiter-approved filter matched no
+    # candidates. Keep that distinct from ``None`` (the whole role): provider
+    # artifacts were already handled by the transaction lifecycle, and there
+    # is no paid candidate score sweep to dispatch.
+    if application_ids is not None and not application_ids:
+        return int(invalidated)
     try:
         from ..tasks.scoring_tasks import sweep_stale_scores
 
@@ -88,7 +97,7 @@ def _trigger_rescreen(
                 "role_id": int(role.id),
                 "application_ids": (
                     [int(value) for value in application_ids]
-                    if application_ids
+                    if application_ids is not None
                     else None
                 ),
                 "explicit": True,
@@ -178,6 +187,19 @@ def update_job_spec(
     if len(text) < 60:
         return {"ok": False, "error": "That doesn't look like a full job spec — paste the whole description and I'll apply it."}
 
+    is_sister = str(getattr(role, "role_kind", "") or "") == "sister"
+    previous_provider_generation = None
+    if not is_sister:
+        from ..services.role_provider_generation import (
+            capture_role_provider_generation,
+        )
+
+        previous_provider_generation = capture_role_provider_generation(
+            db,
+            role_id=int(role.id),
+            organization_id=int(role.organization_id),
+        )
+
     before = _criteria_text_map(db, role)
     now = datetime.now(timezone.utc)
     role.job_spec_text = text
@@ -210,6 +232,16 @@ def update_job_spec(
                 supersede_generated_drafts=True,
             )
         db.flush()
+        if not is_sister:
+            from ..services.role_provider_artifact_lifecycle import (
+                invalidate_role_provider_artifacts_if_changed,
+            )
+
+            invalidate_role_provider_artifacts_if_changed(
+                db,
+                role=role,
+                previous=previous_provider_generation,
+            )
     except Exception as exc:  # noqa: BLE001 — surface, don't crash the turn
         db.rollback()
         return {"ok": False, "error": f"I couldn't parse that spec into criteria ({type(exc).__name__}); the role is unchanged."}
@@ -251,6 +283,16 @@ def add_or_update_constraint(
             f"invalid bucket {bucket!r}; one of {sorted(CRITERION_BUCKETS)}"
         )
 
+    from ..services.role_provider_generation import (
+        capture_role_provider_generation,
+    )
+
+    previous_provider_generation = capture_role_provider_generation(
+        db,
+        role_id=int(role.id),
+        organization_id=int(role.organization_id),
+    )
+
     if criterion_id is not None:
         chip = next(
             (c for c in _editable_criteria(role) if int(c.id) == int(criterion_id)),
@@ -282,8 +324,17 @@ def add_or_update_constraint(
         invalidating = bucket in _INVALIDATING_BUCKETS
 
     db.flush()
+    from ..services.role_provider_artifact_lifecycle import (
+        invalidate_role_provider_artifacts_if_changed,
+    )
+
+    provider_inputs_changed = invalidate_role_provider_artifacts_if_changed(
+        db,
+        role=role,
+        previous=previous_provider_generation,
+    )
     rescreening_count = 0
-    if trigger_rescreen and invalidating:
+    if trigger_rescreen and invalidating and provider_inputs_changed:
         rescreening_count = _trigger_rescreen(
             db, role, reason=f"agent_chat:constraint_{action}"
         )
@@ -296,7 +347,7 @@ def add_or_update_constraint(
             "text": chip.text,
             "bucket": chip.bucket,
         },
-        "invalidates_scores": bool(invalidating),
+        "invalidates_scores": bool(invalidating and provider_inputs_changed),
         "rescreening_count": rescreening_count,
     }
 
@@ -306,6 +357,15 @@ def remove_constraint(
 ) -> dict[str, Any]:
     """Soft-delete a recruiter constraint chip, then re-screen if it fed the
     pre-screen prompt."""
+    from ..services.role_provider_generation import (
+        capture_role_provider_generation,
+    )
+
+    previous_provider_generation = capture_role_provider_generation(
+        db,
+        role_id=int(role.id),
+        organization_id=int(role.organization_id),
+    )
     chip = next(
         (c for c in _editable_criteria(role) if int(c.id) == int(criterion_id)),
         None,
@@ -316,17 +376,26 @@ def remove_constraint(
     removed_text = chip.text
     chip.deleted_at = datetime.now(timezone.utc)
     db.flush()
+    from ..services.role_provider_artifact_lifecycle import (
+        invalidate_role_provider_artifacts_if_changed,
+    )
+
+    provider_inputs_changed = invalidate_role_provider_artifacts_if_changed(
+        db,
+        role=role,
+        previous=previous_provider_generation,
+    )
 
     invalidating = old_bucket in _INVALIDATING_BUCKETS
     rescreening_count = 0
-    if trigger_rescreen and invalidating:
+    if trigger_rescreen and invalidating and provider_inputs_changed:
         rescreening_count = _trigger_rescreen(db, role, reason="agent_chat:constraint_removed")
 
     return {
         "type": "constraint_change",
         "action": "removed",
         "criterion": {"id": int(criterion_id), "text": removed_text, "bucket": old_bucket},
-        "invalidates_scores": bool(invalidating),
+        "invalidates_scores": bool(invalidating and provider_inputs_changed),
         "rescreening_count": rescreening_count,
     }
 

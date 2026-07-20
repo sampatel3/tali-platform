@@ -403,10 +403,12 @@ celery_app.conf.update(
         # NO auto re-scoring on a schedule. ``sweep_stale_scores`` and
         # ``score_terminal_for_calibration`` are deliberately NOT here:
         # both dispatch paid Anthropic scoring without a recruiter
-        # action. Stale scores stay visibly stale until the recruiter
-        # approves a re-evaluation (agent chat quotes the estimated
-        # cost, then kicks a one-shot ``sweep_stale_scores`` itself);
-        # terminal-outcome scoring for calibration is explicit-run only.
+        # action. Most stale causes stay visibly stale until the recruiter
+        # approves a re-evaluation (agent chat quotes the estimated cost, then
+        # kicks a one-shot ``sweep_stale_scores`` itself). The narrow exception
+        # is a recruiter-authored RoleIntent answer: an already-active role may
+        # recover those rows through its existing spend-guarded, 50-per-tick
+        # cohort drain. Terminal-outcome calibration remains explicit-run only.
         #
         # Refit the cv_match calibrators from stored (score -> outcome)
         # pairs. Pure math over existing rows — no API spend. Same

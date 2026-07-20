@@ -31,6 +31,10 @@ from typing import Any, Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..components.scoring.freshness import (
+    capture_score_generation,
+    score_generation_is_current,
+)
 from ..domains.assessments_runtime.pipeline_service import normalize_pipeline_key
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
@@ -85,14 +89,18 @@ def _below_threshold(
     ``score < effective``). With no score, the ``'Below threshold'``
     recommendation (must-have miss / invalidated score) is the reject signal.
     """
-    effective = (
+    effective = _effective_cutoff(threshold)
+    if score is not None:
+        return float(score) < effective
+    return (recommendation or "").strip().lower() == "below threshold"
+
+
+def _effective_cutoff(threshold: float | None) -> float:
+    return (
         float(threshold)
         if threshold is not None
         else float(settings.PRE_SCREEN_THRESHOLD)
     )
-    if score is not None:
-        return float(score) < effective
-    return (recommendation or "").strip().lower() == "below threshold"
 
 
 def _qualitative_reject_reason(application: CandidateApplication) -> str:
@@ -170,6 +178,102 @@ def queue_pre_screen_reject(
     review. The irreversible Workable auto-disqualify stays gated upstream
     (``run_auto_reject_if_needed`` → ``auto_disqualify_eligible``).
     """
+    try:
+        # Capture the exact eligible score generation BEFORE consuming any
+        # verdict fields from the caller's ORM snapshot. A newer score attempt
+        # or RoleIntent edit between here and the locked boundary below must
+        # invalidate this token; it must never relabel generation A's reject as
+        # a generation B decision.
+        application_id = int(application.id)
+        expected_generation = capture_score_generation(
+            db,
+            role=role,
+            application_id=application_id,
+        )
+        if expected_generation is None:
+            return None
+
+        # Lock in canonical Role → Application order. RoleIntent mutation and
+        # score publication use the same ordering, so once both rows are held,
+        # exact-token validation fences the card insert/revival through the end
+        # of this transaction.
+        live_role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(role.id),
+                Role.organization_id == int(organization_id),
+                Role.deleted_at.is_(None),
+            )
+            .populate_existing()
+            .with_for_update()
+            .one_or_none()
+        )
+        if live_role is None:
+            return None
+        live_application = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == application_id,
+                CandidateApplication.organization_id == int(organization_id),
+                CandidateApplication.role_id == int(live_role.id),
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .populate_existing()
+            .with_for_update()
+            .one_or_none()
+        )
+        if live_application is None or not score_generation_is_current(
+            db,
+            expected=expected_generation,
+            locked_role=live_role,
+            application=live_application,
+        ):
+            return None
+
+        # The caller evaluated against ``threshold`` before entering this
+        # boundary. Re-resolve it from the locked Role and refuse to relabel an
+        # old verdict when a recruiter/auto-calibration changed the cutoff.
+        from .pre_screening_service import resolved_auto_reject_config
+
+        current_threshold = resolved_auto_reject_config(
+            None, live_role, db=db
+        ).get("threshold_100")
+        if _effective_cutoff(current_threshold) != _effective_cutoff(threshold):
+            return None
+        threshold = current_threshold
+
+        role = live_role
+        application = live_application
+        # The threshold is a caller-owned policy contract and may reflect a
+        # deliberate effective override. All score-produced inputs, however,
+        # must come from the freshly locked generation rather than the passed
+        # snapshot.
+        pre_screen_score = (
+            float(application.pre_screen_score_100)
+            if application.pre_screen_score_100 is not None
+            else None
+        )
+        pre_screen_recommendation = getattr(
+            application, "pre_screen_recommendation", None
+        )
+        pre_screen_blob = (
+            application.pre_screen_evidence
+            if isinstance(application.pre_screen_evidence, dict)
+            else {}
+        )
+        generation_fingerprint = {
+            "score_generation": expected_generation.as_fingerprint()
+        }
+    except Exception:
+        # This producer can surface an irreversible reject for approval. A
+        # capture/reload/validation failure is not permission to trust a
+        # visible legacy number; leave the candidate for score recovery.
+        logger.exception(
+            "pre-screen score generation check failed for application_id=%s",
+            getattr(application, "id", None),
+        )
+        return None
+
     # HARD GUARD: a `sourced` prospect is pre-applied — no CV, never scored,
     # never in the decision queue. It has no verdict, so it must never produce a
     # reject card. It reaches `applied` (and only then gets scored/decided) when
@@ -211,6 +315,15 @@ def queue_pre_screen_reject(
     # label.
     if getattr(application, "pre_screen_run_at", None) is None:
         return None
+    # Re-evaluate the deterministic verdict from the locked score before both
+    # insert and revival. A stale caller snapshot is never authority to card a
+    # candidate who now clears the cutoff.
+    if not _below_threshold(
+        pre_screen_score,
+        pre_screen_recommendation,
+        threshold,
+    ):
+        return None
     try:
         key = _idempotency_key(int(application.id))
         # Skip if THIS app already has any pending decision — not just one
@@ -223,7 +336,11 @@ def queue_pre_screen_reject(
             db.query(AgentDecision)
             .filter(
                 AgentDecision.application_id == int(application.id),
-                AgentDecision.status == "pending",
+                AgentDecision.organization_id == int(organization_id),
+                AgentDecision.role_id == int(role.id),
+                AgentDecision.status.in_(
+                    ("pending", "processing", "reverted_for_feedback")
+                ),
             )
             .order_by(AgentDecision.created_at.desc())
             .first()
@@ -240,11 +357,6 @@ def queue_pre_screen_reject(
             "decision_trigger": "pre_screen_auto_reject_eligible",
             "policy_reasoning": "Candidate did not clear the configured pre-screen threshold.",
         })
-        pre_screen_blob = (
-            application.pre_screen_evidence
-            if isinstance(getattr(application, "pre_screen_evidence", None), dict)
-            else {}
-        )
         candidate_summary = normalize_candidate_summary(pre_screen_blob.get("summary"))
         if candidate_summary:
             body["candidate_summary"] = candidate_summary
@@ -265,10 +377,13 @@ def queue_pre_screen_reject(
             idempotency_key=key,
             active_capabilities={},
             token_spend={},
+            input_fingerprint=generation_fingerprint,
         )
-        db.add(decision)
+        nested = db.begin_nested()
         try:
+            db.add(decision)
             db.flush()
+            nested.commit()
         except IntegrityError:
             # A row with this app's idempotency key already exists. Two cases:
             #   1. Race — a concurrent path inserted a *pending* row.
@@ -279,10 +394,15 @@ def queue_pre_screen_reject(
             # In case 2 we must REVIVE the existing row to pending, otherwise
             # the candidate is left with no pending card while ``created`` is
             # incremented — the silent-miss the reconcile replay path hit.
-            db.rollback()
+            # Keep the existing Role generation lock (the caller may also own
+            # Organization). A full rollback would release it and reopen the
+            # intent-edit race before the existing row is revived.
+            nested.rollback()
             existing = (
                 db.query(AgentDecision)
                 .filter(AgentDecision.idempotency_key == key)
+                .populate_existing()
+                .with_for_update()
                 .first()
             )
             # Revive a previously system-terminated card only when ALL hold:
@@ -309,7 +429,7 @@ def queue_pre_screen_reject(
                 and existing.resolved_by_user_id is None
                 and _below_threshold(
                     pre_screen_score,
-                    getattr(application, "pre_screen_recommendation", None),
+                    pre_screen_recommendation,
                     threshold,
                 )
             ):
@@ -319,6 +439,14 @@ def queue_pre_screen_reject(
                 existing.agent_run_id = None
                 existing.reasoning = _format_reasoning(application)
                 existing.evidence = body
+                existing.input_fingerprint = {
+                    **(
+                        existing.input_fingerprint
+                        if isinstance(existing.input_fingerprint, dict)
+                        else {}
+                    ),
+                    **generation_fingerprint,
+                }
                 db.flush()
             return existing
 
@@ -408,6 +536,30 @@ def queue_knockout_reject(
         if disqualification_reason_id is not None:
             body["disqualification_reason_id"] = int(disqualification_reason_id)
 
+        from .knockout_generation import (
+            KNOCKOUT_GENERATION_KEY,
+            KNOCKOUT_GENERATION_UNAVAILABLE,
+            capture_knockout_generation,
+        )
+
+        try:
+            knockout_generation = capture_knockout_generation(
+                db,
+                organization_id=int(organization_id),
+                role_id=int(role.id),
+            )
+        except Exception:
+            # A newly queued card must never masquerade as a legacy no-token
+            # card when its server-owned generation could not be captured.
+            logger.exception(
+                "knockout generation capture failed application_id=%s",
+                getattr(application, "id", None),
+            )
+            knockout_generation = KNOCKOUT_GENERATION_UNAVAILABLE
+        knockout_fingerprint = {
+            KNOCKOUT_GENERATION_KEY: knockout_generation,
+        }
+
         key = _knockout_idempotency_key(int(application.id))
 
         # A prior card can exist NON-pending under this app's knockout key — a
@@ -427,6 +579,7 @@ def queue_knockout_reject(
                 prior.resolution_note = None
                 prior.reasoning = reasoning
                 prior.evidence = body
+                prior.input_fingerprint = knockout_fingerprint
                 db.flush()
             return prior
 
@@ -446,6 +599,7 @@ def queue_knockout_reject(
             idempotency_key=key,
             active_capabilities={},
             token_spend={},
+            input_fingerprint=knockout_fingerprint,
         )
         try:
             # SAVEPOINT, not a session rollback: the caller's transaction also

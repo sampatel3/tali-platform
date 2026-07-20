@@ -32,7 +32,7 @@ from ..domains.assessments_runtime.pipeline_service import (
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..platform.config import settings
-from .types import Actor
+from .types import ACTOR_AGENT, Actor
 
 
 logger = logging.getLogger("taali.actions.post_workable_note")
@@ -43,7 +43,7 @@ _MAX_NOTE_LENGTH = 8000  # Workable activity body limit is generous; cap to keep
 @dataclass(frozen=True)
 class PostWorkableNoteResult:
     application_id: int
-    status: str  # "posted" | "skipped" | "failed"
+    status: str  # "posted" | "skipped" | "failed" | "blocked"
     detail: Optional[str] = None
 
     def as_dict(self) -> dict:
@@ -75,15 +75,92 @@ def run(
     if len(note) > _MAX_NOTE_LENGTH:
         note = note[:_MAX_NOTE_LENGTH]
 
-    app = (
-        db.query(CandidateApplication)
-        .options(joinedload(CandidateApplication.candidate))
-        .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == organization_id,
+    app = None
+    if actor.type == ACTOR_AGENT:
+        # The runtime's role object and allowlist may become stale while an LLM
+        # turn is in flight. Re-authorize this external write under the live
+        # Organization -> Role lock, then lock the target application beneath
+        # it so pause/off/delete/permission and membership changes cannot race
+        # through the Workable call.
+        with db.no_autoflush:
+            role_id = (
+                db.query(CandidateApplication.role_id)
+                .filter(
+                    CandidateApplication.id == int(application_id),
+                    CandidateApplication.organization_id == int(organization_id),
+                    CandidateApplication.deleted_at.is_(None),
+                )
+                .scalar()
+            )
+        if role_id is None:
+            return PostWorkableNoteResult(
+                application_id=application_id,
+                status="blocked",
+                detail="Automatic Workable note held: application is unavailable",
+            )
+
+        from ..services.role_execution_guard import (
+            automatic_role_action_block_reason,
+            lock_live_role,
         )
-        .first()
-    )
+
+        live_role = lock_live_role(
+            db,
+            role_id=int(role_id),
+            organization_id=int(organization_id),
+        )
+        block_reason = automatic_role_action_block_reason(live_role, db=db)
+        if block_reason:
+            return PostWorkableNoteResult(
+                application_id=application_id,
+                status="blocked",
+                detail=f"Automatic Workable note held: {block_reason}",
+            )
+        configured_actions = getattr(live_role, "agent_action_allowlist", None)
+        if not isinstance(configured_actions, (list, tuple, set, frozenset)) or (
+            "post_workable_note"
+            not in {str(name).strip() for name in configured_actions}
+        ):
+            return PostWorkableNoteResult(
+                application_id=application_id,
+                status="blocked",
+                detail=(
+                    "Automatic Workable note held: post_workable_note is no "
+                    "longer enabled for this role"
+                ),
+            )
+        app = (
+            db.query(CandidateApplication)
+            .options(joinedload(CandidateApplication.candidate))
+            .filter(
+                CandidateApplication.id == int(application_id),
+                CandidateApplication.organization_id == int(organization_id),
+                CandidateApplication.role_id == int(live_role.id),
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .with_for_update(of=CandidateApplication)
+            .populate_existing()
+            .one_or_none()
+        )
+        if app is None:
+            return PostWorkableNoteResult(
+                application_id=application_id,
+                status="blocked",
+                detail=(
+                    "Automatic Workable note held: application membership "
+                    "changed before write-back"
+                ),
+            )
+    else:
+        app = (
+            db.query(CandidateApplication)
+            .options(joinedload(CandidateApplication.candidate))
+            .filter(
+                CandidateApplication.id == application_id,
+                CandidateApplication.organization_id == organization_id,
+            )
+            .first()
+        )
     if app is None:
         raise HTTPException(status_code=404, detail="Application not found")
     if not app.workable_candidate_id:

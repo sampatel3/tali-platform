@@ -56,6 +56,11 @@ import AgentNeedsInputCard from '../jobs/AgentNeedsInputCard';
 import { AgentDecisionCard } from '../../shared/decisions/AgentDecisionCard';
 import { applicationDateContext } from '../../shared/decisions/decisionPresentation';
 import {
+  isApprovalBlockingStale,
+  isEngineOnlyStale,
+} from '../../shared/decisions/decisionStaleness';
+import { hasApprovalReceiptCausalTransition } from '../../shared/decisions/approvalReceipt';
+import {
   DECISION_ACTIONS,
   DEFAULT_ACTIONS,
   formatRoleFamilyReferences,
@@ -100,6 +105,10 @@ const isDefinitelyUnacceptedMutation = (err) => {
   }
   return status >= 400 && status < 500;
 };
+
+const isActionableDecision = (decision) => (
+  decision?.status === 'pending' || decision?.status === 'reverted_for_feedback'
+);
 
 // DECISION_ACTIONS (type-aware action set) + DEFAULT_ACTIONS now live in the
 // shared module ../../shared/decisions/decisionActions so the reusable
@@ -882,15 +891,29 @@ export const HomeNow = ({
   const actedRef = useRef(acted);
   useEffect(() => { actedRef.current = acted; }, [acted]);
 
-  const markActed = useCallback((ids) => {
-    const normalized = [...new Set(ids)];
+  const markActed = useCallback((decisionsToLock) => {
+    const normalized = new Map();
+    (decisionsToLock || []).forEach((decisionOrId) => {
+      const source = decisionOrId && typeof decisionOrId === 'object'
+        ? decisionOrId
+        : { id: decisionOrId };
+      if (source.id == null) return;
+      normalized.set(source.id, source);
+    });
     // Queue-mutating API clients invalidate every cached decision-list scope;
     // this helper owns only the cross-remount optimistic acknowledgement.
     updateOptimisticDecisions((prev) => {
       const next = new Map(prev);
-      normalized.forEach((id) => {
+      normalized.forEach((source, id) => {
         if (!next.has(id)) {
-          next.set(id, { scopeKey: decisionScopeKey, settleAfter: null });
+          next.set(id, {
+            scopeKey: decisionScopeKey,
+            settleAfter: null,
+            source: {
+              decision_type: source.decision_type ?? null,
+              resolution_note: source.resolution_note ?? null,
+            },
+          });
         }
       });
       return next;
@@ -985,11 +1008,24 @@ export const HomeNow = ({
         const terminalRowObserved = Boolean(
           rawDecision
           && rawDecision.status !== 'pending'
+          && rawDecision.status !== 'reverted_for_feedback'
           && rawDecision.status !== 'processing',
+        );
+        // Approval workers stamp a returned row with a new retry note (or an
+        // intentional reclassification changes its type). Unlike an unchanged
+        // pending/reverted snapshot, that durable server marker proves the
+        // ambiguous mutation finished and the row is safe to act on again —
+        // even when the worker was too fast for this tab to observe processing.
+        const actionableRetryObserved = Boolean(
+          rawDecision
+          && entry.source
+          && isActionableDecision(rawDecision)
+          && hasApprovalReceiptCausalTransition(rawDecision, entry.source),
         );
         const outcomeIsCausal = !entry.outcomeUnknown
           || entry.processingObserved
-          || terminalRowObserved;
+          || terminalRowObserved
+          || actionableRetryObserved;
         if (
           revisionReached
           && authoritativeForRow
@@ -1085,7 +1121,7 @@ export const HomeNow = ({
   // recruiter can keep moving (send, send, send) without re-clicking the list.
   const advanceFrom = useCallback((id) => {
     const skip = (d) => d.id === id
-      || d.status !== 'pending'
+      || !isActionableDecision(d)
       || actedRef.current.has(d.id);
     const idx = pendingOrdered.findIndex((d) => d.id === id);
     const after = idx >= 0 ? pendingOrdered.slice(idx + 1).find((d) => !skip(d)) : null;
@@ -1124,6 +1160,10 @@ export const HomeNow = ({
   }, [selected?.workable_job_id, ensureStages]);
 
   const handleApprove = useCallback(async (decision) => {
+    if (isApprovalBlockingStale(decision)) {
+      showToast?.("This decision's inputs changed — re-evaluate before approving.", 'warning');
+      return;
+    }
     // ``advance_to_interview`` opens the same confirmation modal as the
     // overrides — the recruiter picks the Workable target stage there.
     const spec = DECISION_ACTIONS[decision.decision_type];
@@ -1134,7 +1174,7 @@ export const HomeNow = ({
     // Optimistic + async. Grey the row as ``processing`` immediately and
     // advance selection to the next actionable card. The row stays visible as
     // acknowledgement while the worker completes the provider write.
-    markActed([decision.id]);
+    markActed([decision]);
     advanceFrom(decision.id);
     showToast?.(
       decision.decision_type === 'send_assessment' ? 'Sending assessment…'
@@ -1144,7 +1184,7 @@ export const HomeNow = ({
       'success',
     );
     try {
-      await agentApi.approveDecision(decision.id, {}, { force: Boolean(decision.is_stale) });
+      await agentApi.approveDecision(decision.id, {}, { force: isEngineOnlyStale(decision) });
     } catch (err) {
       if (isDefinitelyUnacceptedMutation(err)) {
         // The server proved nothing was accepted, so restore/refocus the row.
@@ -1224,10 +1264,15 @@ export const HomeNow = ({
   // Actionable pending decisions matching the current filter scope. Used by
   // the bulk-approve action: visible processing acknowledgements are excluded,
   // so a recruiter can never submit the same decision twice.
-  // Rows mid-re-score are excluded: their score is being replaced, so a bulk
-  // approve must not act on them (mirrors the card's frozen action bar).
+  // Rows mid-re-score or marked stale are excluded. Old-engine scores have a
+  // deliberately bounded single-row override, but the bulk endpoint has no
+  // explicit force contract and must never infer that authorization.
   const visiblePending = useMemo(
-    () => effDecisions.filter((d) => d.status === 'pending' && !d.rescore_in_flight),
+    () => effDecisions.filter(
+      (d) => isActionableDecision(d)
+        && !d.rescore_in_flight
+        && !d.is_stale,
+    ),
     [effDecisions],
   );
   // "Skip & advance" only makes sense for the assessment decisions — it skips
@@ -1318,6 +1363,7 @@ export const HomeNow = ({
       sample,
       more,
       ids,
+      decisions: visiblePending,
       advanceRoles,
       postHandoverRejects,
       linkedRejectFamilies,
@@ -1338,7 +1384,7 @@ export const HomeNow = ({
     setBulkBusy(true);
     // Optimistic: grey the whole batch immediately. Rows that fail return to
     // actionable pending styling as soon as the API identifies them.
-    markActed(ids);
+    markActed(bulkConfirm.decisions);
     try {
       const res = await agentApi.bulkApproveDecisions(
         ids,
@@ -1384,7 +1430,7 @@ export const HomeNow = ({
     if (!ids.length || bulkBusy) return;
     setBulkBusy(true);
     // Optimistic: grey the batch immediately; explicit failures are restored.
-    markActed(ids);
+    markActed(skipAdvanceTargets);
     try {
       const res = await agentApi.bulkOverrideDecisions(ids, 'skip_assessment_advance');
       const payload = res?.data || {};
@@ -1481,9 +1527,13 @@ export const HomeNow = ({
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
       if (e.target?.isContentEditable) return;
       if (!selected) return;
-      if (selected.status !== 'pending' && selected.status !== 'reverted_for_feedback') return;
+      if (!isActionableDecision(selected)) return;
       const k = e.key.toLowerCase();
-      if (k === 'a') { e.preventDefault(); handleApprove(selected); return; }
+      if (k === 'a') {
+        e.preventDefault();
+        if (!isApprovalBlockingStale(selected)) handleApprove(selected);
+        return;
+      }
       if (k === 't') { e.preventDefault(); setTeachFor(selected); return; }
       if (k === 's') { e.preventDefault(); handleSnooze(selected); return; }
     };
@@ -1636,7 +1686,7 @@ export const HomeNow = ({
           })()}
           onClose={() => setAlternativeFor(null)}
           onSubmitting={() => {
-            markActed([alternativeFor.decision.id]);
+            markActed([alternativeFor.decision]);
           }}
           onRejected={() => {
             const submittedId = alternativeFor.decision.id;
@@ -1647,7 +1697,7 @@ export const HomeNow = ({
             const submittedId = alternativeFor.decision.id;
             // OverrideModal calls this only after the mutation is durably
             // accepted (or a timeout status check confirms that acceptance).
-            markActed([submittedId]);
+            markActed([alternativeFor.decision]);
             advanceFrom(submittedId);
             showToast?.(
               `${alternativeFor.alternative.confirmLabel || 'Override'} dispatched.`,
@@ -1657,7 +1707,7 @@ export const HomeNow = ({
           }}
           onOutcomeUnknown={() => {
             const submittedId = alternativeFor.decision.id;
-            markActed([submittedId]);
+            markActed([alternativeFor.decision]);
             advanceFrom(submittedId);
             showToast?.(
               "Couldn't confirm the action — checking its current status.",

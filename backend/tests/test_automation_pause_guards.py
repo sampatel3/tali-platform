@@ -11,6 +11,9 @@ from app.models.organization import Organization
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.role import JOB_STATUS_CANCELLED, JOB_STATUS_OPEN, Role
+from app.models.role_criterion import RoleCriterion
+from app.platform.config import settings
+from app.platform.database import SessionLocal
 from app.cv_parsing.origins import (
     CV_PARSE_ORIGIN_ATS_INGEST,
     CV_PARSE_ORIGIN_NATIVE_APPLY,
@@ -158,6 +161,202 @@ def test_workspace_pause_blocks_queued_paid_focus_and_tech_generation(db):
     assert tech["detail"] == "workspace agent is paused"
     focus_provider.assert_not_called()
     tech_provider.assert_not_called()
+
+
+@pytest.mark.parametrize("changed_input", ("job_spec", "requirements"))
+@pytest.mark.parametrize("provider_mode", ("success", "exception"))
+def test_interview_focus_discards_output_when_inputs_change_during_provider(
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_input: str,
+    provider_mode: str,
+):
+    role = _role(
+        db,
+        suffix=f"focus-edit-{changed_input}-{provider_mode}",
+        enabled=True,
+        paused=False,
+    )
+    criterion = RoleCriterion(
+        role_id=int(role.id),
+        text="Python services",
+        must_have=True,
+        bucket="must",
+        source="recruiter",
+        ordering=0,
+    )
+    db.add(criterion)
+    db.commit()
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+
+    def edit_inputs(*_args, **_kwargs):
+        with SessionLocal() as concurrent:
+            current = concurrent.get(Role, int(role.id))
+            if changed_input == "job_spec":
+                current.job_spec_text = "Replacement specification requiring Rust and consensus."
+            else:
+                current_criterion = concurrent.get(RoleCriterion, int(criterion.id))
+                current_criterion.text = "Rust and distributed consensus"
+            concurrent.commit()
+        if provider_mode == "exception":
+            raise RuntimeError("provider failed after the role edit")
+        return {"questions": [{"question": "Stale provider question"}]}
+
+    with patch(
+        "app.services.interview_focus_service.generate_interview_focus_sync",
+        side_effect=edit_inputs,
+    ):
+        result = generate_role_interview_focus.run(
+            role.id, requires_running_agent=True
+        )
+
+    db.expire_all()
+    saved = db.get(Role, int(role.id))
+    assert result["status"] == "superseded"
+    assert result["reason"] == "role_inputs_changed"
+    assert saved.interview_focus is None
+    assert saved.screening_pack_template is None
+    assert saved.tech_interview_pack_template is None
+    assert "interview_focus_provisioning" not in (
+        saved.assessment_task_provisioning or {}
+    )
+
+
+@pytest.mark.parametrize("pause_scope", ("role", "workspace"))
+def test_interview_focus_discards_output_when_paused_during_provider(
+    db, monkeypatch: pytest.MonkeyPatch, pause_scope: str
+):
+    role = _role(db, suffix=f"focus-inflight-{pause_scope}", enabled=True, paused=False)
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+
+    def pause_authority(*_args, **_kwargs):
+        with SessionLocal() as concurrent:
+            current = concurrent.get(Role, int(role.id))
+            if pause_scope == "role":
+                current.agent_paused_at = datetime.now(timezone.utc)
+                current.agent_paused_reason = "paused during provider call"
+            else:
+                organization = concurrent.get(Organization, int(role.organization_id))
+                organization.agent_workspace_paused_at = datetime.now(timezone.utc)
+                organization.agent_workspace_paused_reason = "paused during provider call"
+            concurrent.commit()
+        return {"questions": [{"question": "Stale provider question"}]}
+
+    with patch(
+        "app.services.interview_focus_service.generate_interview_focus_sync",
+        side_effect=pause_authority,
+    ):
+        result = generate_role_interview_focus.run(
+            role.id, requires_running_agent=True
+        )
+
+    db.expire_all()
+    saved = db.get(Role, int(role.id))
+    assert result["status"] == "superseded"
+    assert result["reason"] in {"role_not_runnable", "workspace_paused"}
+    assert saved.interview_focus is None
+    assert "interview_focus_provisioning" not in (
+        saved.assessment_task_provisioning or {}
+    )
+
+
+@pytest.mark.parametrize("changed_input", ("job_spec", "requirements"))
+@pytest.mark.parametrize("provider_mode", ("success", "exception"))
+def test_tech_questions_discard_output_when_inputs_change_during_provider(
+    db,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_input: str,
+    provider_mode: str,
+):
+    role = _role(
+        db,
+        suffix=f"tech-edit-{changed_input}-{provider_mode}",
+        enabled=True,
+        paused=False,
+    )
+    criterion = RoleCriterion(
+        role_id=int(role.id),
+        text="Python services",
+        must_have=True,
+        bucket="must",
+        source="recruiter",
+        ordering=0,
+    )
+    role.tech_questions_cached = [{"question": "Previous current question"}]
+    role.tech_questions_signature = "stale"
+    db.add(criterion)
+    db.commit()
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+
+    def edit_inputs(*_args, **_kwargs):
+        with SessionLocal() as concurrent:
+            current = concurrent.get(Role, int(role.id))
+            current.tech_questions_signature = None
+            if changed_input == "job_spec":
+                current.job_spec_text = "Replacement specification requiring Rust and consensus."
+            else:
+                current_criterion = concurrent.get(RoleCriterion, int(criterion.id))
+                current_criterion.text = "Rust and distributed consensus"
+            concurrent.commit()
+        if provider_mode == "exception":
+            raise RuntimeError("provider failed after the role edit")
+        return [{"question": "Stale generated question"}]
+
+    with patch(
+        "app.services.role_tech_questions_service.generate_tech_questions",
+        side_effect=edit_inputs,
+    ):
+        result = regenerate_role_tech_questions.run(role.id)
+
+    db.expire_all()
+    saved = db.get(Role, int(role.id))
+    assert result["status"] == "superseded"
+    assert result["reason"] == "role_inputs_changed"
+    assert saved.tech_questions_cached == [{"question": "Previous current question"}]
+    assert saved.tech_questions_signature is None
+    assert "tech_questions_provisioning" not in (
+        saved.assessment_task_provisioning or {}
+    )
+
+
+@pytest.mark.parametrize("pause_scope", ("role", "workspace"))
+def test_tech_questions_discard_output_when_paused_during_provider(
+    db, monkeypatch: pytest.MonkeyPatch, pause_scope: str
+):
+    role = _role(db, suffix=f"tech-inflight-{pause_scope}", enabled=True, paused=False)
+    role.tech_questions_cached = [{"question": "Previous current question"}]
+    role.tech_questions_signature = "stale"
+    db.commit()
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+
+    def pause_authority(*_args, **_kwargs):
+        with SessionLocal() as concurrent:
+            current = concurrent.get(Role, int(role.id))
+            if pause_scope == "role":
+                current.agent_paused_at = datetime.now(timezone.utc)
+                current.agent_paused_reason = "paused during provider call"
+            else:
+                organization = concurrent.get(Organization, int(role.organization_id))
+                organization.agent_workspace_paused_at = datetime.now(timezone.utc)
+                organization.agent_workspace_paused_reason = "paused during provider call"
+            concurrent.commit()
+        return [{"question": "Stale generated question"}]
+
+    with patch(
+        "app.services.role_tech_questions_service.generate_tech_questions",
+        side_effect=pause_authority,
+    ):
+        result = regenerate_role_tech_questions.run(role.id)
+
+    db.expire_all()
+    saved = db.get(Role, int(role.id))
+    assert result["status"] == "superseded"
+    assert result["reason"] in {"role_not_runnable", "workspace_paused"}
+    assert saved.tech_questions_cached == [{"question": "Previous current question"}]
+    assert saved.tech_questions_signature == "stale"
+    assert "tech_questions_provisioning" not in (
+        saved.assessment_task_provisioning or {}
+    )
 
 
 @pytest.mark.parametrize(

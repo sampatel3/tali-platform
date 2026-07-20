@@ -78,11 +78,13 @@ const renderHome = (overrides = {}) => {
 
 beforeEach(() => {
   resetOptimisticDecisions();
+  // Most tests do not exercise stage loading. Keep the lazy request pending so
+  // it cannot schedule an unrelated state update after a synchronous assertion.
+  getWorkableStages.mockReset().mockReturnValue(new Promise(() => {}));
 });
 
 describe('HomeNow — applied-date freshness', () => {
   it('shows when the candidate applied on the queue row and the detail card', () => {
-    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
     renderHome();
     // Queue row: relative applied age next to the role · queue-age line.
     expect(screen.getAllByText(/applied .+ ago/i).length).toBeGreaterThan(0);
@@ -92,7 +94,6 @@ describe('HomeNow — applied-date freshness', () => {
   });
 
   it('labels the shared ATS pool date consistently in the queue and detail card', () => {
-    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
     const related = {
       ...mkAdvance(1, 'Miguel Parracho'),
       role_family: {
@@ -107,7 +108,6 @@ describe('HomeNow — applied-date freshness', () => {
   });
 
   it('keeps the decision role in every candidate-report link', () => {
-    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
     renderHome();
 
     const reportLinks = [
@@ -122,10 +122,6 @@ describe('HomeNow — applied-date freshness', () => {
 });
 
 describe('HomeNow — action and selection semantics', () => {
-  beforeEach(() => {
-    getWorkableStages.mockReset().mockResolvedValue({ data: { stages: [] } });
-  });
-
   it('uses the shared action styles while exposing filters and rows as pressed choices', () => {
     const { container } = renderHome();
 
@@ -144,11 +140,12 @@ describe('HomeNow — action and selection semantics', () => {
     expect(recommendation.closest('button')).toBeNull();
   });
 
-  it('styles the secondary bulk action canonically and labels stale state as status', () => {
+  it('excludes changed-input stale rows from every bulk action', () => {
     const decision = {
       ...mkAdvance(1, 'Miguel Parracho'),
       decision_type: 'send_assessment',
       is_stale: true,
+      staleness_reasons: ['score_generation_changed'],
     };
     const { container } = renderHome({
       decisions: [decision],
@@ -156,10 +153,37 @@ describe('HomeNow — action and selection semantics', () => {
       filters: { status: 'pending', role_id: null, type: 'assessment', q: null },
     });
 
-    expect(screen.getByRole('button', { name: /Skip & advance 1 visible/i }))
-      .toHaveClass('taali-btn-secondary', 'taali-btn-sm');
+    expect(screen.queryByRole('button', { name: /Approve 1 visible/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Skip & advance 1 visible/i })).not.toBeInTheDocument();
     expect(container.querySelector('.rq-qstale')).toHaveTextContent('score out of date');
     expect(screen.getByText('Assessment recommended').closest('button')).toBeNull();
+  });
+
+  it('keeps old-engine-only rows out of bulk approval but available for bounded single approval', () => {
+    const decision = {
+      ...mkAdvance(1, 'Miguel Parracho'),
+      is_stale: true,
+      staleness_reasons: ['engine_outdated'],
+    };
+    renderHome({ decisions: [decision], pendingOrdered: [decision] });
+
+    expect(screen.queryByRole('button', { name: /Approve 1 visible/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Advance to next stage/i })).toBeEnabled();
+  });
+
+  it("does not let the 'a' shortcut bypass changed-input staleness", () => {
+    approveDecision.mockClear();
+    const decision = {
+      ...mkAdvance(1, 'Miguel Parracho'),
+      is_stale: true,
+      staleness_reasons: ['score_generation_changed'],
+    };
+    renderHome({ decisions: [decision], pendingOrdered: [decision] });
+
+    act(() => { fireEvent.keyDown(document, { key: 'a' }); });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(approveDecision).not.toHaveBeenCalled();
   });
 });
 

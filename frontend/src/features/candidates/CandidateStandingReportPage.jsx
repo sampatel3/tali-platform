@@ -43,6 +43,10 @@ import {
   approveDecisionWithReconciliation,
   isApprovalOutcomeUnknownError,
 } from '../../shared/decisions/approvalReconciliation';
+import {
+  isApprovalBlockingStale,
+  isEngineOnlyStale,
+} from '../../shared/decisions/decisionStaleness';
 import { normaliseDecisionText } from '../../shared/decisions/decisionText';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeScorecard } from '../../shared/assessment/fluency4d';
@@ -698,6 +702,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const handleDecisionApprove = useCallback(async (decision) => {
     if (!decision) return;
     const actionScope = reportScopeKey;
+    if (isApprovalBlockingStale(decision)) {
+      showToast("This decision's inputs changed — re-evaluate before approving.", 'warning');
+      return;
+    }
     const spec = DECISION_ACTIONS[decision.decision_type];
     if (spec?.primary) {
       setAlternativeFor({ decision, alternative: spec.primary, reportScope: actionScope });
@@ -705,13 +713,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
     setDecisionBusy(true);
     try {
-      // Do NOT force past the server's staleness guard silently. A stale
-      // decision approved here used to slip through with no warning; instead
-      // let the 409 decision_stale surface below so the recruiter re-evaluates
-      // on fresh inputs (the same warn-then-decide path the hub uses).
       const { receipt, matchedDecision } = await approveDecisionWithReconciliation(
         apiClient.agent,
         decision,
+        {},
+        { force: isEngineOnlyStale(decision) },
       );
       if (!freezeAgentDecision(
         decision,

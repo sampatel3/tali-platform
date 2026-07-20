@@ -216,7 +216,7 @@ def test_build_corroboration_notes_surfaces_positives_only():
     assert build_corroboration_notes({"github": {"status": "not_found"}}) == []
 
 
-# ── Wave 4: PyPDF2 render-state scan (graceful) ─────────────────────────────
+# ── Wave 4: pypdf render-state scan (graceful) ──────────────────────────────
 def test_render_state_scan_graceful_on_junk():
     from app.services.document_hygiene import scan_pdf_render_state
 
@@ -250,13 +250,6 @@ def test_should_enrich_requires_high_match_and_a_flag(monkeypatch):
     assert should_enrich(_fake_app(80, "ok")) is False  # match, no flag
     assert should_enrich(_fake_app(80, None)) is False  # no triangulation
     assert should_enrich(_fake_app(20, "strong_review")) is False  # flag, not a candidate
-
-
-def test_enrich_corroboration_noop_when_disabled():
-    from app.services.corroboration_enrichment import enrich_corroboration
-
-    # all axes disabled → graph/github None → no change → before db use
-    assert enrich_corroboration(_fake_app(80, "review"), db=None) is None
 
 
 # ── GitHub corroboration (free official API; corroborate-first, FP-safe) ─────

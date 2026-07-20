@@ -39,6 +39,7 @@ const missingRequiredFields = (form) => (
 const scrollToWalkthrough = () => {
   if (typeof document === 'undefined') return;
   window.setTimeout(() => {
+    if (typeof document === 'undefined') return;
     document.getElementById('demo-walkthrough')?.scrollIntoView({ behavior: motionSafeScrollBehavior('smooth'), block: 'start' });
   }, 60);
 };

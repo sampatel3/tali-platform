@@ -8,14 +8,14 @@ edits that re-screen) and the sidebar/unread bookkeeping.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import event
 
 from app.agent_chat import constraints as cc
 from app.agent_chat import impact, service, tools
-from app.models.agent_conversation import AgentConversation, AgentConversationMessage
+from app.models.agent_conversation import AgentConversationMessage
 from app.models.agent_decision import AgentDecision
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
@@ -202,7 +202,7 @@ def test_recommend_threshold_no_recoverable_returns_current(db):
 def test_apply_threshold_retracts_stale_advance_and_cards_rejects(db):
     org = _org(db)
     role = _role(db, org, threshold=50, agentic=True)
-    app_high = _scored_app(db, org, role, score=80, name="High")
+    _scored_app(db, org, role, score=80, name="High")
     app_mid = _scored_app(db, org, role, score=55, name="Mid")
     app_low = _scored_app(db, org, role, score=40, name="Low")
     # A pending advance for Mid — valid at 50, stale once we raise to 60.
@@ -480,7 +480,7 @@ def test_post_rescreen_impact_no_change_has_no_card(db):
     assert msg.kind == "proactive"
 
 
-def test_count_inflight_score_jobs_uses_latest_job_per_app(db):
+def test_count_inflight_score_jobs_uses_causal_job_id_when_clock_inverts(db):
     from datetime import datetime, timezone
 
     from app.agent_chat.rescreen_report import count_inflight_score_jobs
@@ -490,13 +490,34 @@ def test_count_inflight_score_jobs_uses_latest_job_per_app(db):
     role = _role(db, org, threshold=70, agentic=True)
     a = _scored_app(db, org, role, score=80, name="A")
     b = _scored_app(db, org, role, score=60, name="B")
-    # A: latest job is done (older stale superseded) → not in flight.
-    db.add(CvScoreJob(application_id=a.id, status="stale", queued_at=datetime(2026, 6, 3, 8, tzinfo=timezone.utc)))
-    db.add(CvScoreJob(application_id=a.id, status="done", queued_at=datetime(2026, 6, 3, 9, tzinfo=timezone.utc)))
+    # A: latest inserted job is done (older stale superseded) → not in flight,
+    # even when the DONE timestamp is backdated by a lower-precision writer.
+    older = CvScoreJob(
+        application_id=a.id,
+        status="stale",
+        queued_at=datetime(2026, 6, 3, 9, tzinfo=timezone.utc),
+    )
+    db.add(older)
+    db.flush()
+    newer = CvScoreJob(
+        application_id=a.id,
+        status="done",
+        queued_at=datetime(2026, 6, 3, 8, tzinfo=timezone.utc),
+    )
+    db.add(newer)
+    db.flush()
     # B: latest job still stale → in flight.
-    db.add(CvScoreJob(application_id=b.id, status="stale", queued_at=datetime(2026, 6, 3, 9, tzinfo=timezone.utc)))
+    db.add(
+        CvScoreJob(
+            application_id=b.id,
+            status="stale",
+            queued_at=datetime(2026, 6, 3, 9, tzinfo=timezone.utc),
+        )
+    )
     db.commit()
 
+    assert int(newer.id) > int(older.id)
+    assert newer.queued_at < older.queued_at
     assert count_inflight_score_jobs(db, role.id) == 1
 
 

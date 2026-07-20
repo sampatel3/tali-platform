@@ -102,7 +102,6 @@ from ...services.application_notes import create_interview_transcript_note, crea
 from ...services.cv_score_orchestrator import (
     enqueue_score,
     latest_score_status,
-    mark_application_scores_stale,
 )
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.pre_screening_service import refresh_pre_screening_fields
@@ -842,10 +841,10 @@ def _latest_score_status_map(db: Session, application_ids: list[int]) -> dict[in
     The list view only needs each application's most recent score-job status,
     not its full job history. Rather than eager-load the whole ``score_jobs``
     collection (~19 rows/app — 6,444 for one role), we return a single row per
-    application: ``ROW_NUMBER`` partitioned by application, ordered to mirror
-    the relationship's ``queued_at desc`` with an ``id`` tiebreaker for
-    determinism. A window function (not Postgres ``DISTINCT ON``) keeps this
-    portable to the SQLite test backend.
+    application: ``ROW_NUMBER`` partitioned by application and ordered by the
+    append-only job ID. Timestamps are age/telemetry data, not causal ordering:
+    Python and database timestamp precision can differ. A window function (not
+    Postgres ``DISTINCT ON``) keeps this portable to the SQLite test backend.
     """
     if not application_ids:
         return {}
@@ -853,7 +852,7 @@ def _latest_score_status_map(db: Session, application_ids: list[int]) -> dict[in
         func.row_number()
         .over(
             partition_by=CvScoreJob.application_id,
-            order_by=(CvScoreJob.queued_at.desc(), CvScoreJob.id.desc()),
+            order_by=CvScoreJob.id.desc(),
         )
         .label("rn")
     )
@@ -980,14 +979,13 @@ def list_role_applications(
     apps = query.offset(offset).limit(limit).all()
     application_ids = [int(app.id) for app in apps]
 
-    # Latest score-job status per application, in one grouped query (DISTINCT
-    # ON picks the freshest row per app, matching the score_jobs relationship's
-    # ``queued_at desc`` ordering with an id tiebreaker for determinism). This
-    # replaces eager-loading the whole score_jobs collection — the list only
-    # needs each row's latest status, not its full job history.
+    # Latest score-job status per application, in one window query ordered by
+    # causal job ID. This replaces eager-loading the whole score_jobs collection
+    # — the list only needs each row's latest status, not its full job history.
     status_map = _latest_score_status_map(db, application_ids)
-    # List context: use the cached-score payload to avoid per-row Anthropic
-    # calls (interview-pack regeneration). Detail-only fields (cv_sections,
+    # List context: use cached aggregates to avoid rebuilding deterministic
+    # detail-only support that this response immediately strips. Detail fields
+    # (cv_sections,
     # assessment_preview, assessment_history, candidate_interview_kit) stay
     # absent and the schema treats them as optional. The dedicated detail
     # endpoint below still uses application_detail_payload.
@@ -2682,6 +2680,20 @@ def upload_application_cv(
         application_id=application_id,
         permission=JobPermission.CONTROL_AGENT,
     )
+    from ...services.candidate_cv_input_lifecycle import (
+        capture_candidate_cv_input_snapshot,
+        invalidate_changed_candidate_cv_inputs,
+    )
+
+    cv_snapshot = (
+        capture_candidate_cv_input_snapshot(
+            db,
+            candidate=app.candidate,
+            organization_id=int(current_user.organization_id),
+        )
+        if app.candidate is not None
+        else None
+    )
     result = process_document_upload(
         upload=file,
         entity_id=application_id,
@@ -2700,13 +2712,29 @@ def upload_application_cv(
         app.candidate.cv_text = sanitize_text_for_storage(result["extracted_text"])
         app.candidate.cv_uploaded_at = now
         app.candidate.cv_sections = None
-    # New CV invalidates the agent's prior view of this candidate. Clear
-    # both pre-screen and cv_match scores (the helper enqueues a stale
-    # CvScoreJob row too, so the worker picks it back up). Without this
-    # the old pre_screen_score_100 lingered in the UI until the new
-    # score landed, which made it look like the agent had decided
-    # against the new CV when it hadn't.
-    mark_application_scores_stale(db, app.id)
+    # A recruiter replacement authorises scoring only for this application.
+    # Changed sibling fallbacks are invalidated but remain recruiter-held, and
+    # nothing publishes until the full upload transaction is durable.
+    changed_application_ids: tuple[int, ...] = ()
+    if app.candidate is not None:
+        cv_invalidation = invalidate_changed_candidate_cv_inputs(
+            db,
+            candidate=app.candidate,
+            before=cv_snapshot,
+            reason="candidate_cv_replaced",
+            queue_related_application_ids={int(app.id)},
+        )
+        changed_application_ids = cv_invalidation.changed_application_ids
+    if int(app.id) not in changed_application_ids:
+        # Preserve the historical fail-safe for an orphaned/unavailable
+        # Candidate relationship or an indistinguishable extracted-text upload.
+        from ...services.cv_score_orchestrator import mark_application_scores_stale
+
+        mark_application_scores_stale(
+            db,
+            int(app.id),
+            reason="candidate_cv_replaced",
+        )
     _refresh_rank_score(app)
     refresh_application_score_cache(app, db=db)
     try:
@@ -2769,7 +2797,13 @@ def generate_taali_cv_ai(
         if not candidate_id:
             raise HTTPException(status_code=400, detail="No CV found for this application (and it is not linked to a Workable candidate)")
 
-        fetched = _try_fetch_cv_from_workable(app, app.candidate, db, org)
+        fetched = _try_fetch_cv_from_workable(
+            app,
+            app.candidate,
+            db,
+            org,
+            queue_related_application_ids={int(app.id)},
+        )
         if not fetched:
             raise HTTPException(status_code=404, detail="No resume found on the Workable candidate profile")
 
@@ -2933,6 +2967,8 @@ def _try_fetch_cv_from_workable(
     candidate: Candidate,
     db: Session,
     org: Organization,
+    *,
+    queue_related_application_ids: set[int] | None = None,
 ) -> bool:
     """Attempt to download CV from Workable for the given application. Returns True if successful."""
     candidate_wid = str(app.workable_candidate_id or candidate.workable_candidate_id or "").strip()
@@ -2986,6 +3022,17 @@ def _try_fetch_cv_from_workable(
         )
         return False
 
+    from ...services.candidate_cv_input_lifecycle import (
+        capture_candidate_cv_input_snapshot,
+        invalidate_changed_candidate_cv_inputs,
+    )
+
+    cv_snapshot = capture_candidate_cv_input_snapshot(
+        db,
+        candidate=candidate,
+        organization_id=int(org.id),
+    )
+
     app.cv_file_url = file_url
     app.cv_filename = filename
     app.cv_text = extracted
@@ -3022,6 +3069,17 @@ def _try_fetch_cv_from_workable(
     # the helper reads the cv_text we just set on ``app`` and is itself
     # best-effort (never raises).
     if not extracted:
+        invalidate_changed_candidate_cv_inputs(
+            db,
+            candidate=candidate,
+            before=cv_snapshot,
+            reason=(
+                "recruiter_workable_cv_fetched"
+                if queue_related_application_ids
+                else "workable_cv_changed"
+            ),
+            queue_related_application_ids=queue_related_application_ids,
+        )
         return True
 
     from ...cv_parsing.apply import parse_and_store_cv_sections
@@ -3058,6 +3116,18 @@ def _try_fetch_cv_from_workable(
             sibling.cv_uploaded_at = now
             if candidate.cv_sections is not None:
                 sibling.cv_sections = candidate.cv_sections
+
+    invalidate_changed_candidate_cv_inputs(
+        db,
+        candidate=candidate,
+        before=cv_snapshot,
+        reason=(
+            "recruiter_workable_cv_fetched"
+            if queue_related_application_ids
+            else "workable_cv_changed"
+        ),
+        queue_related_application_ids=queue_related_application_ids,
+    )
 
     return True
 
@@ -4567,8 +4637,12 @@ def _select_pre_screen_targets(
 
 def _run_batch_pre_screen(role_id: int, org_id: int, *, refresh: bool = False) -> None:
     """Background worker: run pre-screen LLM only on selected apps."""
+    from ...components.scoring.pre_screen_execution import (
+        execute_pre_screen_with_role_fence,
+    )
     from ...services.claude_client_resolver import get_client_for_org
     from ...services.pre_screening_service import execute_pre_screen_only
+    from ...tasks.automation_tasks import run_application_auto_reject
 
     db = SessionLocal()
     try:
@@ -4587,31 +4661,32 @@ def _run_batch_pre_screen(role_id: int, org_id: int, *, refresh: bool = False) -
 
         for idx, app in enumerate(apps):
             try:
-                result = execute_pre_screen_only(app, db=db, client=org_client)
+                result = execute_pre_screen_with_role_fence(
+                    db,
+                    application=app,
+                    role=role,
+                    execute=lambda: execute_pre_screen_only(
+                        app, db=db, client=org_client
+                    ),
+                )
                 if result.get("status") == "error":
                     progress["errors"] = progress.get("errors", 0) + 1
-                # Auto-reject hook for "Below threshold" — same as the regular
-                # score path, so manual pre-screen runs trigger Workable
-                # disqualify when configured.
-                run_auto_reject_if_needed(
-                    db=db, org=org, app=app, role=role, actor_type="system"
-                )
-                db.flush()
+                if result.get("status") == "ok":
+                    # The task locks the live Role and rechecks score freshness
+                    # before any irreversible provider/native action.
+                    try:
+                        run_application_auto_reject.delay(int(app.id))
+                    except Exception:
+                        logger.exception(
+                            "Batch pre-screen auto-reject dispatch failed "
+                            "for application_id=%s",
+                            app.id,
+                        )
             except Exception:
                 logger.exception("Batch pre-screen failed for application_id=%s", app.id)
                 progress["errors"] = progress.get("errors", 0) + 1
             progress["processed"] = idx + 1
             _batch_pre_screen_progress[role_id] = progress
-            if (idx + 1) % 5 == 0:
-                try:
-                    db.commit()
-                except Exception:
-                    db.rollback()
-
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
         progress["status"] = "completed"
         _batch_pre_screen_progress[role_id] = progress
     except Exception:
@@ -5386,6 +5461,9 @@ def _run_process(
     Updates ``_process_progress[role_id]`` in real time so the status endpoint
     can report combined progress.
     """
+    from ...components.scoring.pre_screen_execution import (
+        execute_pre_screen_with_role_fence,
+    )
     from ...services.claude_client_resolver import get_client_for_org
     from ...services.pre_screening_service import execute_pre_screen_only
 
@@ -5540,27 +5618,34 @@ def _run_process(
                     _set_process_progress(role_id, progress)
                     return
                 try:
-                    result = execute_pre_screen_only(app, db=db, client=org_client)
+                    result = execute_pre_screen_with_role_fence(
+                        db,
+                        application=app,
+                        role=role,
+                        execute=lambda: execute_pre_screen_only(
+                            app, db=db, client=org_client
+                        ),
+                    )
                     if result.get("status") == "error":
                         progress["pre_screen"]["errors"] += 1
-                    run_auto_reject_if_needed(
-                        db=db, org=org, app=app, role=role, actor_type="system"
-                    )
-                    db.flush()
+                    if result.get("status") == "ok":
+                        from ...tasks.automation_tasks import (
+                            run_application_auto_reject,
+                        )
+
+                        try:
+                            run_application_auto_reject.delay(int(app.id))
+                        except Exception:
+                            logger.exception(
+                                "Process pre-screen auto-reject dispatch failed "
+                                "for application_id=%s",
+                                app.id,
+                            )
                 except Exception:
                     logger.exception("Process pre-screen failed for application_id=%s", app.id)
                     progress["pre_screen"]["errors"] += 1
                 progress["pre_screen"]["processed"] = idx + 1
                 _set_process_progress(role_id, progress)
-                if (idx + 1) % 5 == 0:
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
 
         # ── Step 3: Score ────────────────────────────────────────────────
         if score_mode in ("new", "all"):

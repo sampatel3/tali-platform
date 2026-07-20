@@ -1,17 +1,15 @@
-"""Syncs never dispatch paid re-scoring.
+"""Workable context changes invalidate scores without paid re-scoring.
 
-Policy (2026-07-02): a Workable sync stores fresh data (answers,
-comments, activities, profile fields) but NEVER re-scores an
-already-scored application — no matter what changed. Re-evaluation of
-existing scores is recruiter-triggered only, via the agent-chat flow
-that quotes the estimated cost first.
+Policy: a Workable sync stores fresh data (answers, comments, activities,
+profile fields) and marks an existing score stale only when the exact rendered
+scoring context changes. It NEVER dispatches paid re-scoring. Re-evaluation is
+recruiter-triggered via the agent-chat flow that quotes the estimated cost.
 
 The old auto-rescore-on-context-change trigger looped forever on
 candidates with applications on multiple agent-on roles (each role's
 sync overwrote the shared candidate row, so the context "changed" on
-every alternate sync) and silently burned API credits. The first three
-tests are the regression guard against reintroducing any sync-driven
-rescore; the rest cover the data-storage semantics that remain.
+every alternate sync) and silently burned API credits. Per-application rendered
+context digests prevent that oscillation while preserving honest staleness.
 """
 
 from __future__ import annotations
@@ -25,8 +23,10 @@ from app.components.integrations.workable.service import WorkableService
 from app.components.integrations.workable.sync_service import WorkableSyncService
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
-from app.models.role import JOB_STATUS_OPEN, Role
+from app.models.role import JOB_STATUS_OPEN, ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 
 
 _CANDIDATE_ID = "wk_cand_42"
@@ -40,14 +40,24 @@ class _StubClient(WorkableService):
     so comments arrive via the activities feed (``action="comment"``).
     """
 
-    def __init__(self, comments_body: str):
+    def __init__(
+        self,
+        comments_body: str,
+        *,
+        candidate_fields: dict | None = None,
+        activities: list[dict] | None = None,
+    ):
         super().__init__(access_token="x", subdomain="test")
         self._comments_body = comments_body
+        self._candidate_fields = candidate_fields or {}
+        self._activities = activities
 
     def get_candidate(self, candidate_id):
-        return {"id": candidate_id, "name": "Alice"}
+        return {"id": candidate_id, "name": "Alice", **self._candidate_fields}
 
     def get_candidate_activities(self, candidate_id):
+        if self._activities is not None:
+            return self._activities
         return [
             {
                 "action": "comment",
@@ -118,6 +128,12 @@ def _build_org_role_candidate_app(
         pre_screen_score_100=pre_screen_score,
         cv_match_score=cv_match_score,
         workable_candidate_id=_CANDIDATE_ID,
+        workable_stage="Phone Screen",
+        workable_answers=[],
+        workable_comments=[
+            {"body": "Initial comment", "member": {"name": "Recruiter"}}
+        ],
+        workable_activities=[],
     )
     db.add(app)
     db.flush()
@@ -130,11 +146,12 @@ def _run_one_candidate_sync(
     org: Organization,
     role: Role,
     new_comment_body: str,
+    client: WorkableService | None = None,
 ):
     """Drive ``_sync_candidate_for_role`` once in full mode with a stub
     that returns a different comment than what's stored.
     """
-    service = WorkableSyncService(_StubClient(new_comment_body))
+    service = WorkableSyncService(client or _StubClient(new_comment_body))
     service._sync_candidate_for_role(
         db=db,
         org=org,
@@ -217,6 +234,76 @@ def test_new_workable_application_paid_dispatch_requires_running_agent(
     assert role.starred_for_auto_sync is True
 
 
+def test_new_workable_cv_import_does_not_create_stale_marker_before_outbox(db):
+    """The creation outbox owns first scoring; CV invalidation is for old apps."""
+
+    class ResumeClient(_StubClient):
+        def download_candidate_resume(self, payload):
+            return "resume.pdf", b"new resume"
+
+    org = Organization(
+        name="New CV import",
+        slug="new-cv-import",
+        workable_connected=True,
+        workable_access_token="x",
+        workable_subdomain="test",
+    )
+    db.add(org)
+    db.flush()
+    role = Role(
+        organization_id=org.id,
+        name="Backend",
+        source="workable",
+        job_spec_text="Hiring a senior backend engineer.",
+        workable_job_id="NEW-CV",
+        workable_job_data={"state": "published"},
+        job_status=JOB_STATUS_OPEN,
+        starred_for_auto_sync=True,
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(role)
+    db.flush()
+
+    def store_resume(*, app, candidate, filename, content):
+        del filename, content
+        now = datetime.now(timezone.utc)
+        app.cv_text = "Newly imported candidate CV"
+        app.cv_uploaded_at = now
+        candidate.cv_text = app.cv_text
+        candidate.cv_uploaded_at = now
+        return True
+
+    with (
+        patch(
+            "app.components.integrations.workable.sync_service._store_candidate_resume",
+            side_effect=store_resume,
+        ),
+        patch(
+            "app.services.cv_score_orchestrator.mark_application_scores_stale"
+        ) as mark_stale,
+        patch(
+            "app.components.integrations.workable.sync_service.on_application_created"
+        ) as on_created,
+    ):
+        _run_one_candidate_sync(
+            db,
+            org=org,
+            role=role,
+            new_comment_body="Initial import",
+            client=ResumeClient("Initial import"),
+        )
+
+    application = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.role_id == role.id)
+        .one()
+    )
+    mark_stale.assert_not_called()
+    assert db.query(CvScoreJob).filter_by(application_id=application.id).count() == 0
+    on_created.assert_called_once()
+
+
 def _sync_and_collect_rescore_calls(db, *, org, role):
     with patch(
         "app.services.cv_score_orchestrator.enqueue_score",
@@ -230,9 +317,8 @@ def _sync_and_collect_rescore_calls(db, *, org, role):
         return enqueued, mock_stale.call_args_list
 
 
-def test_agent_on_role_does_not_rescore_on_context_change(db):
-    """The scored app on an agent-on role stays untouched even though
-    the sync stored a genuinely new recruiter comment."""
+def test_agent_on_role_marks_material_context_change_stale_without_rescore(db):
+    """A rendered comment change invalidates, but never spends automatically."""
     org, role, candidate, app = _build_org_role_candidate_app(
         db,
         org_slug="agent-on-no-auto-rescore",
@@ -241,19 +327,131 @@ def test_agent_on_role_does_not_rescore_on_context_change(db):
         pre_screen_score=72.0,
         cv_match_score=85.0,
     )
-    enqueued, stale_calls = _sync_and_collect_rescore_calls(db, org=org, role=role)
-    assert app.id not in enqueued, "sync must never enqueue a paid rescore"
-    assert not stale_calls, "sync must never invalidate existing scores"
+    with patch(
+        "app.services.cv_score_orchestrator.enqueue_score",
+        return_value=None,
+    ) as mock_enqueue:
+        _run_one_candidate_sync(
+            db, org=org, role=role, new_comment_body="Asking for 65k"
+        )
+    assert not mock_enqueue.called, "sync must never enqueue a paid rescore"
+    stale = (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == app.id)
+        .order_by(CvScoreJob.id.desc())
+        .first()
+    )
+    assert stale is not None
+    assert stale.status == "stale"
+    assert stale.error_message == "workable_context_changed"
+    # The hourly cohort drain only recovers explicitly authorized RoleIntent /
+    # pause deferrals. A sync-owned marker stays visible until recruiter opt-in.
+    from app.tasks.agent_tasks import _requeue_deferred_agent_scores
+
+    with patch("app.services.cv_score_orchestrator.enqueue_score") as retry:
+        assert _requeue_deferred_agent_scores(
+            db, role=role, limit=50
+        ) == (0, set())
+    assert not retry.called
     # The new data still lands for display / the next approved evaluation —
     # on the application's own per-role copy as well as the shared
     # candidate-level fallback.
     assert candidate.workable_comments[0]["body"] == "Asking for 65k"
     assert app.workable_comments[0]["body"] == "Asking for 65k"
     assert app.workable_activities == []
-    # And the existing scores survive (the sync's free field refresh may
-    # recompute derived display values, but never NULLs a real score).
+    # Existing numeric scores remain visible beside the stale badge.
     assert app.pre_screen_score_100 is not None
     assert app.cv_match_score is not None
+
+
+def test_context_change_resets_related_score_without_owner_score_or_sync_spend(db):
+    """Related roles consume Workable context even when the owner was unscored."""
+
+    org, owner, _candidate, app = _build_org_role_candidate_app(
+        db,
+        org_slug="related-context-no-owner-score",
+        agentic=True,
+        starred=True,
+        pre_screen_score=None,
+        cv_match_score=None,
+    )
+    related = Role(
+        organization_id=org.id,
+        name="Related backend role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        job_spec_text="A related role requiring Python platform ownership.",
+        agentic_mode_enabled=True,
+    )
+    db.add(related)
+    db.flush()
+    evaluation = SisterRoleEvaluation(
+        organization_id=org.id,
+        role_id=related.id,
+        source_application_id=app.id,
+        status="done",
+        pipeline_stage="review",
+        spec_fingerprint="old-spec",
+        cv_fingerprint="old-cv",
+        role_fit_score=84.0,
+        summary="Strong fit before the new recruiter comment.",
+        details={"role_fit_score": 84.0},
+        model_version="old-model",
+        prompt_version="old-prompt",
+        trace_id="old-trace",
+        scored_at=datetime.now(timezone.utc),
+    )
+    db.add(evaluation)
+    db.commit()
+
+    with (
+        patch(
+            "app.services.cv_score_orchestrator.mark_application_scores_stale"
+        ) as owner_invalidation,
+        patch(
+            "app.tasks.sister_role_tasks.score_sister_evaluation.apply_async"
+        ) as score_dispatch,
+        patch("app.cv_matching.holistic.run_holistic_match") as paid_provider,
+    ):
+        _run_one_candidate_sync(
+            db,
+            org=org,
+            role=owner,
+            new_comment_body="Availability changed to a twelve-week notice period.",
+        )
+
+    db.commit()
+    db.expire_all()
+    saved = db.get(SisterRoleEvaluation, int(evaluation.id))
+    owner_invalidation.assert_not_called()
+    score_dispatch.assert_not_called()
+    paid_provider.assert_not_called()
+    assert saved.status == "stale_held"
+    assert saved.role_fit_score is None
+    assert saved.summary is None
+    assert saved.details is None
+    assert saved.attempts == 0
+    assert saved.dispatch_attempted_at is None
+    assert saved.started_at is None
+    assert saved.model_version is None
+    assert saved.prompt_version is None
+    assert saved.trace_id is None
+    assert saved.history[-1]["role_fit_score"] == 84.0
+
+    # The every-minute recovery sweep is transport recovery, not recruiter
+    # authority. It must never turn this passive sync into a paid score.
+    from app.tasks.sister_role_tasks import recover_sister_role_evaluations
+
+    with patch(
+        "app.tasks.sister_role_tasks.dispatch_sister_evaluation",
+        return_value={"status": "queued"},
+    ) as recovery_dispatch:
+        recover_sister_role_evaluations.run(limit=200)
+    assert all(
+        call.kwargs.get("evaluation_id") != int(evaluation.id)
+        for call in recovery_dispatch.call_args_list
+    )
 
 
 def test_starred_only_role_does_not_rescore_on_context_change(db):
@@ -267,7 +465,75 @@ def test_starred_only_role_does_not_rescore_on_context_change(db):
     )
     enqueued, stale_calls = _sync_and_collect_rescore_calls(db, org=org, role=role)
     assert app.id not in enqueued
-    assert not stale_calls
+    assert len(stale_calls) == 1
+    assert stale_calls[0].args[1] == app.id
+    assert stale_calls[0].kwargs == {"reason": "workable_context_changed"}
+
+
+@pytest.mark.parametrize(
+    "client",
+    [
+        pytest.param(
+            _StubClient(
+                "Initial comment",
+                candidate_fields={
+                    "answers": [
+                        {
+                            "question": {"body": "Salary expectation?"},
+                            "answer": {"body": "AED 65k"},
+                        }
+                    ]
+                },
+            ),
+            id="questionnaire-answer",
+        ),
+        pytest.param(
+            _StubClient(
+                "Initial comment",
+                activities=[
+                    {
+                        "action": "comment",
+                        "body": "Initial comment",
+                        "member": {"name": "Recruiter"},
+                    },
+                    {
+                        "action": "interview",
+                        "stage_name": "Phone Screen",
+                        "created_at": "2026-07-20T08:00:00Z",
+                    },
+                ],
+            ),
+            id="non-comment-activity",
+        ),
+    ],
+)
+def test_other_rendered_workable_surfaces_mark_scores_stale(db, client):
+    org, role, _, app = _build_org_role_candidate_app(
+        db,
+        org_slug=f"rendered-surface-{id(client)}",
+        agentic=False,
+        starred=True,
+        pre_screen_score=72.0,
+        cv_match_score=85.0,
+    )
+    with patch(
+        "app.services.cv_score_orchestrator.enqueue_score",
+        return_value=None,
+    ) as mock_enqueue, patch(
+        "app.services.cv_score_orchestrator.mark_application_scores_stale",
+        return_value=True,
+    ) as mock_stale:
+        _run_one_candidate_sync(
+            db,
+            org=org,
+            role=role,
+            new_comment_body="Initial comment",
+            client=client,
+        )
+    mock_stale.assert_called_once_with(
+        db, app.id, reason="workable_context_changed"
+    )
+    assert not mock_enqueue.called
 
 
 def test_agent_on_role_never_scored_app_left_for_normal_pipeline(db):
@@ -548,9 +814,8 @@ def test_agent_on_role_skips_rescore_when_context_unchanged(db):
         pre_screen_score=72.0,
         cv_match_score=85.0,
     )
-    # Pre-seed candidate with the same comment-shaped activity the stub
-    # will return (post-split shape, including the ``action`` field) so
-    # the before/after digests match exactly and no rescore fires.
+    # Raw storage shape changes (adding ``action``) but the normalized renderer
+    # produces the same prompt text, so this is deliberately a no-op.
     candidate.workable_comments = [
         {
             "action": "comment",
@@ -558,13 +823,209 @@ def test_agent_on_role_skips_rescore_when_context_unchanged(db):
             "member": {"name": "Recruiter"},
         }
     ]
+    app.workable_comments = [
+        {
+            "body": "Same comment",
+            "member": {"name": "Recruiter"},
+        }
+    ]
+    # The list/detail payload may omit ``sourced``; omission is not an
+    # authoritative change and must preserve the last known prompt value.
+    app.workable_sourced = True
     db.flush()
     with patch(
         "app.services.cv_score_orchestrator.enqueue_score",
         return_value=None,
-    ) as mock_enqueue:
+    ) as mock_enqueue, patch(
+        "app.services.cv_score_orchestrator.mark_application_scores_stale",
+        return_value=True,
+    ) as mock_stale:
         _run_one_candidate_sync(db, org=org, role=role, new_comment_body="Same comment")
         called_app_ids = {call.args[1].id for call in mock_enqueue.call_args_list}
         assert app.id not in called_app_ids, (
             "context unchanged → no rescore"
         )
+        assert not mock_stale.called, "normalized context unchanged → not stale"
+        assert app.workable_sourced is True
+
+
+def test_per_application_digest_prevents_multi_role_context_oscillation(db):
+    """Shared Candidate profile churn must not repeatedly stale role A."""
+
+    class ProfileClient(_StubClient):
+        def __init__(self, *, headline: str, comment: str):
+            super().__init__(comment)
+            self._headline = headline
+
+        def get_candidate(self, candidate_id):
+            return {
+                "id": candidate_id,
+                "name": "Alice",
+                "headline": self._headline,
+            }
+
+    org, role_a, candidate, app_a = _build_org_role_candidate_app(
+        db,
+        org_slug="multi-role-context-digest",
+        agentic=True,
+        starred=True,
+        pre_screen_score=72.0,
+        cv_match_score=85.0,
+    )
+    candidate.headline = "Role A profile"
+    app_a.workable_comments = [
+        {"body": "Role A note", "member": {"name": "Recruiter"}}
+    ]
+    candidate.workable_comments = app_a.workable_comments
+
+    role_b = Role(
+        organization_id=org.id,
+        name="Platform",
+        source="workable",
+        job_spec_text="Hiring a platform engineer.",
+        workable_job_id="J2",
+        starred_for_auto_sync=True,
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(role_b)
+    db.flush()
+    app_b = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=role_b.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="sync",
+        cv_text=app_a.cv_text,
+        pre_screen_score_100=71.0,
+        cv_match_score=84.0,
+        workable_candidate_id="wk_cand_role_b",
+        workable_stage="Phone Screen",
+        workable_answers=[],
+        workable_comments=[
+            {"body": "Role B note", "member": {"name": "Recruiter"}}
+        ],
+        workable_activities=[],
+    )
+    db.add(app_b)
+    db.flush()
+
+    def sync(*, role, candidate_id, headline, comment):
+        WorkableSyncService(
+            ProfileClient(headline=headline, comment=comment)
+        )._sync_candidate_for_role(
+            db=db,
+            org=org,
+            role=role,
+            job={"id": role.workable_job_id, "shortcode": role.workable_job_id},
+            candidate_ref={
+                "id": candidate_id,
+                "email": "a@x.test",
+                "stage": "Phone Screen",
+            },
+            now=datetime.now(timezone.utc),
+            run=None,
+            mode="full",
+        )
+
+    with patch(
+        "app.services.cv_score_orchestrator.enqueue_score",
+        return_value=None,
+    ) as mock_enqueue, patch(
+        "app.services.cv_score_orchestrator.mark_application_scores_stale",
+        return_value=True,
+    ) as mock_stale:
+        # First A sync is a normalized no-op and records A's own digest.
+        sync(
+            role=role_a,
+            candidate_id=_CANDIDATE_ID,
+            headline="Role A profile",
+            comment="Role A note",
+        )
+        # B legitimately changes the shared Candidate snapshot.
+        sync(
+            role=role_b,
+            candidate_id="wk_cand_role_b",
+            headline="Role B profile",
+            comment="Role B note",
+        )
+        calls_before_a_returns = len(mock_stale.call_args_list)
+        # Returning to A restores shared fields, but its application-owned
+        # digest proves that A's rendered context itself did not change.
+        sync(
+            role=role_a,
+            candidate_id=_CANDIDATE_ID,
+            headline="Role A profile",
+            comment="Role A note",
+        )
+
+    assert len(mock_stale.call_args_list) == calls_before_a_returns
+    assert not mock_enqueue.called
+    assert "workable_scoring_context_digest" in app_a.integration_sync_state
+
+
+def test_phone_identity_fallback_invalidates_changed_existing_app_context(db):
+    """A new Workable id/email must not launder an old score via phone dedupe."""
+    from app.components.integrations.workable.scoring_context_freshness import (
+        SCORING_CONTEXT_DIGEST_KEY,
+        rendered_workable_scoring_context_digest,
+    )
+
+    org, role, candidate, app = _build_org_role_candidate_app(
+        db,
+        org_slug="phone-fallback-context-change",
+        agentic=True,
+        starred=True,
+        pre_screen_score=72.0,
+        cv_match_score=85.0,
+    )
+    candidate.phone = "+971 50 202 2165"
+    candidate.phone_normalized = "502022165"
+    candidate.headline = "Original profile"
+    app.integration_sync_state = {
+        SCORING_CONTEXT_DIGEST_KEY: rendered_workable_scoring_context_digest(
+            candidate, app
+        )
+    }
+    db.flush()
+
+    client = _StubClient(
+        "Initial comment",
+        candidate_fields={
+            "email": "new-address@example.test",
+            "phone": "0502022165",
+            "headline": "Materially changed profile",
+        },
+    )
+    service = WorkableSyncService(client)
+    with patch(
+        "app.services.cv_score_orchestrator.mark_application_scores_stale",
+        return_value=True,
+    ) as mark_stale, patch(
+        "app.services.cv_score_orchestrator.enqueue_score",
+        return_value=None,
+    ) as enqueue_score:
+        service._sync_candidate_for_role(
+            db=db,
+            org=org,
+            role=role,
+            job={"id": role.workable_job_id, "shortcode": role.workable_job_id},
+            candidate_ref={
+                "id": "wk_cand_reidentified",
+                "email": "new-address@example.test",
+                "phone": "0502022165",
+                "stage": "Phone Screen",
+            },
+            now=datetime.now(timezone.utc),
+            run=None,
+            mode="full",
+        )
+
+    mark_stale.assert_called_once_with(
+        db,
+        int(app.id),
+        reason="workable_context_changed",
+    )
+    enqueue_score.assert_not_called()
+    assert app.workable_candidate_id == "wk_cand_reidentified"

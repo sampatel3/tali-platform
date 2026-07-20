@@ -18,7 +18,7 @@ from app.cv_parsing.grounding import (
 # A faithful slice of the kind of word-salad the column-scrambled extraction
 # produced for the reported candidate: real employer tokens present, but
 # interleaved with unrelated words. Note the U+FB01 ``ﬁ`` ligature in
-# "Conﬁgured" — exactly what PyPDF2 hands back for some fonts.
+# "Conﬁgured" — exactly what pypdf hands back for some fonts.
 SCRAMBLED_CV = (
     "Built Cox Chess and travel NoSQL development Conﬁgured Syngenta and "
     "Used DynamoDB Data Engineer Freecharge Deputy Manager Boutiqaat Data "

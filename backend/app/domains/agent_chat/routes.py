@@ -50,6 +50,7 @@ from ...services.role_change_audit import (
     capture_role_change_snapshot,
 )
 from ...services.role_concurrency import bump_role_version
+from ...services.workspace_agent_control import workspace_agent_control_snapshot
 from .route_support import (
     ApproveDraftRequest,
     BulkMessageRequest,
@@ -256,6 +257,7 @@ def approve_draft_task(
     """Approve (activate) a generated draft from the chat. Narrates the outcome
     into the timeline so the recruiter sees the confirmation in-thread."""
     org_id = _require_org(current_user)
+    workspace_agent_control_snapshot(db, organization_id=int(org_id), lock=True)
     role = require_job_permission(
         db,
         current_user=current_user,
@@ -393,6 +395,7 @@ def revise_draft_task(
     # Re-authorize while holding the same lock as every shared-job mutation.
     # Membership removal or any intervening Role write wins over this prepared
     # model output.
+    workspace_agent_control_snapshot(db, organization_id=int(org_id), lock=True)
     role = require_job_permission(
         db,
         current_user=current_user,

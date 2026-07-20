@@ -13,7 +13,15 @@ from unittest.mock import patch
 
 import pytest
 
+from app.models.organization import Organization
+from app.models.role import Role
+from app.models.role_criterion import CRITERION_SOURCE_DERIVED, RoleCriterion
 from app.platform.config import settings
+from app.services.role_tech_questions_service import (
+    compute_signature,
+    get_or_regenerate,
+    invalidate,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -23,41 +31,33 @@ def _stub_anthropic_key(monkeypatch):
     value doesn't matter — the real LLM call is mocked downstream."""
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
 
-from app.models.organization import Organization
-from app.models.role import Role
-from app.models.role_criterion import CRITERION_SOURCE_DERIVED, RoleCriterion
-from app.services.role_tech_questions_service import (
-    compute_signature,
-    get_or_regenerate,
-    invalidate,
-)
-
 
 def _seed_role(db, *, job_spec_text: str = "build distributed systems") -> Role:
     slug = f"o-{uuid.uuid4().hex[:8]}"
     org = Organization(name="O", slug=slug)
-    db.add(org); db.flush()
+    db.add(org)
+    db.flush()
     role = Role(
         organization_id=org.id,
         name="R",
         source="manual",
         job_spec_text=job_spec_text,
     )
-    db.add(role); db.flush()
+    db.add(role)
+    db.flush()
     return role
 
 
 def _add_criterion(db, role: Role, *, text: str, must_have: bool = True, source: str = "recruiter") -> RoleCriterion:
     c = RoleCriterion(
-        role_id=role.id,
+        role=role,
         text=text,
         must_have=must_have,
         bucket="must" if must_have else "preferred",
         source=source,
         ordering=0,
     )
-    db.add(c); db.flush()
-    role.criteria.append(c)
+    db.add(c)
     db.flush()
     return c
 
@@ -169,13 +169,15 @@ def test_get_or_regenerate_keeps_old_cache_on_failure(db):
     role = _seed_role(db)
     _add_criterion(db, role, text="Python")
     role.tech_questions_cached = [{"question": "previous"}]
+    role.tech_questions_signature = "obsolete"
     db.flush()
 
     with patch("app.services.role_tech_questions_service.generate_tech_questions", side_effect=RuntimeError("oops")):
         result = get_or_regenerate(db, role)
     assert result == [{"question": "previous"}]
-    # Cache stays — signature stays stale so the next attempt retries.
+    # Cache stays, but its obsolete signature is cleared so the next attempt retries.
     assert role.tech_questions_cached == [{"question": "previous"}]
+    assert role.tech_questions_signature is None
 
 
 def test_get_or_regenerate_returns_none_without_job_spec(db):

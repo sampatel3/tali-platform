@@ -13,13 +13,13 @@ from sqlalchemy.orm import Session
 from ...platform.config import settings
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.organization import Organization
-from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.task import Task
 from ...components.integrations.e2b.service import E2BService
 from ...services.document_service import process_document_upload
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.credit_ledger_service import append_credit_ledger_entry
+from ...services.candidate_cv_input_lifecycle import replace_candidate_cv_and_invalidate
 from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
 from ...services.task_repo_service import normalize_repo_files
 from ...services.task_spec_loader import candidate_rubric_view
@@ -757,12 +757,14 @@ def store_cv_upload(assessment: Assessment, upload: UploadFile, db: Session) -> 
 
     # Also store extracted text on the candidate (for CV-job matching)
     if assessment.candidate_id:
-        candidate = db.query(Candidate).filter(Candidate.id == assessment.candidate_id).first()
-        if candidate:
-            candidate.cv_file_url = result["file_url"]
-            candidate.cv_filename = result["filename"]
-            candidate.cv_text = result["extracted_text"]
-            candidate.cv_uploaded_at = utcnow()
+        replace_candidate_cv_and_invalidate(
+            db,
+            candidate_id=int(assessment.candidate_id),
+            organization_id=int(assessment.organization_id),
+            upload_result=result,
+            uploaded_at=utcnow(),
+            reason="assessment_cv_changed",
+        )
 
     try:
         db.commit()

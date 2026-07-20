@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -35,9 +36,16 @@ from ._shared import _inputs_for, _policy_evidence, _recruiter_reasoning
 
 logger = logging.getLogger("taali.bulk_decision")
 
+if TYPE_CHECKING:
+    from ...components.scoring.freshness import ScoreGenerationToken
+
 
 def ensure_deterministic_decision(
-    db: Session, *, app: CandidateApplication, role: Role
+    db: Session,
+    *,
+    app: CandidateApplication,
+    role: Role,
+    expected_score_generation: ScoreGenerationToken | None = None,
 ) -> str | None:
     """Make sure a SCORED candidate carries its deterministic verdict —
     generated the moment the score lands, decoupled from the agent cohort tick.
@@ -57,6 +65,25 @@ def ensure_deterministic_decision(
     Never raises. Does NOT commit — the caller commits.
     """
     try:
+        from ...components.scoring.freshness import capture_score_generation
+
+        score_generation = expected_score_generation or capture_score_generation(
+            db, role=role, application_id=int(app.id)
+        )
+        if score_generation is None:
+            return None
+        app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(app.id),
+                CandidateApplication.organization_id == int(role.organization_id),
+                CandidateApplication.role_id == int(role.id),
+            )
+            .populate_existing()
+            .one_or_none()
+        )
+        if app is None:
+            return None
         # An existing pending/processing card is auto_correct_stale_verdict's to
         # own — don't double-queue.
         existing = (
@@ -90,6 +117,7 @@ def ensure_deterministic_decision(
         eff = resolve_role_fit_threshold(db, role=role)
         has_task = role_has_assessment_stage(role)
         inputs = _inputs_for(
+            db,
             app,
             role_id=int(role.id),
             org_id=int(role.organization_id),
@@ -154,6 +182,7 @@ def ensure_deterministic_decision(
                 prompt_version=str(verdict.policy_revision_id or "single_threshold_v1"),
                 recommendation=decision_type,
                 skip_episode=True,
+                expected_score_generation=score_generation,
             )
         except HTTPException as exc:  # terminal-state race etc. — never fail scoring
             logger.info(
@@ -173,6 +202,7 @@ def ensure_deterministic_decision(
                 # A recruiter may already be interviewing this person in the
                 # ATS. Surface the recommendation, never move them silently.
                 force_human_review=post_handover,
+                expected_score_generation=score_generation,
             )
             logger.info(
                 "score-time deterministic decision app=%s -> %s auto_executed=%s",

@@ -220,6 +220,16 @@ def upload_candidate_cv(
 ):
     """Upload a CV for a candidate. Extracts text for matching."""
     candidate = _get_candidate_for_org(candidate_id, current_user.organization_id, db)
+    from ...services.candidate_cv_input_lifecycle import (
+        capture_candidate_cv_input_snapshot,
+        invalidate_changed_candidate_cv_inputs,
+    )
+
+    cv_snapshot = capture_candidate_cv_input_snapshot(
+        db,
+        candidate=candidate,
+        organization_id=int(current_user.organization_id),
+    )
 
     result = process_document_upload(
         upload=file,
@@ -233,6 +243,12 @@ def upload_candidate_cv(
     candidate.cv_filename = result["filename"]
     candidate.cv_text = result["extracted_text"]
     candidate.cv_uploaded_at = now
+    invalidate_changed_candidate_cv_inputs(
+        db,
+        candidate=candidate,
+        before=cv_snapshot,
+        reason="candidate_cv_replaced",
+    )
 
     try:
         db.commit()

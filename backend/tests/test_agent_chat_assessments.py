@@ -109,6 +109,43 @@ def test_rescreen_scoped_only_marks_the_affected_subset(db):
     assert set(kwargs["application_ids"]) == {bo.id, cy.id}   # only the missing, not Ada
 
 
+def test_rescreen_scoped_empty_match_never_expands_to_whole_role(db):
+    org = _org(db)
+    role = _role(db, org)
+    user = User(
+        email=f"empty-scope-owner-{id(db)}@x.test",
+        hashed_password="x",
+        organization_id=org.id,
+        role="owner",
+        is_active=True,
+        is_verified=True,
+        is_superuser=False,
+    )
+    db.add(user)
+    db.flush()
+    _app(db, org, role, name="Ada", crit_id=42, status="met", reasoning="UK")
+
+    with patch(
+        "app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=0
+    ) as stale, patch("app.tasks.scoring_tasks.sweep_stale_scores") as sweep:
+        result = tools.dispatch_tool(
+            "rescreen_scoped",
+            {"criterion_id": 42, "statuses": ["missing"]},
+            db=db,
+            role=role,
+            user=user,
+        )
+
+    assert result["type"] == "rescreen_started"
+    assert result["rescreening_count"] == 0
+    assert result["scoped"] is True
+    # Empty scopes short-circuit before invalidation. This preserves the
+    # semantic distinction from ``None`` (whole role) without creating a
+    # redundant stale-score job or dispatching paid work.
+    stale.assert_not_called()
+    sweep.apply_async.assert_not_called()
+
+
 def test_search_candidates_reuses_the_search_handler(db):
     """P4: the role-agent gets the Search page's candidate search."""
     org = _org(db)

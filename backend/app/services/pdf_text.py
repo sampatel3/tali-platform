@@ -2,7 +2,7 @@
 
 Extracted from ``document_service`` (the column-aware logic added in PR #659
 pushed that module over the file-size gate). These functions form a
-self-contained cluster: they depend only on ``io``, ``re``, and PyPDF2
+self-contained cluster: they depend only on ``io``, ``re``, and pypdf
 (imported lazily inside the functions that need it).
 
 ``document_service.extract_text`` routes PDF bytes to
@@ -121,7 +121,7 @@ def _join_pdf_fragments(fragments: list[tuple[float, str]]) -> str:
 
 
 def _extract_text_from_pdf_with_layout(content: bytes) -> str:
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(content))
     pages_text: list[str] = []
@@ -217,7 +217,7 @@ def _extract_text_from_pdf_columnar(content: bytes) -> tuple[str, bool]:
     vertical gutter and read each column independently, ordering columns so
     the one carrying the title/name block (topmost fragment) comes first.
     """
-    from PyPDF2 import PdfReader
+    from pypdf import PdfReader
 
     reader = PdfReader(io.BytesIO(content))
     pages_text: list[str] = []
@@ -258,7 +258,7 @@ def _extract_text_from_pdf_columnar(content: bytes) -> tuple[str, bool]:
 
 
 def extract_text_from_pdf(content: bytes) -> str:
-    """Extract text from PDF bytes using PyPDF2."""
+    """Extract text from PDF bytes using pypdf."""
     try:
         # Column-aware first. Multi-column CVs (sidebar + main column) get
         # scrambled by the default top-to-bottom reader. When a clean column
@@ -274,7 +274,7 @@ def extract_text_from_pdf(content: bytes) -> str:
         if multicolumn and columnar_text:
             return columnar_text
 
-        from PyPDF2 import PdfReader
+        from pypdf import PdfReader
 
         reader = PdfReader(io.BytesIO(content))
         pages = []

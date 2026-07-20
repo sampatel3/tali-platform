@@ -27,9 +27,8 @@ export const agent = {
   // server-side over the whole queue (the per-row is_stale on listDecisions
   // only covers the capped page, so a deep backlog under-counts client-side).
   needsReevalCount: (params = {}) => api.get('/agent-decisions/needs-reeval-count', { params }),
-  // ``opts.force`` approves even when the decision's inputs are stale — the
-  // recruiter deliberately taking the recommended action (parity with the
-  // always-available Reject / Skip & advance overrides).
+  // ``opts.force`` is deliberately narrow: it approves an unchanged decision
+  // scored by an older engine. Changed inputs always require re-evaluation.
   approveDecision: (decisionId, body = {}, opts = {}) => mutateDecisionQueue(() => (
     api.post(`/agent-decisions/${decisionId}/approve${opts.force ? '?force=true' : ''}`, body)
   )),

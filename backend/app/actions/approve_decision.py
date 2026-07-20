@@ -18,7 +18,8 @@ from sqlalchemy.orm import Session
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
-from ..models.role import Role
+from ..services.decision_membership import lock_resolution_roles
+from ..services.decision_approval_guard import enforce_decision_approval_eligibility
 from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
 from ._decision_side_effects import (
     apply_decision_side_effects,
@@ -42,7 +43,12 @@ def rollback_preserving_unknown_outcome(db: Session) -> None:
 
 
 def _accept_for_processing(
-    db: Session, *, organization_id: int, decision_id: int, note: Optional[str]
+    db: Session,
+    *,
+    organization_id: int,
+    decision_id: int,
+    note: Optional[str],
+    allow_engine_outdated: bool = False,
 ) -> AgentDecision:
     """Lock a pending decision and flip it to ``processing``. Raises 404/409.
 
@@ -51,17 +57,25 @@ def _accept_for_processing(
     q = db.query(AgentDecision).filter(
         AgentDecision.id == decision_id,
         AgentDecision.organization_id == organization_id,
-    )
+    ).populate_existing()
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         q = q.with_for_update()
     decision = q.first()
     if decision is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
-    if decision.status != "pending":
+    if decision.status not in ("pending", "reverted_for_feedback"):
         raise HTTPException(
             status_code=409,
-            detail=f"agent_decision {decision_id} is {decision.status}, not pending",
+            detail=(
+                f"agent_decision {decision_id} is {decision.status}, not "
+                "pending or awaiting a post-teach resolution"
+            ),
         )
+    enforce_decision_approval_eligibility(
+        db,
+        decision,
+        allow_engine_outdated=allow_engine_outdated,
+    )
     decision.status = "processing"
     if note is not None:
         decision.resolution_note = note
@@ -77,6 +91,7 @@ def enqueue_batch(
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
     workable_target_stages: Optional[dict[str, str]] = None,
+    allow_engine_outdated_decision_ids: Optional[set[int]] = None,
 ) -> dict:
     """Accept a batch of approvals for background processing.
 
@@ -106,10 +121,17 @@ def enqueue_batch(
     requested = list(dict.fromkeys(int(x) for x in decision_ids))
     accepted: list[int] = []
     failures: list[dict] = []
+    engine_force_ids = {
+        int(value) for value in (allow_engine_outdated_decision_ids or set())
+    }
     for decision_id in requested:
         try:
             _accept_for_processing(
-                db, organization_id=int(organization_id), decision_id=decision_id, note=note
+                db,
+                organization_id=int(organization_id),
+                decision_id=decision_id,
+                note=note,
+                allow_engine_outdated=decision_id in engine_force_ids,
             )
             accepted.append(decision_id)
         except HTTPException as exc:
@@ -135,6 +157,9 @@ def enqueue_batch(
             "note": note,
             "workable_target_stage": workable_target_stage,
             "workable_target_stages": workable_target_stages or None,
+            "allow_engine_outdated_decision_ids": [
+                decision_id for decision_id in accepted if decision_id in engine_force_ids
+            ],
         }
         counters = {
             "total": len(accepted),
@@ -199,6 +224,7 @@ def enqueue_one(
     decision_id: int,
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
+    allow_engine_outdated: bool = False,
 ) -> dict:
     """Accept one decision without querying again after durable acceptance."""
     result = enqueue_batch(
@@ -208,6 +234,9 @@ def enqueue_one(
         decision_ids=[decision_id],
         note=note,
         workable_target_stage=workable_target_stage,
+        allow_engine_outdated_decision_ids=(
+            {int(decision_id)} if allow_engine_outdated else None
+        ),
     )
     if int(decision_id) not in result["accepted"]:
         failure = next(
@@ -234,12 +263,17 @@ def run(
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
     collect_side_effects: Optional[dict] = None,
+    allow_engine_outdated: bool = False,
 ) -> AgentDecision:
     if actor.type != ACTOR_RECRUITER:
         raise HTTPException(status_code=403, detail="approve is recruiter-only")
 
     identity = (
-        db.query(AgentDecision.application_id)
+        db.query(
+            AgentDecision.application_id,
+            AgentDecision.role_id,
+            AgentDecision.decision_type,
+        )
         .filter(
             AgentDecision.id == decision_id,
             AgentDecision.organization_id == organization_id,
@@ -248,23 +282,43 @@ def run(
     )
     if identity is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
-    # Graph provider admission locks Organization before Role. Take a
-    # key-share guard before application/decision/Role locks so approval uses
-    # the same order and cannot recreate the former cross-session deadlock.
+    application_identity = db.query(CandidateApplication.role_id).filter(
+        CandidateApplication.id == int(identity[0]),
+        CandidateApplication.organization_id == int(organization_id),
+    ).one_or_none()
+    if application_identity is None:
+        raise HTTPException(status_code=404, detail="decision application not found")
+    if identity[1] is None or application_identity[0] is None:
+        raise HTTPException(status_code=409, detail="decision role membership is unavailable")
+    expected_decision_role_id = int(identity[1])
+    expected_application_role_id = int(application_identity[0])
+    requires_exclusive_organization_lock = str(identity[2] or "") == "send_assessment"
+    # Lock Organization, then every acting/owner Role for shared-pool decisions.
+    # Assessment creation later reserves capacity under an Organization UPDATE
+    # lock, so take that exclusive mode up front instead of upgrading KEY SHARE.
     lock_organization_for_decision_resolution(
-        db, organization_id=int(organization_id)
+        db,
+        organization_id=int(organization_id),
+        exclusive=requires_exclusive_organization_lock,
     )
-    # Every related-role decision ultimately acts on this one canonical row.
-    # Lock it before the decision row so sibling advance/reject workers share a
-    # single lock order (application -> decision) and cannot deadlock while a
-    # terminal action supersedes the other sibling's processing card.
+    locked_roles = lock_resolution_roles(
+        db,
+        organization_id=organization_id,
+        role_ids=(expected_decision_role_id, expected_application_role_id),
+    )
+    if len(locked_roles) != len(
+        {expected_decision_role_id, expected_application_role_id}
+    ):
+        raise HTTPException(status_code=409, detail="decision role is unavailable")
+    # Then Application→Decision serializes sibling terminal actions.
     application_lock = db.query(CandidateApplication).filter(
         CandidateApplication.id == int(identity[0]),
         CandidateApplication.organization_id == int(organization_id),
     )
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         application_lock = application_lock.with_for_update()
-    if application_lock.populate_existing().one_or_none() is None:
+    app = application_lock.populate_existing().one_or_none()
+    if app is None:
         raise HTTPException(status_code=404, detail="decision application not found")
 
     # C2: row-level lock on the decision. Two recruiters approving the
@@ -284,9 +338,27 @@ def run(
     )
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         decision_query = decision_query.with_for_update()
-    decision = decision_query.first()
+    decision = decision_query.populate_existing().first()
     if decision is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    if (
+        int(decision.application_id) != int(app.id)
+        or decision.role_id is None
+        or int(decision.role_id) != expected_decision_role_id
+        or app.role_id is None
+        or int(app.role_id) != expected_application_role_id
+    ):
+        raise HTTPException(status_code=409, detail="Decision job membership changed; refresh and try again.")
+    if (
+        decision.decision_type == "send_assessment"
+        and not requires_exclusive_organization_lock
+    ):
+        # The action changed after the pre-lock identity read. Never enter the
+        # assessment path under the weaker organization guard.
+        raise HTTPException(
+            status_code=409,
+            detail="Decision action changed; refresh and try again.",
+        )
     # ``reverted_for_feedback`` is a taught-but-not-yet-resolved decision — the
     # corrected row can then be approved/overridden, so it stays actionable
     # alongside ``pending``. ``processing`` is accepted because the async
@@ -298,6 +370,16 @@ def run(
             detail=f"agent_decision {decision_id} is {decision.status}, not actionable",
         )
 
+    # Re-check at the locked execution boundary. Acceptance and worker
+    # execution are separate transactions; a score/criteria/CV change in
+    # between must return the card to HITL without any candidate side effect.
+    enforce_decision_approval_eligibility(
+        db,
+        decision,
+        application=app,
+        allow_engine_outdated=allow_engine_outdated,
+    )
+
     metadata = {
         "agent_decision_id": int(decision.id),
         "agent_run_id": int(decision.agent_run_id) if decision.agent_run_id else None,
@@ -307,29 +389,8 @@ def run(
         "acting_role_id": int(decision.role_id),
     }
     reason = (note or "").strip() or f"Approved agent recommendation #{decision.id}"
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(decision.application_id),
-            CandidateApplication.organization_id == organization_id,
-        )
-        .first()
-    )
-    org = (
-        db.query(Organization).filter(Organization.id == organization_id).first()
-        if app is not None
-        else None
-    )
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == int(decision.role_id),
-            Role.organization_id == int(organization_id),
-        )
-        .one_or_none()
-        if app is not None
-        else None
-    )
+    org = db.query(Organization).filter(Organization.id == organization_id).first()
+    role = locked_roles[expected_decision_role_id]
 
     # "Did this approval freshly reject the candidate?" — gates the background
     # Workable disqualify so an already-rejected candidate isn't re-processed.

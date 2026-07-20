@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..components.scoring.role_intent_inputs import (
+    active_role_intent_material_payload,
+)
 from ..models.role import Role
 from ..models.role_criterion import RoleCriterion
 
@@ -34,24 +38,26 @@ def _normalized(value: Any) -> Any:
     return value
 
 
-def role_intent_payload(role: Role, *, db: Session | None = None) -> dict[str, Any]:
+def role_intent_payload(
+    role: Role,
+    *,
+    db: Session | None = None,
+    criteria_rows: Iterable[RoleCriterion] | None = None,
+) -> dict[str, Any]:
     """Canonical materialized hiring inputs for ``role``.
 
     Querying criteria directly avoids a stale relationship collection when a
     re-publish reconciles rows inside the same transaction.
     """
 
-    if db is not None and getattr(role, "id", None) is not None:
+    if criteria_rows is not None:
+        criteria = list(criteria_rows)
+    elif db is not None and getattr(role, "id", None) is not None:
         criteria = (
             db.query(RoleCriterion)
             .filter(
                 RoleCriterion.role_id == int(role.id),
                 RoleCriterion.deleted_at.is_(None),
-            )
-            .order_by(
-                RoleCriterion.source.asc(),
-                RoleCriterion.ordering.asc(),
-                RoleCriterion.id.asc(),
             )
             .populate_existing()
             .all()
@@ -62,13 +68,13 @@ def role_intent_payload(role: Role, *, db: Session | None = None) -> dict[str, A
             for row in list(getattr(role, "criteria", None) or [])
             if getattr(row, "deleted_at", None) is None
         ]
-        criteria.sort(
-            key=lambda row: (
-                str(getattr(row, "source", "") or ""),
-                int(getattr(row, "ordering", 0) or 0),
-                int(getattr(row, "id", 0) or 0),
-            )
+    criteria.sort(
+        key=lambda row: (
+            str(getattr(row, "source", "") or ""),
+            int(getattr(row, "ordering", 0) or 0),
+            int(getattr(row, "id", 0) or 0),
         )
+    )
     return {
         "role": {
             field: _normalized(getattr(role, field, None))
@@ -85,11 +91,25 @@ def role_intent_payload(role: Role, *, db: Session | None = None) -> dict[str, A
             }
             for row in criteria
         ],
+        # RoleIntent.free_text is a first-class scoring input even when its
+        # optional parser produced no RoleCriterion chips. Keep the full active
+        # generation in the in-flight fence; paid prompts use the separate
+        # bounded projection.
+        "role_intent": (
+            active_role_intent_material_payload(db, role_id=int(role.id))
+            if db is not None and getattr(role, "id", None) is not None
+            else None
+        ),
     }
 
 
-def role_intent_fingerprint(role: Role, *, db: Session | None = None) -> str:
-    payload = role_intent_payload(role, db=db)
+def role_intent_fingerprint(
+    role: Role,
+    *,
+    db: Session | None = None,
+    criteria_rows: Iterable[RoleCriterion] | None = None,
+) -> str:
+    payload = role_intent_payload(role, db=db, criteria_rows=criteria_rows)
     serialized = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")

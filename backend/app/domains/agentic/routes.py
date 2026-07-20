@@ -43,6 +43,7 @@ from ...services.decision_presentation_service import (
     build_decision_explanation,
     candidate_summary_for,
 )
+from ...services import decision_membership
 from ...services.decision_reevaluation_service import (
     RelatedEvaluationUnavailableError,
     count_outdated_pending_decisions,
@@ -84,7 +85,7 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.organization import Organization
-from ...models.role import Role
+from ...models.role import ROLE_KIND_SISTER, Role
 from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.user import User
 from ...platform.database import get_db
@@ -95,7 +96,10 @@ from ._activity_feed import (
     build_activity_feed,
     confidence_to_float,
 )
-from .decision_queue_query import load_agent_decision_rows
+from .decision_queue_query import (
+    apply_agent_decision_status_filter,
+    load_agent_decision_rows,
+)
 from ...services.reasoning_text import humanize_reasoning
 
 
@@ -546,59 +550,9 @@ def list_agent_decisions(
     # decision(s) to surface the agent's recommendation in its header strip.
     if application_id is not None:
         query = query.filter(AgentDecision.application_id == int(application_id))
-    if status != "all":
-        if status == "pending":
-            # The Hub queue shows actionable (pending) rows AND in-flight
-            # (processing) ones — the latter rendered greyed/at-bottom so a
-            # recruiter can't double-approve while the background batch runs.
-            query = query.filter(
-                AgentDecision.status.in_(("pending", "processing"))
-            )
-        elif status == "resolved":
-            # History: the inverse of the queue — every decision that has
-            # left the recruiter's queue (approved / overridden / taught /
-            # discarded / expired). Excludes the live queue states
-            # (pending, processing) which are still actionable elsewhere.
-            query = query.filter(
-                AgentDecision.status.notin_(("pending", "processing"))
-            )
-        elif status == "decided":
-            # Calls a human actually made — approved or overridden — and
-            # nothing else. Narrower than ``resolved`` on purpose: the Hub's
-            # "Recent decisions" panel shows these under a row limit, and
-            # folding in bulk discarded/expired rows (a purged queue can
-            # produce hundreds at once) would push genuine decisions out of
-            # the window and blank the panel.
-            query = query.filter(
-                AgentDecision.status.in_(("approved", "overridden"))
-            )
-        elif status == "current":
-            # Candidate-report lens: an actionable recommendation wins over
-            # history; otherwise retain the last decision a human actually
-            # made. Purge artefacts (discarded/expired) must never displace it.
-            query = query.filter(
-                AgentDecision.status.in_(
-                    (
-                        "pending",
-                        "processing",
-                        "reverted_for_feedback",
-                        "approved",
-                        "overridden",
-                    )
-                )
-            )
-        else:
-            query = query.filter(AgentDecision.status == status)
-    # Snooze hides actionable work, never an accepted processing receipt.
-    if status == "pending":
-        now = datetime.now(timezone.utc)
-        query = query.filter(
-            or_(
-                AgentDecision.status == "processing",
-                AgentDecision.snoozed_until.is_(None),
-                AgentDecision.snoozed_until <= now,
-            )
-        )
+    query = apply_agent_decision_status_filter(
+        query, requested_status=status
+    )
     if decision_type:
         types = DECISION_TYPE_CATEGORIES.get(decision_type, [decision_type])
         query = query.filter(AgentDecision.decision_type.in_(types))
@@ -621,13 +575,11 @@ def list_agent_decisions(
     )
     family_roles = roles_with_families(db, [role.id for _, _, role in rows if role], organization_id=int(current_user.organization_id))
 
-    # A2: compute staleness per row. Only meaningful for ``pending``
-    # rows (resolved decisions are frozen snapshots per A6); for
-    # resolved/discarded/expired we skip the computation and return
-    # is_stale=False. Done in-loop because each row needs the
-    # application + role context; the staleness service handles
-    # caching internally and reuses already-loaded entities when
-    # callers pass them in.
+    # A2: compute staleness for every actionable row. Taught decisions in
+    # ``reverted_for_feedback`` remain approvable, so they need the same trust
+    # signal and re-evaluate gate as ordinary ``pending`` rows. Accepted
+    # ``processing`` rows are read-only receipts; resolved decisions are frozen
+    # snapshots per A6 and deliberately remain non-stale.
     from ...services import decision_staleness
     # CandidateApplication must stay module-scoped; a local import would shadow
     # the earlier join and raise UnboundLocalError.
@@ -653,33 +605,21 @@ def list_agent_decisions(
         applications_by_id=apps_by_id,
     )
 
-    # One query: which of these candidates have a score job in flight right
-    # now (Re-evaluate on an old-engine score, agent-chat bulk re-score, …)?
-    # The queue greys those rows and disables their actions until the fresh
-    # score lands, so a recruiter never approves a score being replaced.
-    rescoring_app_ids: set[int] = set()
-    if all_app_ids:
-        from ...models.cv_score_job import (
-            SCORE_JOB_PENDING,
-            SCORE_JOB_RUNNING,
-            CvScoreJob,
-        )
+    # One latest-attempt query drives both the grey "rescoring" state and the
+    # staleness guard. Explicit None entries cache legacy apps with no job.
+    from ...components.scoring.freshness import latest_score_attempts
+    from ...models.cv_score_job import SCORE_JOB_PENDING, SCORE_JOB_RUNNING
 
-        rescoring_app_ids = {
-            int(row[0])
-            for row in db.query(CvScoreJob.application_id)
-            .filter(
-                CvScoreJob.application_id.in_(all_app_ids),
-                CvScoreJob.status.in_((SCORE_JOB_PENDING, SCORE_JOB_RUNNING)),
-            )
-            .distinct()
-            .all()
-        }
-
-    # One cache for the whole page: pending rows in a queue typically share
-    # a handful of roles, so this collapses the per-role criteria/note
-    # lookups from O(rows) to O(distinct roles).
+    latest_attempts = latest_score_attempts(db, all_app_ids)
+    rescoring_app_ids = {
+        application_id
+        for application_id, attempt in latest_attempts.items()
+        if attempt.status in (SCORE_JOB_PENDING, SCORE_JOB_RUNNING)
+    }
     staleness_cache = decision_staleness.StalenessCache()
+    staleness_cache.latest_score_attempt.update(
+        {application_id: latest_attempts.get(application_id) for application_id in all_app_ids}
+    )
 
     payloads: list[AgentDecisionPayload] = []
     for decision, candidate, role in rows:
@@ -693,7 +633,7 @@ def list_agent_decisions(
         is_stale = False
         reasons: list[str] = []
         summary: Optional[str] = None
-        if decision.status == "pending":
+        if decision.status in ("pending", "reverted_for_feedback"):
             try:
                 report = (
                     related_decision_staleness(
@@ -749,8 +689,8 @@ def needs_reeval_count(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Count of PENDING decisions scored by an OLD engine (the "needs re-eval"
-    backlog) for the current role/type scope.
+    """Count of actionable decisions scored by an OLD engine (the "needs
+    re-eval" backlog) for the current role/type scope.
 
     The home "Needs re-eval" pill reads this so its number reflects the WHOLE
     queue, not the page-fetch window — the per-row is_stale on the list is only
@@ -793,16 +733,17 @@ def needs_reeval_count(
 def approve(
     decision_id: int,
     body: ApproveBody = Body(default_factory=ApproveBody),
-    force: bool = Query(default=False, description="Approve even if the inputs are stale (A4)"),
+    force: bool = Query(
+        default=False,
+        description="Approve an unchanged decision scored by an older engine",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # A4: refuse to approve a stale decision unless the recruiter
-    # explicitly forces it. The Hub disables Approve when is_stale=True
-    # and surfaces a Re-evaluate button; this 409 is the second line of
-    # defense for direct API consumers and copy-pasted URLs. Compute
-    # staleness on the row first; resolved/discarded decisions are
-    # handled by the existing status check inside approve_decision.run.
+    # A4: changed inputs always require re-evaluation. The only bounded force
+    # path is an explicit single-row approval of an otherwise unchanged score
+    # produced by an older engine; bulk approval has no such authority. This
+    # server gate is the second line of defense for direct API consumers.
     pre_decision = (
         db.query(AgentDecision)
         .filter(
@@ -818,46 +759,21 @@ def approve(
             role_id=int(pre_decision.role_id),
             permission=JobPermission.CONTROL_AGENT,
         )
-    if pre_decision is not None and pre_decision.status == "pending" and not force:
-        from ...services import decision_staleness
-        try:
-            pre_application = db.get(
-                CandidateApplication, int(pre_decision.application_id)
-            )
-            pre_related_evaluation = load_related_evaluation(
-                db,
-                decision=pre_decision,
-                application=pre_application,
-            )
-            report = (
-                related_decision_staleness(
-                    db,
-                    pre_decision,
-                    pre_related_evaluation,
-                    application=pre_application,
-                )
-                if is_cross_role_decision(pre_decision, pre_application)
-                else decision_staleness.evaluate(
-                    db, pre_decision, application=pre_application
-                )
-            )
-            if report.is_stale:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "code": "decision_stale",
-                        "message": (
-                            "Inputs cited by this decision have changed since "
-                            "it was queued. Re-evaluate or approve with force=true."
-                        ),
-                        "reasons": report.reasons,
-                        "summary": report.summary,
-                    },
-                )
-        except HTTPException:
-            raise
-        except Exception:  # pragma: no cover — defensive
-            pass
+    if pre_decision is not None and pre_decision.status in (
+        "pending",
+        "reverted_for_feedback",
+    ):
+        from ...services.decision_approval_guard import (
+            enforce_decision_approval_eligibility,
+        )
+
+        enforce_decision_approval_eligibility(
+            db,
+            pre_decision,
+            # ``force`` is deliberately bounded to engine-version-only
+            # staleness. Changed inputs can never be forced through this route.
+            allow_engine_outdated=bool(force),
+        )
 
     try:
         # Optimistic + async: durably accept the decision and hand the Workable
@@ -871,6 +787,7 @@ def approve(
             decision_id=decision_id,
             note=body.note,
             workable_target_stage=body.workable_target_stage,
+            allow_engine_outdated=bool(force),
         )
     except HTTPException:
         db.rollback()
@@ -1015,13 +932,13 @@ def re_evaluate(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """A4: discard a stale pending decision and ask the agent to decide
+    """A4: discard a stale actionable decision and ask the agent to decide
     again on fresh inputs.
 
     Surfaced by the Decision Hub when a decision's inputs have changed
     (is_stale=True): the recruiter presses "Re-evaluate" instead of
     approving a decision built on outdated criteria / CV / scores. We
-    discard the pending row (preserving its audit trail) and enqueue a
+    discard the live row (preserving its audit trail) and enqueue a
     focused agent cycle for the candidate.
 
     A6 invariant: resolved applications (rejected / hired / advanced) are
@@ -1044,10 +961,13 @@ def re_evaluate(
         role_id=int(decision.role_id),
         permission=JobPermission.CONTROL_AGENT,
     )
-    if decision.status != "pending":
+    if decision.status not in ("pending", "reverted_for_feedback"):
         raise HTTPException(
             status_code=409,
-            detail=f"decision {decision_id} is {decision.status}, not pending — nothing to re-evaluate",
+            detail=(
+                f"decision {decision_id} is {decision.status}, not actionable"
+                " — nothing to re-evaluate"
+            ),
         )
 
     application = (
@@ -1119,7 +1039,7 @@ def re_evaluate(
                 requires_active_agent=False,
             )
             db.commit()
-        except Exception as exc:
+        except Exception:
             db.rollback()
             logger.exception("re-score failed decision_id=%s", decision_id)
             raise HTTPException(status_code=500, detail="Re-score failed. Please try again.")
@@ -1139,7 +1059,9 @@ def re_evaluate(
 
     try:
         superseded = supersede_pending_decisions_for_app(
-            db, int(decision.application_id), reason="recruiter_requested_re_evaluate",
+            db, int(decision.application_id),
+            reason="recruiter_requested_re_evaluate",
+            role_id=int(decision.role_id),
         )
         db.commit()
     except Exception as exc:
@@ -1362,6 +1284,23 @@ def bulk_approve(
             role_id=role_id,
             permission=JobPermission.CONTROL_AGENT,
         )
+    # Lock membership beneath the authorized Roles; reject snapshot drift.
+    locked_identities = decision_membership.lock_role_memberships(
+        db,
+        decision_ids=requested,
+        organization_id=current_user.organization_id,
+    )
+    if any(
+        current_role_id is None or int(current_role_id) not in role_ids
+        for _decision_id, current_role_id in locked_identities
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A selected decision changed jobs while approval was being "
+                "authorized. Refresh the queue and try again."
+            ),
+        )
     try:
         result = approve_decision_action.enqueue_batch(
             db,
@@ -1438,15 +1377,16 @@ def bulk_override(
         )
         .all()
     }
+    def _authorize_role(role_id: int) -> None:
+        require_job_permission(
+            db, current_user=current_user, role_id=role_id,
+            permission=JobPermission.CONTROL_AGENT,
+        )
+
     for role_id in sorted(
         {int(row.role_id) for row in rows.values() if row.role_id is not None}
     ):
-        require_job_permission(
-            db,
-            current_user=current_user,
-            role_id=role_id,
-            permission=JobPermission.CONTROL_AGENT,
-        )
+        _authorize_role(role_id)
     accepted: list[int] = []
     failures: list[BulkApproveFailure] = []
     for decision_id in requested:
@@ -1454,7 +1394,19 @@ def bulk_override(
         if decision is None:
             failures.append(BulkApproveFailure(decision_id=decision_id, error="not found"))
             continue
-        stage = stages.get(str(decision.role_id)) if decision.role_id is not None else None
+        # Re-authorize each locked current membership, not the earlier snapshot.
+        current_role_id = decision_membership.authorize_then_lock_role_membership(
+            db,
+            decision_id=decision_id,
+            organization_id=current_user.organization_id,
+            authorize=_authorize_role,
+        )
+        if current_role_id is None:
+            failures.append(
+                BulkApproveFailure(decision_id=decision_id, error="not found")
+            )
+            continue
+        stage = stages.get(str(current_role_id))
         try:
             if action == "skip_assessment_advance":
                 # Reclassify into the advance queue (sync, no Workable write);
@@ -2190,7 +2142,15 @@ def resume_all_agents(
     for role, role_version in resumed_roles:
         try:
             from ...services.role_agent_dispatch import dispatch_role_agent_cycle
+            from ...services.sister_role_evaluation_lifecycle import (
+                release_sister_role_score_holds,
+            )
 
+            if role.role_kind == ROLE_KIND_SISTER:
+                release_sister_role_score_holds(
+                    organization_id=int(role.organization_id),
+                    role_id=int(role.id),
+                )
             dispatch_role_agent_cycle(role, role_version=role_version)
         except Exception:
             logger.exception(
@@ -2434,7 +2394,15 @@ def resume_role_agent(
         if not workspace_held:
             try:
                 from ...services.role_agent_dispatch import dispatch_role_agent_cycle
+                from ...services.sister_role_evaluation_lifecycle import (
+                    release_sister_role_score_holds,
+                )
 
+                if role.role_kind == ROLE_KIND_SISTER:
+                    release_sister_role_score_holds(
+                        organization_id=int(role.organization_id),
+                        role_id=int(role.id),
+                    )
                 dispatch_role_agent_cycle(role, role_version=int(audit_to))
             except Exception:
                 logger.exception(

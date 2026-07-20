@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
+
+import pytest
 
 from app.agent_runtime import policy_evaluator
 from app.agent_runtime.contracts import StructuredIntent
 from app.agent_runtime.policy_evaluator import evaluate_for_application
 from app.models.assessment import Assessment, AssessmentStatus
+from app.models.cv_score_job import CvScoreJob
+from app.models.role import Role
 from app.models.task import Task
 
 from .conftest import add_event, make_world
@@ -15,6 +20,9 @@ from .conftest import add_event, make_world
 
 def test_policy_subagents_receive_bounded_intent_with_latest_answer(db, monkeypatch):
     _org, role, _, app = make_world(db)
+    app.pre_screen_score_100 = 70.0
+    app.cv_match_score = 70.0
+    db.flush()
     previous = "OLDEST ANSWER " + ("prior context " * 180)
     latest = (
         "LATEST MUST-HAVE: candidates must overlap Dubai mornings.\n\n"
@@ -59,6 +67,23 @@ def test_policy_subagents_receive_bounded_intent_with_latest_answer(db, monkeypa
     assert captured["role_intent_extra"]["free_text"] is None
 
 
+def test_cold_unscored_policy_stops_before_paid_subagents(db, monkeypatch):
+    _org, role, _, app = make_world(db)
+
+    def _must_not_run(*_args, **_kwargs):
+        raise AssertionError("cold application must use the canonical scorer")
+
+    monkeypatch.setattr(policy_evaluator, "_gather_sub_agent_outputs", _must_not_run)
+
+    verdict, outputs = evaluate_for_application(
+        db, role=role, application_id=int(app.id)
+    )
+
+    assert verdict.decision_type == "no_action"
+    assert verdict.rule_path == ["score_refresh_required"]
+    assert outputs == {}
+
+
 def test_strong_candidate_yields_queue_send_assessment(db):
     org, role, _, app = make_world(db)
     # Cache a strong CV match + pre-screen so sub-agents return ok.
@@ -76,6 +101,64 @@ def test_strong_candidate_yields_queue_send_assessment(db):
     assert verdict.policy_revision_id is not None
     assert "cv_scoring" in outputs
     assert "pre_screen" in outputs
+
+
+@pytest.mark.parametrize("status", ["stale", "pending", "running", "error"])
+def test_policy_refuses_persisted_scores_until_latest_job_is_done(
+    db, monkeypatch, status
+):
+    _org, role, _, app = make_world(db)
+    app.cv_match_details = {"role_fit_score": 80.0, "dimension_scores": {}}
+    app.pre_screen_score_100 = 80.0
+    db.add(CvScoreJob(application_id=int(app.id), role_id=int(role.id), status=status))
+    db.flush()
+
+    def _must_not_run(*_args, **_kwargs):
+        raise AssertionError("stale persisted scores must not reach sub-agents")
+
+    monkeypatch.setattr(policy_evaluator, "_gather_sub_agent_outputs", _must_not_run)
+
+    verdict, outputs = evaluate_for_application(
+        db, role=role, application_id=int(app.id)
+    )
+
+    assert verdict.decision_type == "no_action"
+    assert verdict.rule_path == ["score_refresh_required"]
+    assert outputs == {}
+
+
+def test_sister_role_policy_uses_its_own_evaluation_not_owner_score_job(
+    db, monkeypatch
+):
+    org, owner, _, app = make_world(db)
+    sister = Role(
+        organization_id=int(org.id),
+        name="Related backend view",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=int(owner.id),
+        job_spec_text="Hire a backend engineer for a related team.",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=0,
+    )
+    db.add(sister)
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(owner.id),
+            status="stale",
+        )
+    )
+    db.flush()
+    gather = MagicMock(return_value={})
+    monkeypatch.setattr(policy_evaluator, "_gather_sub_agent_outputs", gather)
+
+    verdict, _outputs = evaluate_for_application(
+        db, role=sister, application_id=int(app.id)
+    )
+
+    gather.assert_called_once()
+    assert verdict.rule_path != ["score_refresh_required"]
 
 
 def test_recent_recruiter_send_skips_send_assessment(db):

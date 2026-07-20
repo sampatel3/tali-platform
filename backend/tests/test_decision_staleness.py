@@ -10,22 +10,24 @@ These lock in the recruiter-trust invariants:
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import event
 
 import pytest
 from fastapi import HTTPException
 
-from app.actions import queue_decision
+from app.actions import approve_decision, queue_decision
 from app.actions.types import Actor
+from app.components.scoring.freshness import capture_score_generation
 from app.domains.assessments_runtime.role_support import is_resolved
 from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.role_criterion import RoleCriterion
 from app.services import decision_staleness
 
@@ -101,6 +103,9 @@ def _queue(db, org, role, app):
         organization_id=int(org.id), role_id=int(role.id), application_id=int(app.id),
         decision_type="advance_to_interview",
         reasoning="Strong CV.", confidence=0.9, model_version="m", prompt_version="p",
+        expected_score_generation=capture_score_generation(
+            db, role=role, application_id=int(app.id)
+        ),
     )
     db.commit()
     return decision
@@ -116,6 +121,7 @@ def _queue(db, org, role, app):
         ("open", "review", False),
         ("open", "applied", False),
         ("rejected", "review", True),
+        ("withdrawn", "review", True),
         ("hired", "review", True),
         ("open", "advanced", True),
     ],
@@ -139,6 +145,41 @@ def test_queue_captures_input_fingerprint(db):
     assert decision.decision_dedup_key  # C4 key populated
 
 
+def test_queue_preserves_generation_when_aux_fingerprint_capture_fails(
+    db, monkeypatch
+):
+    org, role, _, app = _seed(db)
+    run = _agent_run(db, role)
+    db.commit()
+    generation = capture_score_generation(
+        db, role=role, application_id=int(app.id)
+    )
+
+    def _fail_criteria(*_args, **_kwargs):
+        raise RuntimeError("simulated auxiliary fingerprint failure")
+
+    monkeypatch.setattr(
+        decision_staleness, "criteria_content_fingerprint", _fail_criteria
+    )
+    decision = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Strong CV.",
+        confidence=0.9,
+        model_version="m",
+        prompt_version="p",
+        expected_score_generation=generation,
+    )
+
+    assert decision.input_fingerprint == {
+        "score_generation": generation.as_fingerprint()
+    }
+
+
 # ---------------------------------------------------------------------------
 # A2: staleness detection
 # ---------------------------------------------------------------------------
@@ -149,6 +190,136 @@ def test_fresh_decision_not_stale(db):
     report = decision_staleness.evaluate(db, decision)
     assert report.is_stale is False
     assert report.reasons == []
+
+
+def test_latest_non_done_score_marks_pending_and_processing_owner_card_stale(db):
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id), role_id=int(role.id), status="stale"
+        )
+    )
+    db.commit()
+
+    report = decision_staleness.evaluate(db, decision)
+
+    assert report.is_stale is True
+    assert "score_refresh_required" in report.reasons
+    assert report.details["score_refresh_required"]["latest_score_job_status"] == "stale"
+
+    decision.status = "processing"
+    db.flush()
+    processing_report = decision_staleness.evaluate(db, decision)
+    assert "score_refresh_required" in processing_report.reasons
+
+
+def test_newer_done_score_generation_marks_pending_card_stale(db):
+    org, role, _, app = _seed(db)
+    first_job = CvScoreJob(
+        application_id=int(app.id), role_id=int(role.id), status="done"
+    )
+    db.add(first_job)
+    db.flush()
+    decision = _queue(db, org, role, app)
+
+    replacement_job = CvScoreJob(
+        application_id=int(app.id), role_id=int(role.id), status="done"
+    )
+    db.add(replacement_job)
+    db.commit()
+
+    report = decision_staleness.evaluate(db, decision)
+
+    assert report.is_stale is True
+    assert "score_refresh_required" not in report.reasons
+    assert "score_generation_changed" in report.reasons
+    assert report.details["score_generation_changed"] == {
+        "at_emit": int(first_job.id),
+        "current": int(replacement_job.id),
+    }
+
+    decision.status = "processing"
+    db.flush()
+    processing_report = decision_staleness.evaluate(db, decision)
+    assert "score_generation_changed" in processing_report.reasons
+
+
+def test_same_score_job_with_changed_role_inputs_marks_card_stale(db):
+    org, role, _, app = _seed(db)
+    job = CvScoreJob(
+        application_id=int(app.id), role_id=int(role.id), status="done"
+    )
+    db.add(job)
+    db.flush()
+    decision = _queue(db, org, role, app)
+
+    role.job_spec_text = "hire an engineer who has operated Kubernetes"
+    db.commit()
+
+    report = decision_staleness.evaluate(db, decision)
+
+    assert "score_generation_changed" in report.reasons
+    assert report.details["score_generation_changed"] == {
+        "at_emit": int(job.id),
+        "current": int(job.id),
+    }
+
+
+def test_pending_cold_no_job_card_is_score_refresh_required(db):
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    app.pre_screen_score_100 = None
+    app.genuine_pre_screen_score_100 = None
+    app.cv_match_score = None
+    app.role_fit_score_cache_100 = None
+    db.commit()
+
+    report = decision_staleness.evaluate(db, decision)
+
+    assert report.is_stale is True
+    assert "score_refresh_required" in report.reasons
+    assert report.details["score_refresh_required"][
+        "latest_score_job_status"
+    ] is None
+
+
+def test_owner_score_job_does_not_stale_related_role_card(db):
+    org, owner, _, app = _seed(db)
+    related = Role(
+        organization_id=int(org.id),
+        name="Related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=int(owner.id),
+    )
+    db.add(related)
+    db.flush()
+    decision = AgentDecision(
+        organization_id=int(org.id),
+        role_id=int(related.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="pending",
+        reasoning="Related-role evaluation",
+        model_version="related-role-deterministic",
+        prompt_version="related-role-runtime-v1",
+        idempotency_key=f"related-staleness:{related.id}:{app.id}",
+    )
+    db.add_all(
+        [
+            decision,
+            CvScoreJob(
+                application_id=int(app.id), role_id=int(owner.id), status="stale"
+            ),
+        ]
+    )
+    db.commit()
+
+    report = decision_staleness.evaluate(db, decision, role=related)
+
+    assert "score_refresh_required" not in report.reasons
 
 
 def test_criteria_edit_marks_stale(db):
@@ -341,7 +512,8 @@ def test_rebaseline_pending_criteria_fingerprint_unstales(db):
     )
     db.commit()
     assert updated == 1
-    # No longer stale on the criteria dimension.
+    # The explicitly accepted role generation moves as a unit, so neither the
+    # criteria hash nor the score token makes the card stale.
     report = decision_staleness.evaluate(db, decision)
     assert "criteria_changed" not in report.reasons
     assert report.is_stale is False
@@ -452,6 +624,9 @@ def test_queue_decision_refuses_resolved_app(db):
             organization_id=int(org.id), role_id=int(role.id), application_id=int(app.id),
             decision_type="advance_to_interview",
             reasoning="x", confidence=0.9, model_version="m", prompt_version="p",
+            expected_score_generation=capture_score_generation(
+                db, role=role, application_id=int(app.id)
+            ),
         )
     assert exc.value.status_code == 422
     assert "resolved" in str(exc.value.detail).lower()
@@ -513,8 +688,48 @@ def test_list_agent_decisions_route_returns_pending_with_staleness(db):
     )
 
 
-def test_approve_route_409s_on_stale_decision(db):
-    """A4: approving a stale decision returns 409 (unless force=true).
+def test_list_agent_decisions_marks_stale_reverted_decision(db):
+    """A taught decision stays actionable, so its payload must expose drift."""
+    from types import SimpleNamespace
+
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, criterion, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    decision.status = "reverted_for_feedback"
+    criterion.text = "materially changed after teaching"
+    db.commit()
+
+    payloads = agentic_routes.list_agent_decisions(
+        role_id=int(role.id),
+        application_id=None,
+        status="reverted_for_feedback",
+        decision_type=None,
+        q=None,
+        since=None,
+        limit=50,
+        db=db,
+        current_user=SimpleNamespace(
+            organization_id=int(org.id), id=1, is_active=True, role="owner"
+        ),
+    )
+
+    assert len(payloads) == 1
+    payload = payloads[0]
+    assert payload.id == int(decision.id)
+    assert payload.status == "reverted_for_feedback"
+    assert payload.is_stale is True
+    assert "criteria_changed" in payload.staleness_reasons
+    assert payload.staleness_summary
+
+
+@pytest.mark.parametrize(
+    "decision_status", ["pending", "reverted_for_feedback"]
+)
+def test_approve_route_409s_on_changed_inputs_even_when_forced(
+    db, decision_status
+):
+    """A4: changed candidate inputs cannot be forced through approval.
     Exercises the route end-to-end — the class of bug (runtime error in
     a route my isolation tests skipped) that took the queue down."""
     from types import SimpleNamespace
@@ -522,8 +737,10 @@ def test_approve_route_409s_on_stale_decision(db):
 
     org, role, crit, app = _seed(db)
     decision = _queue(db, org, role, app)
+    decision.status = decision_status
     crit.text = "changed materially"
-    db.add(crit); db.commit()
+    db.add(crit)
+    db.commit()
 
     user = SimpleNamespace(
         organization_id=int(org.id), id=1, is_active=True, role="owner"
@@ -538,6 +755,185 @@ def test_approve_route_409s_on_stale_decision(db):
         )
     assert exc.value.status_code == 409
     assert exc.value.detail.get("code") == "decision_stale"
+
+    with pytest.raises(HTTPException) as forced_exc:
+        agentic_routes.approve(
+            decision_id=int(decision.id),
+            body=agentic_routes.ApproveBody(),
+            force=True,
+            db=db,
+            current_user=user,
+        )
+    assert forced_exc.value.status_code == 409
+    assert forced_exc.value.detail.get("code") == "decision_stale"
+
+
+def test_approve_route_accepts_fresh_reverted_decision(db, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    decision.status = "reverted_for_feedback"
+    db.commit()
+    accepted: list[int] = []
+    monkeypatch.setattr(
+        approve_decision,
+        "enqueue_one",
+        lambda *_args, **kwargs: accepted.append(int(kwargs["decision_id"])),
+    )
+
+    result = agentic_routes.approve(
+        decision_id=int(decision.id),
+        body=agentic_routes.ApproveBody(),
+        force=False,
+        db=db,
+        current_user=SimpleNamespace(
+            organization_id=int(org.id), id=1, is_active=True, role="owner"
+        ),
+    )
+
+    assert result.decision_id == int(decision.id)
+    assert accepted == [int(decision.id)]
+
+
+def test_approve_route_never_forces_resolved_application(db, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    app.application_outcome = "rejected"
+    db.commit()
+    monkeypatch.setattr(
+        approve_decision,
+        "enqueue_one",
+        lambda *_args, **_kwargs: pytest.fail("resolved decision was enqueued"),
+    )
+    user = SimpleNamespace(
+        organization_id=int(org.id), id=1, is_active=True, role="owner"
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        agentic_routes.approve(
+            decision_id=int(decision.id),
+            body=agentic_routes.ApproveBody(),
+            force=True,
+            db=db,
+            current_user=user,
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "application_resolved"
+
+
+def test_approval_guard_rejects_stale_report_without_a_known_reason(
+    db, monkeypatch
+):
+    """Only an explicit engine-only report may use the bounded force path."""
+    from types import SimpleNamespace
+
+    from app.services import decision_approval_guard
+
+    org, role, _, app = _seed(db)
+    decision = _queue(db, org, role, app)
+    monkeypatch.setattr(
+        decision_approval_guard,
+        "approval_staleness_report",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            is_stale=True,
+            reasons=[],
+            summary="Freshness reason unavailable",
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        decision_approval_guard.enforce_decision_approval_freshness(
+            db,
+            decision,
+            allow_engine_outdated=True,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["code"] == "decision_stale"
+
+
+def test_approve_route_allows_explicit_old_engine_only_override(db, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, _, app = _seed(db)
+    app.cv_match_details = {"engine_version": "1.16.0"}
+    decision = _queue(db, org, role, app)
+    _force_holistic(monkeypatch)
+    accepted = []
+    monkeypatch.setattr(
+        approve_decision,
+        "enqueue_one",
+        lambda *_args, **kwargs: accepted.append(
+            (
+                int(kwargs["decision_id"]),
+                bool(kwargs["allow_engine_outdated"]),
+            )
+        ),
+    )
+    user = SimpleNamespace(
+        organization_id=int(org.id), id=1, is_active=True, role="owner"
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        agentic_routes.approve(
+            decision_id=int(decision.id),
+            body=agentic_routes.ApproveBody(),
+            force=False,
+            db=db,
+            current_user=user,
+        )
+    assert exc.value.status_code == 409
+
+    result = agentic_routes.approve(
+        decision_id=int(decision.id),
+        body=agentic_routes.ApproveBody(),
+        force=True,
+        db=db,
+        current_user=user,
+    )
+    assert result.decision_id == int(decision.id)
+    assert accepted == [(int(decision.id), True)]
+
+
+def test_bulk_acceptance_rejects_replaced_score_generation(db):
+    org, role, _, app = _seed(db)
+    first_job = CvScoreJob(
+        application_id=int(app.id), role_id=int(role.id), status="done"
+    )
+    db.add(first_job)
+    db.flush()
+    decision = _queue(db, org, role, app)
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id), role_id=int(role.id), status="done"
+        )
+    )
+    db.commit()
+
+    result = approve_decision.enqueue_batch(
+        db,
+        Actor(type="recruiter", user_id=1),
+        organization_id=int(org.id),
+        decision_ids=[int(decision.id)],
+    )
+
+    assert result["accepted"] == []
+    assert len(result["failures"]) == 1
+    assert result["failures"][0]["decision_id"] == int(decision.id)
+    assert result["failures"][0]["status_code"] == 409
+    assert "score_generation_changed" in result["failures"][0]["error"]
+    db.refresh(decision)
+    assert decision.status == "pending"
 
 
 def test_re_evaluate_route_discards_and_requeues(db, monkeypatch):
@@ -643,6 +1039,9 @@ def test_recently_discarded_decision_suppresses_reemit(db):
         organization_id=int(org.id), role_id=int(role.id), application_id=int(app.id),
         decision_type="advance_to_interview",
         reasoning="again", confidence=0.9, model_version="m", prompt_version="p",
+        expected_score_generation=capture_score_generation(
+            db, role=role, application_id=int(app.id)
+        ),
     )
     assert second.id == decision.id  # returned the discarded row, no new pending
     pending = db.query(AgentDecision).filter(

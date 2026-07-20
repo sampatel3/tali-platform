@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from ...models.agent_decision import AgentDecision
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
+from ..role_execution_guard import lock_live_role
 from ._shared import recompute_persisted_verdict
 from .score_time import ensure_deterministic_decision
 
@@ -43,23 +44,69 @@ def reconcile_pending_positive_decisions(db: Session, *, role: Role) -> int:
     """
     converted = 0
     try:
-        pendings = (
-            db.query(AgentDecision)
+        # Every production caller starts this reconciliation after committing
+        # the role/task toggle. Re-acquire current authority in the platform's
+        # canonical Organization -> Role order before touching a Decision row.
+        # RoleIntent invalidation owns the same Role lock before discarding
+        # decisions, so taking Decision first here would invert that order.
+        with db.no_autoflush:
+            role_id = int(role.id)
+            organization_id = int(role.organization_id)
+        role = lock_live_role(
+            db,
+            role_id=role_id,
+            organization_id=organization_id,
+        )
+        if role is None:
+            return 0
+
+        # Read only the identities while Role is locked, then establish
+        # Role -> Application -> Decision ownership in deterministic order.
+        # Queueing a replacement later re-enters the same locks, never the
+        # former Decision -> Role path. Rows are revalidated by the locking
+        # query so a decision resolved before Role ownership is not rewritten.
+        pending_refs = (
+            db.query(AgentDecision.id, AgentDecision.application_id)
             .filter(
-                AgentDecision.role_id == int(role.id),
+                AgentDecision.role_id == role_id,
                 AgentDecision.status == "pending",
                 AgentDecision.decision_type.in_(_POSITIVE_TYPES),
             )
+            .order_by(AgentDecision.application_id, AgentDecision.id)
+            .all()
+        )
+        if not pending_refs:
+            return 0
+        application_ids = sorted(
+            {int(application_id) for _decision_id, application_id in pending_refs}
+        )
+        applications = (
+            db.query(CandidateApplication)
+            .filter(CandidateApplication.id.in_(application_ids))
+            .order_by(CandidateApplication.id)
+            .populate_existing()
+            .with_for_update(of=CandidateApplication)
+            .all()
+        )
+        applications_by_id = {int(app.id): app for app in applications}
+        decision_ids = [int(decision_id) for decision_id, _app_id in pending_refs]
+        pendings = (
+            db.query(AgentDecision)
+            .filter(
+                AgentDecision.id.in_(decision_ids),
+                AgentDecision.role_id == role_id,
+                AgentDecision.status == "pending",
+                AgentDecision.decision_type.in_(_POSITIVE_TYPES),
+            )
+            .order_by(AgentDecision.application_id, AgentDecision.id)
+            .populate_existing()
+            .with_for_update(of=AgentDecision)
             .all()
         )
         now = datetime.now(timezone.utc)
         skip = bool(getattr(role, "auto_skip_assessment", False))
         for d in pendings:
-            app = (
-                db.query(CandidateApplication)
-                .filter(CandidateApplication.id == d.application_id)
-                .one_or_none()
-            )
+            app = applications_by_id.get(int(d.application_id))
             if app is None:
                 continue
             new_type = recompute_persisted_verdict(db, role=role, app=app)

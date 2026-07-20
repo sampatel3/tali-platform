@@ -11,7 +11,7 @@ the agent re-queuing the same decision on retry.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -20,7 +20,13 @@ from sqlalchemy.orm import Session
 from ..domains.assessments_runtime.role_support import get_application, is_resolved
 from ..models.agent_decision import AGENT_DECISION_TYPES, AgentDecision
 from ..models.candidate_application_event import CandidateApplicationEvent
+from ..services.decision_input_fingerprint import (
+    capture_input_fingerprint as _capture_input_fingerprint,
+)
 from .types import ACTOR_AGENT, Actor
+
+if TYPE_CHECKING:
+    from ..components.scoring.freshness import ScoreGenerationToken
 
 
 def _capture_token_spend(
@@ -45,6 +51,7 @@ def _compute_dedup_key(
     application_id: int,
     decision_type: str,
     evidence: dict[str, Any] | None = None,
+    policy_generation: dict[str, Any] | None = None,
 ) -> str | None:
     """C4: build the cross-cycle dedup key for this would-be decision.
 
@@ -146,7 +153,7 @@ def _compute_dedup_key(
             if evaluation_cv_fp:
                 cv_fp = str(evaluation_cv_fp)
 
-        composite = "|".join([
+        parts = [
             str(role_id),
             str(application_id),
             decision_type,
@@ -154,7 +161,19 @@ def _compute_dedup_key(
             cv_fp,
             pre_screen_dimension,
             _bucket(role_score),
-        ])
+        ]
+        if isinstance(policy_generation, dict):
+            import json
+
+            parts.append(
+                json.dumps(
+                    policy_generation,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                )
+            )
+        composite = "|".join(parts)
         return hashlib.sha256(composite.encode("utf-8")).hexdigest()
     except Exception:
         import logging
@@ -163,134 +182,6 @@ def _compute_dedup_key(
             application_id, decision_type, exc_info=True,
         )
         return None
-
-
-def _capture_input_fingerprint(
-    db: Session,
-    *,
-    application_id: int,
-    role_id: int,
-    evidence: dict[str, Any] | None = None,
-) -> tuple[dict, str | None, str | None]:
-    """A1: snapshot every input the decision cited.
-
-    Returns ``(input_fingerprint_dict, criteria_fingerprint, cv_fingerprint)``.
-    All three are safe-defaulted on any failure — fingerprint capture
-    MUST NEVER block decision queueing. An empty dict means "pre-A1
-    era, leave alone" in the staleness service.
-
-    The criteria + cv hashes are pulled out as separate scalars (indexed
-    on AgentDecision) so the drift detector can use them in WHERE
-    clauses without JSON-extract.
-    """
-    import hashlib
-    try:
-        from ..models.candidate_application import CandidateApplication
-        from ..models.role import Role
-        from ..models.role_feedback_note import RoleFeedbackNote
-        from ..services.decision_staleness import criteria_content_fingerprint
-
-        app = (
-            db.query(CandidateApplication)
-            .filter(CandidateApplication.id == application_id)
-            .one_or_none()
-        )
-        role = db.query(Role).filter(Role.id == role_id).one_or_none()
-        if app is None or role is None:
-            return ({}, None, None)
-
-        # Criteria fingerprint: content-only hash of every active criterion
-        # (text/bucket/weight/must_have), shared verbatim with the staleness
-        # recompute so queue-time capture and read-time drift can never
-        # diverge. Excludes volatile row ids — re-deriving identical criteria
-        # is a staleness no-op. None when the role has no criteria.
-        criteria_fp = criteria_content_fingerprint(db, int(role_id))
-
-        cv_text = (app.cv_text or "").strip()
-        cv_fp = (
-            hashlib.sha256(cv_text.encode("utf-8")).hexdigest()
-            if cv_text else None
-        )
-
-        # Latest recruiter feedback note id — if recruiter has added or
-        # edited notes since the decision queued, the read-time check
-        # will flag staleness.
-        last_note_id = (
-            db.query(RoleFeedbackNote.id)
-            .filter(RoleFeedbackNote.role_id == role_id)
-            .order_by(RoleFeedbackNote.id.desc())
-            .first()
-        )
-
-        def _to_float(value):
-            try:
-                return float(value) if value is not None else None
-            except (TypeError, ValueError):
-                return None
-
-        role_fit_score = getattr(app, "cv_match_score", None)
-        pre_screen_score = getattr(app, "pre_screen_score_100", None)
-        assessment_score = getattr(app, "assessment_score_cache_100", None)
-        taali_score = getattr(app, "taali_score_cache_100", None)
-        pre_screen_cutoff = getattr(role, "pre_screen_cutoff_score_100", None)
-        if int(role_id) != int(app.role_id):
-            from ..models.sister_role_evaluation import SisterRoleEvaluation
-
-            evaluation = (
-                db.query(SisterRoleEvaluation)
-                .filter(
-                    SisterRoleEvaluation.role_id == int(role_id),
-                    SisterRoleEvaluation.source_application_id == int(app.id),
-                )
-                .one_or_none()
-            )
-            role_fit_score = (
-                getattr(evaluation, "role_fit_score", None)
-                if evaluation is not None
-                else None
-            )
-            frozen = evidence if isinstance(evidence, dict) else {}
-            role_fit_score = frozen.get("role_fit_score", role_fit_score)
-            assessment_score = frozen.get("assessment_score")
-            taali_score = frozen.get(
-                "taali_score",
-                assessment_score if assessment_score is not None else role_fit_score,
-            )
-            pre_screen_score = None
-            pre_screen_cutoff = None
-            evaluation_cv_fp = (
-                frozen.get("evaluation_cv_fingerprint")
-                or getattr(evaluation, "cv_fingerprint", None)
-            )
-            if evaluation_cv_fp:
-                cv_fp = str(evaluation_cv_fp)
-
-        fingerprint = {
-            "criteria_fingerprint": criteria_fp,
-            "cv_fingerprint": cv_fp,
-            "cv_uploaded_at": (
-                app.cv_uploaded_at.isoformat()
-                if getattr(app, "cv_uploaded_at", None) is not None
-                else None
-            ),
-            "pre_screen_score_at_emit": _to_float(pre_screen_score),
-            "assessment_score_at_emit": _to_float(assessment_score),
-            "cv_match_score_at_emit": _to_float(role_fit_score),
-            "taali_score_at_emit": _to_float(taali_score),
-            "pre_screen_cutoff_at_emit": _to_float(pre_screen_cutoff),
-            "last_recruiter_note_id": int(last_note_id[0]) if last_note_id else None,
-        }
-        return (fingerprint, criteria_fp, cv_fp)
-    except Exception:
-        # Defensive — fingerprint capture failure must NEVER block the
-        # queue. Empty dict = "pre-fingerprint era" in the staleness
-        # service which leaves the decision alone.
-        import logging
-        logging.getLogger("taali.actions.queue_decision").warning(
-            "input fingerprint capture failed for app=%s role=%s",
-            application_id, role_id, exc_info=True,
-        )
-        return ({}, None, None)
 
 
 def _capture_active_capabilities(
@@ -442,6 +333,7 @@ def run(
     recommendation: Optional[str] = None,
     idempotency_key_suffix: Optional[str] = None,
     skip_episode: bool = False,
+    expected_score_generation: ScoreGenerationToken | None = None,
 ) -> AgentDecision:
     if actor.type != ACTOR_AGENT:
         raise HTTPException(
@@ -474,6 +366,84 @@ def run(
                 status_code=422,
                 detail=f"application {application_id} does not belong to role {role_id}",
             )
+
+    # Serialize score-backed owner-role decisions with recruiter RoleIntent
+    # edits. Queue-first means the later edit sees and discards this pending
+    # row; edit-first means this lock waits, then the stale latest score job
+    # refuses the old verdict. Related-role decisions use their independent
+    # SisterRoleEvaluation lifecycle and are deliberately excluded.
+    from ..components.scoring.freshness import (
+        SCORE_BACKED_STANDARD_DECISION_TYPES,
+        score_generation_is_current,
+        standard_owner_score_guard_applies,
+    )
+
+    locked_role = None
+    if not cross_role and decision_type in SCORE_BACKED_STANDARD_DECISION_TYPES:
+        # Keep the platform-wide Organization -> Role order. Fresh cards may
+        # immediately auto-execute in this same transaction, and that action
+        # boundary takes both locks; a Role-only queue lock would invert the
+        # order against scoring/provider admission. Workable progress commits
+        # release any earlier DB Role lock, so every caller safely re-acquires
+        # the canonical pair here rather than passing unverifiable lock state.
+        from ..services.role_execution_guard import lock_live_role
+
+        locked_role = lock_live_role(
+            db,
+            role_id=int(role_id),
+            organization_id=int(organization_id),
+        )
+        if locked_role is None:
+            raise HTTPException(status_code=422, detail="role is unavailable")
+        from ..models.candidate_application import CandidateApplication
+
+        locked_app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(application_id),
+                CandidateApplication.organization_id == int(organization_id),
+                CandidateApplication.role_id == int(role_id),
+            )
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        if locked_app is None:
+            raise HTTPException(status_code=422, detail="application is unavailable")
+        app = locked_app
+        if (
+            standard_owner_score_guard_applies(
+                application_role_id=int(app.role_id),
+                decision_role_id=int(role_id),
+                role_kind=getattr(locked_role, "role_kind", None),
+                decision_type=decision_type,
+            )
+            and not score_generation_is_current(
+                db,
+                expected=expected_score_generation,
+                locked_role=locked_role,
+                application=app,
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "candidate score refresh is pending; refusing to queue a "
+                    "decision from superseded scores"
+                ),
+            )
+
+    from ..services.decision_policy_generation import (
+        validate_queue_policy_generation,
+    )
+
+    policy_generation = validate_queue_policy_generation(
+        db,
+        organization_id=int(organization_id),
+        role_id=int(role_id),
+        evidence=evidence,
+        locked_role=locked_role,
+    )
 
     # One summary, one shape — regardless of producer. queue_decision is the
     # single funnel BOTH the LLM agent and the deterministic bulk pass call, so
@@ -587,6 +557,11 @@ def run(
         application_id=application_id,
         decision_type=decision_type,
         evidence=evidence,
+        policy_generation=(
+            policy_generation.as_fingerprint()
+            if policy_generation is not None
+            else None
+        ),
     )
     if dedup_key:
         approved_window_floor = _dt.now(_tz.utc) - _td(days=7)
@@ -631,7 +606,12 @@ def run(
         application_id=application_id,
         role_id=role_id,
         evidence=evidence,
+        score_generation=expected_score_generation,
     )
+    if policy_generation is not None:
+        input_fingerprint["decision_policy_generation"] = (
+            policy_generation.as_fingerprint()
+        )
 
     decision = AgentDecision(
         organization_id=organization_id,

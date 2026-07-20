@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import io
 from types import SimpleNamespace
 
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
 from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 

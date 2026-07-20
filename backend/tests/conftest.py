@@ -1,5 +1,8 @@
 import os
+import shutil
+import tempfile
 import warnings
+from pathlib import Path
 
 # Suppress starlette's PendingDeprecationWarning (multipart vs python_multipart) — from dependency
 warnings.filterwarnings(
@@ -29,6 +32,28 @@ os.environ["CLAUDE_MODEL"] = "claude-3-5-haiku-latest"
 # Preserve test fixtures that create/update/delete tasks through API helpers.
 os.environ["TASK_AUTHORING_API_ENABLED"] = "true"
 os.environ["GITHUB_MOCK_MODE"] = "true"
+
+# Task snapshots and assessment repository mocks are real local Git
+# repositories. Test records commonly reuse small integer task IDs, so sharing
+# either default root lets xdist workers mutate the same checkout concurrently
+# and race on ``.git/index.lock`` or delete another worker's snapshot. Configure
+# both roots before importing the application so every service instance sees a
+# run- and worker-specific filesystem. Explicit test bases remain available for
+# CI/debugging while still preserving worker isolation beneath them.
+_pytest_run_id = os.environ.get("PYTEST_XDIST_TESTRUNUID") or f"pid-{os.getpid()}"
+_pytest_worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+_configured_mock_base = os.environ.get("TALI_TEST_GITHUB_MOCK_ROOT")
+_configured_task_base = os.environ.get("TALI_TEST_TASK_REPOS_ROOT")
+_pytest_mock_base = Path(_configured_mock_base or tempfile.gettempdir())
+_pytest_task_base = Path(_configured_task_base or tempfile.gettempdir())
+_pytest_github_mock_root = (
+    _pytest_mock_base / f"taali_github_mock-{_pytest_run_id}" / _pytest_worker_id
+)
+_pytest_task_repos_root = (
+    _pytest_task_base / f"taali_task_repos-{_pytest_run_id}" / _pytest_worker_id
+)
+os.environ["GITHUB_MOCK_ROOT"] = str(_pytest_github_mock_root)
+os.environ["TASK_REPOS_ROOT"] = str(_pytest_task_repos_root)
 # Run Celery tasks inline so unit/API tests don't need a live broker.
 # Calling `.delay()` invokes the task body in-process and returns a
 # completed AsyncResult. Tests that need to assert dispatch should patch
@@ -66,6 +91,14 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 # Keep one sync connection open so SQLite shared-memory state survives across
 # short-lived request/test sessions during the suite.
 _keepalive_connection = engine.connect()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_worker_repository_roots():
+    """Remove this pytest process's isolated repositories after teardown."""
+    yield
+    shutil.rmtree(_pytest_github_mock_root, ignore_errors=True)
+    shutil.rmtree(_pytest_task_repos_root, ignore_errors=True)
 
 # Enable foreign key support and WAL mode for SQLite (reduces locking with async engine)
 @event.listens_for(engine, "connect")

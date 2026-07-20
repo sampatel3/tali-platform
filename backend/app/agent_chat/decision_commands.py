@@ -332,6 +332,13 @@ def list_pending_decisions(
         .all()
     )
     cache = decision_staleness.StalenessCache()
+    from ..components.scoring.freshness import latest_score_attempts
+
+    application_ids = [int(application.id) for _, application, _ in rows]
+    latest_attempts = latest_score_attempts(db, application_ids)
+    cache.latest_score_attempt.update(
+        {application_id: latest_attempts.get(application_id) for application_id in application_ids}
+    )
     role_family = _role_family_snapshot(db, role, organization_id=org_id)
     decisions = [
         _pending_decision_row(

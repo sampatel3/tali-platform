@@ -27,31 +27,45 @@ def lock_live_role(
 ) -> Role | None:
     """Reload and lock the current Role row before an automatic side effect."""
 
-    # Autoflush is disabled globally. Persist caller-owned changes (for
-    # example an atomic Turn-on + first action) before ``populate_existing``
-    # reloads the row, otherwise the live-row check can discard a legitimate
-    # unflushed toggle and incorrectly hold the action.
-    db.flush()
     # Workspace Pause/Resume serializes on the Organization row. Take that
     # lock before the Role lock so a just-paused workspace cannot race through
     # this automatic side-effect boundary, and so every provider admission
-    # path follows the same org -> role lock order.
+    # path follows the same org -> role lock order. Do not flush caller-owned
+    # AgentDecision/application mutations until both locks are established:
+    # RoleIntent edits take Role before touching those rows, so flushing first
+    # can invert the order and deadlock.
     from .workspace_agent_control import workspace_agent_control_snapshot
 
-    workspace_agent_control_snapshot(
-        db,
-        organization_id=int(organization_id),
-        lock=True,
-    )
+    with db.no_autoflush:
+        workspace_agent_control_snapshot(
+            db,
+            organization_id=int(organization_id),
+            lock=True,
+        )
+        locked_role_id = (
+            db.query(Role.id)
+            .filter(
+                Role.id == int(role_id),
+                Role.organization_id == int(organization_id),
+                Role.deleted_at.is_(None),
+            )
+            .with_for_update(of=Role)
+            .scalar()
+        )
+    if locked_role_id is None:
+        return None
+
+    # Persist an atomic caller-owned toggle only after Organization -> Role is
+    # locked, then reload so every authority check uses durable live state.
+    db.flush()
     return (
         db.query(Role)
         .filter(
-            Role.id == int(role_id),
+            Role.id == int(locked_role_id),
             Role.organization_id == int(organization_id),
             Role.deleted_at.is_(None),
         )
         .populate_existing()
-        .with_for_update()
         .one_or_none()
     )
 

@@ -37,6 +37,25 @@ Requirements
 """
 
 
+def _seed_provider_artifacts(db, *, role_id: int, job_spec_text: str) -> Role:
+    role = db.get(Role, int(role_id))
+    role.job_spec_text = job_spec_text.strip()
+    role.description = job_spec_text.strip()
+    role.interview_focus = {"questions": [{"question": "Old focus"}]}
+    role.screening_pack_template = {
+        "stage": "screening",
+        "questions": [{"question": "Old screening question"}],
+    }
+    role.tech_interview_pack_template = {
+        "stage": "tech_stage_2",
+        "questions": [{"question": "Old technical-pack question"}],
+    }
+    role.tech_questions_cached = [{"question": "Old technical question"}]
+    role.tech_questions_signature = "old-provider-generation"
+    db.commit()
+    return role
+
+
 def _disable_focus_dispatch(monkeypatch) -> None:
     monkeypatch.setattr(roles_management_routes, "on_role_jd_attached", lambda _role: None)
 
@@ -79,6 +98,87 @@ def test_job_spec_editor_persists_spec_name_tasks_and_diff(client, db, monkeypat
     assert saved.job_spec_manually_edited_at is not None
     assert saved.interview_focus is None
     assert saved.interview_focus_generated_at is None
+
+
+def test_job_spec_editor_refreshes_both_provider_artifacts_after_commit(client, db):
+    headers, _ = auth_headers(client)
+    created = client.post(
+        "/api/v1/roles", json={"name": "Provider lifecycle"}, headers=headers
+    ).json()
+    _seed_provider_artifacts(db, role_id=created["id"], job_spec_text=SPEC_A)
+
+    with (
+        patch(
+            "app.tasks.automation_tasks.generate_role_interview_focus.delay"
+        ) as focus_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.delay"
+        ) as tech_dispatch,
+    ):
+        response = client.put(
+            f"/api/v1/roles/{created['id']}/job-spec",
+            json={
+                "expected_version": created["version"],
+                "job_spec_text": SPEC_B,
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    focus_dispatch.assert_called_once_with(
+        int(created["id"]), requires_running_agent=False
+    )
+    tech_dispatch.assert_called_once_with(int(created["id"]))
+    db.expire_all()
+    saved = db.get(Role, int(created["id"]))
+    assert saved.interview_focus is None
+    assert saved.screening_pack_template is None
+    assert saved.tech_interview_pack_template is None
+    assert saved.tech_questions_cached == [{"question": "Old technical question"}]
+    assert saved.tech_questions_signature is None
+
+
+def test_job_spec_editor_noop_keeps_provider_artifacts_and_dispatches_nothing(
+    client, db
+):
+    headers, _ = auth_headers(client)
+    created = client.post(
+        "/api/v1/roles", json={"name": "Provider no-op"}, headers=headers
+    ).json()
+    _seed_provider_artifacts(db, role_id=created["id"], job_spec_text=SPEC_A)
+
+    with (
+        patch(
+            "app.tasks.automation_tasks.generate_role_interview_focus.delay"
+        ) as focus_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.delay"
+        ) as tech_dispatch,
+    ):
+        response = client.put(
+            f"/api/v1/roles/{created['id']}/job-spec",
+            json={
+                "expected_version": created["version"],
+                "job_spec_text": SPEC_A,
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    focus_dispatch.assert_not_called()
+    tech_dispatch.assert_not_called()
+    db.expire_all()
+    saved = db.get(Role, int(created["id"]))
+    assert saved.interview_focus == {"questions": [{"question": "Old focus"}]}
+    assert saved.screening_pack_template == {
+        "stage": "screening",
+        "questions": [{"question": "Old screening question"}],
+    }
+    assert saved.tech_interview_pack_template == {
+        "stage": "tech_stage_2",
+        "questions": [{"question": "Old technical-pack question"}],
+    }
+    assert saved.tech_questions_signature == "old-provider-generation"
 
 
 def test_job_spec_editor_rejects_assessment_task_removal_before_mutation(
@@ -309,7 +409,10 @@ def test_job_spec_editor_resets_and_rescores_sister_roles(client, db, monkeypatc
             },
             headers=headers,
         )
-    dispatch.assert_called_once_with(args=[sister.id], queue="scoring")
+    dispatch.assert_called_once_with(
+        args=[sister.id],
+        queue="scoring",
+    )
     assert response.status_code == 200, response.text
     assert response.json()["role"]["name"] == "Alternate platform view"
     assert response.json()["role"]["job_spec_text"] == SPEC_B.strip()

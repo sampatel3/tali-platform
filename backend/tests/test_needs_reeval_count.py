@@ -5,6 +5,8 @@ role/type scope), not the capped page the list endpoint returns.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.agent_decision import AgentDecision
@@ -28,10 +30,10 @@ def _app(db, org_id, role_id, email, details):
     return app
 
 
-def _pending(db, org_id, role_id, app_id, dtype):
+def _pending(db, org_id, role_id, app_id, dtype, *, status="pending"):
     d = AgentDecision(
         organization_id=org_id, role_id=role_id, application_id=app_id,
-        decision_type=dtype, recommendation=dtype, status="pending",
+        decision_type=dtype, recommendation=dtype, status=status,
         reasoning="x", confidence=0.9, model_version="m", prompt_version="p",
         idempotency_key=f"count-test:{app_id}",
         input_fingerprint={},  # pre-A1: engine staleness still flags
@@ -57,21 +59,47 @@ def test_needs_reeval_count_scopes_by_type(client, db, monkeypatch):
     _pending(db, org_id, role.id, _app(db, org_id, role.id, "a@x.test", OLD).id, "advance_to_interview")
     _pending(db, org_id, role.id, _app(db, org_id, role.id, "b@x.test", NEW).id, "advance_to_interview")
     _pending(db, org_id, role.id, _app(db, org_id, role.id, "c@x.test", OLD).id, "reject")
+    _pending(
+        db,
+        org_id,
+        role.id,
+        _app(db, org_id, role.id, "taught@x.test", OLD).id,
+        "advance_to_interview",
+        status="reverted_for_feedback",
+    )
+    _pending(
+        db,
+        org_id,
+        role.id,
+        _app(db, org_id, role.id, "taught-fresh@x.test", NEW).id,
+        "advance_to_interview",
+        status="reverted_for_feedback",
+    )
+    snoozed = _pending(
+        db,
+        org_id,
+        role.id,
+        _app(db, org_id, role.id, "taught-snoozed@x.test", OLD).id,
+        "advance_to_interview",
+        status="reverted_for_feedback",
+    )
+    snoozed.snoozed_until = datetime.now(timezone.utc) + timedelta(hours=1)
     db.commit()
 
-    # All types: two stale (the advance + the reject), the fresh one excluded.
+    # All types: three stale (pending advance + reject + taught advance); the
+    # fresh pending row is excluded.
     r = client.get("/api/v1/agent-decisions/needs-reeval-count", headers=headers)
     assert r.status_code == 200, r.text
-    assert r.json()["count"] == 2
+    assert r.json()["count"] == 3
 
-    # Scoped to the advance category: only the stale advance.
+    # Scoped to advance: the pending and taught stale decisions both count.
     r2 = client.get("/api/v1/agent-decisions/needs-reeval-count?type=advance", headers=headers)
     assert r2.status_code == 200, r2.text
-    assert r2.json()["count"] == 1
+    assert r2.json()["count"] == 2
 
     # Scoped to the role.
     r3 = client.get(f"/api/v1/agent-decisions/needs-reeval-count?role_id={role.id}", headers=headers)
-    assert r3.json()["count"] == 2
+    assert r3.json()["count"] == 3
 
 
 def test_needs_reeval_count_zero_when_all_current(client, db, monkeypatch):

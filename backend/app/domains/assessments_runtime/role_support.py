@@ -26,8 +26,8 @@ from ...schemas.role import (
 from ...services.ats_role_lifecycle import ats_job_lifecycle
 from ...services.evaluation_result_service import normalize_stored_application_decision
 from ...services.interview_support_service import (
+    build_application_interview_support,
     build_role_interview_pack_templates,
-    refresh_application_interview_support,
 )
 from ...services.pre_screening_service import pre_screen_snapshot, refresh_pre_screening_fields
 from ...services.workable_actions_service import workable_job_syncable
@@ -222,18 +222,18 @@ def get_application(application_id: int, org_id: int, db: Session) -> CandidateA
     return app
 
 
-# A6 core invariant: once a candidate is rejected, hired, or advanced
+# A6 core invariant: once a candidate is rejected, withdrawn, hired, or advanced
 # out of Tali, the agent never touches them again and the platform freezes
 # the snapshot for audit. Every agent-acting site checks this and short-
 # circuits if True. Candidates do not return to Tali post-handover.
-RESOLVED_APPLICATION_OUTCOMES = frozenset({"rejected", "hired"})
+RESOLVED_APPLICATION_OUTCOMES = frozenset({"rejected", "withdrawn", "hired"})
 RESOLVED_PIPELINE_STAGES = frozenset({"advanced"})
 
 
 def is_resolved(app: CandidateApplication) -> bool:
     """True when an application is terminally resolved.
 
-    Resolved == ``application_outcome in {rejected, hired}`` OR
+    Resolved == ``application_outcome in {rejected, withdrawn, hired}`` OR
     ``pipeline_stage == 'advanced'``. From this point forward the
     decision snapshot is frozen, agent never re-evaluates, score
     invalidation hooks no-op, and any re-evaluate request 409s.
@@ -1250,7 +1250,7 @@ def _latest_score_job_status(app: CandidateApplication) -> str | None:
     loaded = _loaded_relationship_items(app, "score_jobs")
     if not loaded:
         return None
-    # The relationship is ordered by queued_at desc, so [0] is freshest.
+    # The append-only relationship is ordered by causal job ID, so [0] is latest.
     latest = loaded[0]
     return getattr(latest, "status", None)
 
@@ -1259,6 +1259,7 @@ def application_to_response(
     app: CandidateApplication,
     *,
     use_cached_score_summary: bool = False,
+    use_cached_interview_support: bool = False,
     score_status: Any = _UNSET,
 ) -> ApplicationResponse:
     ensure_pipeline_fields(app)
@@ -1281,11 +1282,11 @@ def application_to_response(
         score_status = _latest_score_job_status(app)
     score_summary = score_summary_from_cache(app) if use_cached_score_summary else _score_summary_for_application(app)
     pre_screen = pre_screen_snapshot(app)
-    if use_cached_score_summary:
-        # List mode: read cached interview-pack columns. Avoids per-row
-        # synchronous Claude calls that previously froze the pipeline page
-        # under 1 uvicorn worker. Packs are refreshed on detail-view loads
-        # and on explicit refresh endpoints.
+    if use_cached_interview_support:
+        # List mode omits these heavy fields after serialization, so reading
+        # the stored values avoids rebuilding content that will be discarded.
+        # Detail and action responses derive live support below: the builder is
+        # deterministic and contains no provider call.
         interview_support = {
             "screening_pack": app.screening_pack,
             "tech_interview_pack": app.tech_interview_pack,
@@ -1294,7 +1295,7 @@ def application_to_response(
             "interview_evidence_summary": app.interview_evidence_summary,
         }
     else:
-        interview_support = refresh_application_interview_support(
+        interview_support = build_application_interview_support(
             app,
             organization=getattr(app, "organization", None),
         )
@@ -1463,11 +1464,12 @@ def application_detail_payload(
 ) -> dict[str, Any]:
     from ...services.candidate_interview_kit import build_candidate_interview_kit_for_application
 
-    # Use the cached score summary + cached interview support — the
-    # non-cached path runs ``maybe_generate_tech_questions`` (a Claude
-    # call) synchronously inside the GET, which made every candidate
-    # detail load 20+ seconds. Caches are refreshed by the scoring
-    # orchestrator on every successful score and by interview webhooks.
+    # Score aggregation can use its persisted numeric cache. Interview support
+    # is deliberately derived live: its current builder is deterministic and
+    # provider-free, while the five persisted JSON columns are updated by
+    # several independent role, score, assessment, transcript, and org paths.
+    # Trusting those columns here allowed an old question/evidence pack to be
+    # served after any mutation path that did not remember to refresh it.
     data = application_to_response(app, use_cached_score_summary=True)
     payload = data.model_dump()
     # The cached score_summary blanks assessment_id/status, so the candidate page
@@ -1663,6 +1665,7 @@ def application_list_payload(
     data = application_to_response(
         app,
         use_cached_score_summary=True,
+        use_cached_interview_support=True,
         score_status=score_status,
     )
     payload = data.model_dump()

@@ -5,11 +5,19 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from .celery_app import celery_app
+
+if TYPE_CHECKING:
+    from ..services.sister_role_scoring_generation import (
+        LockedSisterScoreRows,
+        SisterScoreGeneration,
+        SisterScoreInputs,
+    )
 
 logger = logging.getLogger("taali.tasks.sister_roles")
 
@@ -185,6 +193,260 @@ def dispatch_sister_evaluation(
     return {"status": "queued", "evaluation_id": int(evaluation_id)}
 
 
+def _superseded_sister_score_result(
+    evaluation_id: int, *, reason: str
+) -> dict:
+    return {
+        "status": "superseded",
+        "reason": reason,
+        "evaluation_id": int(evaluation_id),
+    }
+
+
+def _claim_sister_score_generation(
+    db: Session, *, evaluation_id: int
+) -> tuple[
+    SisterScoreGeneration | None,
+    SisterScoreInputs | None,
+    dict | None,
+]:
+    """Claim one paid attempt under the canonical generation-lock order."""
+
+    from ..models.sister_role_evaluation import (
+        SISTER_EVAL_DONE,
+        SISTER_EVAL_EXCLUDED,
+        SISTER_EVAL_PENDING,
+        SISTER_EVAL_RUNNING,
+        SISTER_EVAL_UNSCORABLE,
+    )
+    from ..services.sister_role_scoring_generation import (
+        capture_sister_score_generation,
+        capture_sister_score_inputs,
+        locate_sister_score,
+        lock_sister_score_rows,
+    )
+    from ..services.sister_role_service import (
+        source_application_is_globally_advanced,
+        source_application_is_globally_closed,
+        transition_related_role_stage,
+    )
+
+    locator = locate_sister_score(db, evaluation_id=int(evaluation_id))
+    if locator is None:
+        db.rollback()
+        return None, None, {
+            "status": "missing_or_locked",
+            "evaluation_id": int(evaluation_id),
+        }
+    # The locator is an unlocked identity read. End that transaction before
+    # taking Organization -> Role -> Candidate -> Application -> evaluation.
+    db.rollback()
+    locked = lock_sister_score_rows(db, locator=locator, skip_locked=True)
+    if locked is None:
+        db.rollback()
+        return None, None, {
+            "status": "missing_or_locked",
+            "evaluation_id": int(evaluation_id),
+        }
+    evaluation = locked.evaluation
+    if evaluation.status != SISTER_EVAL_PENDING:
+        db.rollback()
+        return None, None, {
+            "status": "skipped",
+            "evaluation_id": int(evaluation_id),
+        }
+    role = locked.role
+    application = locked.application
+    # This is immediately before the paid-call claim. Pause, Turn off, role
+    # closure, or ATS closure therefore revokes queued work.
+    authority_hold = _hold_sister_score_if_authority_blocked(
+        db,
+        locked=locked,
+    )
+    if authority_hold is not None:
+        return None, None, authority_hold
+    if source_application_is_globally_closed(application):
+        evaluation.status = SISTER_EVAL_EXCLUDED
+        evaluation.error_message = "Shared ATS application is disqualified or closed"
+        evaluation.last_error_code = "shared_application_closed"
+        evaluation.next_attempt_at = None
+        evaluation.dispatch_attempted_at = None
+        evaluation.started_at = None
+        evaluation.scored_at = _now()
+        db.commit()
+        return None, None, {
+            "status": SISTER_EVAL_EXCLUDED,
+            "evaluation_id": int(evaluation_id),
+        }
+    if source_application_is_globally_advanced(application):
+        evaluation.status = SISTER_EVAL_DONE
+        evaluation.next_attempt_at = None
+        evaluation.dispatch_attempted_at = None
+        evaluation.started_at = None
+        transition_related_role_stage(
+            evaluation, to_stage="advanced", source="system"
+        )
+        db.commit()
+        return None, None, {
+            "status": SISTER_EVAL_DONE,
+            "reason": "shared_application_advanced",
+            "evaluation_id": int(evaluation_id),
+        }
+    cv_text = (
+        str(application.cv_text or "").strip()
+        or str(locked.candidate.cv_text or "").strip()
+    )
+    job_spec = str(role.job_spec_text or "").strip()
+    if not cv_text or not job_spec:
+        code = "missing_cv_text" if not cv_text else "missing_job_specification"
+        evaluation.status = SISTER_EVAL_UNSCORABLE
+        evaluation.error_message = (
+            "No CV text available" if not cv_text else "No job specification available"
+        )
+        evaluation.last_error_code = code
+        evaluation.next_attempt_at = None
+        evaluation.dispatch_attempted_at = None
+        evaluation.scored_at = _now()
+        db.commit()
+        return None, None, {
+            "status": SISTER_EVAL_UNSCORABLE,
+            "evaluation_id": int(evaluation_id),
+        }
+
+    evaluation.status = SISTER_EVAL_RUNNING
+    evaluation.started_at = _now()
+    evaluation.next_attempt_at = None
+    evaluation.attempts = int(evaluation.attempts or 0) + 1
+    try:
+        inputs = capture_sister_score_inputs(locked)
+    except Exception as exc:  # noqa: BLE001 - malformed context is retryable
+        _set_retry(
+            evaluation,
+            error_code=f"input_capture_exception_{type(exc).__name__}",
+        )
+        db.commit()
+        return None, None, {
+            "status": "retry_wait",
+            "evaluation_id": int(evaluation_id),
+            "error_code": "input_capture_exception",
+            "error_type": type(exc).__name__,
+        }
+    evaluation.spec_fingerprint = inputs.spec_fingerprint
+    evaluation.cv_fingerprint = inputs.cv_fingerprint
+    generation = capture_sister_score_generation(locked, inputs)
+    db.commit()
+    return generation, inputs, None
+
+
+def _supersede_sister_score_generation(
+    db: Session,
+    *,
+    locked: LockedSisterScoreRows,
+    expected: SisterScoreGeneration,
+    current_inputs: SisterScoreInputs | None,
+) -> dict:
+    """Leave recruiter generation B intact or queue changed inputs afresh."""
+
+    from ..models.sister_role_evaluation import (
+        SISTER_EVAL_DONE,
+        SISTER_EVAL_EXCLUDED,
+        SISTER_EVAL_PENDING,
+        SISTER_EVAL_UNSCORABLE,
+    )
+    from ..services.sister_role_scoring_generation import (
+        sister_score_attempt_is_current,
+    )
+    from ..services.sister_role_service import (
+        source_application_is_globally_advanced,
+        source_application_is_globally_closed,
+        transition_related_role_stage,
+    )
+
+    evaluation = locked.evaluation
+    if not sister_score_attempt_is_current(locked, expected=expected):
+        # A reset/new worker owns this row now. Never mutate its state.
+        db.rollback()
+        return _superseded_sister_score_result(
+            expected.locator.evaluation_id,
+            reason="evaluation_generation_changed",
+        )
+    if current_inputs is None:
+        db.rollback()
+        return _superseded_sister_score_result(
+            expected.locator.evaluation_id,
+            reason="current_inputs_unavailable",
+        )
+    application = locked.application
+    if source_application_is_globally_closed(application):
+        evaluation.status = SISTER_EVAL_EXCLUDED
+        evaluation.error_message = "Shared ATS application is disqualified or closed"
+        evaluation.last_error_code = "shared_application_closed"
+        evaluation.scored_at = _now()
+    elif source_application_is_globally_advanced(application):
+        evaluation.status = SISTER_EVAL_DONE
+        transition_related_role_stage(
+            evaluation, to_stage="advanced", source="system"
+        )
+    elif current_inputs is not None and (
+        not current_inputs.cv_text or not current_inputs.job_spec
+    ):
+        evaluation.status = SISTER_EVAL_UNSCORABLE
+        evaluation.error_message = (
+            "No CV text available"
+            if not current_inputs.cv_text
+            else "No job specification available"
+        )
+        evaluation.last_error_code = (
+            "missing_cv_text"
+            if not current_inputs.cv_text
+            else "missing_job_specification"
+        )
+        evaluation.scored_at = _now()
+    else:
+        evaluation.status = SISTER_EVAL_PENDING
+        evaluation.spec_fingerprint = current_inputs.spec_fingerprint
+        evaluation.cv_fingerprint = current_inputs.cv_fingerprint
+        evaluation.role_fit_score = None
+        evaluation.summary = None
+        evaluation.details = None
+        evaluation.error_message = "Inputs changed while scoring; queued a fresh attempt"
+        evaluation.last_error_code = "inputs_superseded"
+        evaluation.queued_at = _now()
+        evaluation.scored_at = None
+    evaluation.next_attempt_at = None
+    evaluation.dispatch_attempted_at = None
+    evaluation.started_at = None
+    db.commit()
+    return _superseded_sister_score_result(
+        expected.locator.evaluation_id,
+        reason="scoring_inputs_changed",
+    )
+
+
+def _hold_sister_score_if_authority_blocked(
+    db: Session,
+    *,
+    locked: LockedSisterScoreRows,
+) -> dict | None:
+    """Persist an authority wait while every live authority row is locked."""
+
+    from ..services.job_page_lifecycle import role_allows_new_paid_ats_work
+
+    if role_allows_new_paid_ats_work(locked.role, db=db):
+        return None
+    _set_retry(
+        locked.evaluation,
+        error_code="authority_blocked",
+        delay=_AUTHORITY_RECHECK_AFTER,
+    )
+    evaluation_id = int(locked.evaluation.id)
+    db.commit()
+    return {
+        "status": "authority_blocked",
+        "evaluation_id": evaluation_id,
+    }
+
+
 @celery_app.task(
     name="app.tasks.sister_role_tasks.score_sister_evaluation",
     queue="scoring",
@@ -195,119 +457,70 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
     from ..cv_matching.holistic import run_holistic_match
     from ..models.sister_role_evaluation import (
         SISTER_EVAL_DONE,
-        SISTER_EVAL_PENDING,
-        SISTER_EVAL_RUNNING,
-        SISTER_EVAL_UNSCORABLE,
-        SisterRoleEvaluation,
     )
     from ..platform.database import SessionLocal
     from ..services.claude_client_resolver import get_metered_client
-    from ..services.job_page_lifecycle import role_allows_new_paid_ats_work
-    from ..services.sister_role_service import application_cv_text, text_fingerprint
-    from ..services.workable_context_service import format_workable_context
+    from ..services.sister_role_scoring_generation import (
+        lock_sister_score_rows,
+        sister_score_generation_is_current,
+    )
 
     with SessionLocal() as db:
-        evaluation = (
-            db.query(SisterRoleEvaluation)
-            .filter(SisterRoleEvaluation.id == int(evaluation_id))
-            .with_for_update(skip_locked=True)
-            .first()
+        generation, inputs, terminal = _claim_sister_score_generation(
+            db, evaluation_id=int(evaluation_id)
         )
-        if evaluation is None:
-            return {"status": "missing_or_locked", "evaluation_id": evaluation_id}
-        if evaluation.status != SISTER_EVAL_PENDING:
-            return {"status": "skipped", "evaluation_id": evaluation_id}
-
-        application = evaluation.source_application
-        role = evaluation.role
-        # This is deliberately immediately before the paid-call claim. Pause,
-        # Turn off, role closure, or ATS closure therefore revokes queued work.
-        if not role_allows_new_paid_ats_work(role, db=db):
-            _set_retry(
-                evaluation,
-                error_code="authority_blocked",
-                delay=_AUTHORITY_RECHECK_AFTER,
-            )
-            db.commit()
-            return {
-                "status": "authority_blocked",
-                "evaluation_id": evaluation_id,
-            }
-
-        from ..services.sister_role_service import (
-            source_application_is_globally_advanced,
-            source_application_is_globally_closed,
-            transition_related_role_stage,
-        )
-
-        if source_application_is_globally_closed(application):
-            from ..models.sister_role_evaluation import SISTER_EVAL_EXCLUDED
-
-            evaluation.status = SISTER_EVAL_EXCLUDED
-            evaluation.error_message = "Shared ATS application is disqualified or closed"
-            evaluation.last_error_code = "shared_application_closed"
-            evaluation.next_attempt_at = None
-            evaluation.dispatch_attempted_at = None
-            evaluation.started_at = None
-            evaluation.scored_at = _now()
-            db.commit()
-            return {"status": SISTER_EVAL_EXCLUDED, "evaluation_id": evaluation_id}
-        if source_application_is_globally_advanced(application):
-            evaluation.status = SISTER_EVAL_DONE
-            evaluation.next_attempt_at = None
-            evaluation.dispatch_attempted_at = None
-            evaluation.started_at = None
-            transition_related_role_stage(
-                evaluation, to_stage="advanced", source="system"
-            )
-            db.commit()
-            return {
-                "status": SISTER_EVAL_DONE,
-                "reason": "shared_application_advanced",
-                "evaluation_id": evaluation_id,
-            }
-        cv_text = application_cv_text(application) if application is not None else ""
-        job_spec = (role.job_spec_text or "").strip() if role is not None else ""
-        if not cv_text or not job_spec:
-            code = "missing_cv_text" if not cv_text else "missing_job_specification"
-            evaluation.status = SISTER_EVAL_UNSCORABLE
-            evaluation.error_message = (
-                "No CV text available" if not cv_text else "No job specification available"
-            )
-            evaluation.last_error_code = code
-            evaluation.next_attempt_at = None
-            evaluation.dispatch_attempted_at = None
-            evaluation.scored_at = _now()
-            db.commit()
-            return {"status": SISTER_EVAL_UNSCORABLE, "evaluation_id": evaluation_id}
-
-        evaluation.status = SISTER_EVAL_RUNNING
-        evaluation.started_at = _now()
-        evaluation.next_attempt_at = None
-        evaluation.attempts = int(evaluation.attempts or 0) + 1
-        evaluation.spec_fingerprint = text_fingerprint(job_spec)
-        evaluation.cv_fingerprint = text_fingerprint(cv_text)
-        db.commit()
+        if terminal is not None:
+            return terminal
+        assert generation is not None and inputs is not None
 
         try:
-            client = get_metered_client(organization_id=int(evaluation.organization_id))
-            context = format_workable_context(application.candidate, application) or None
+            client = get_metered_client(
+                organization_id=int(generation.locator.organization_id)
+            )
             output = run_holistic_match(
-                cv_text,
-                job_spec,
+                inputs.cv_text,
+                inputs.job_spec,
                 client=client,
                 metering_context={
-                    "organization_id": int(evaluation.organization_id),
+                    "organization_id": int(generation.locator.organization_id),
                     # Every related role owns an independent Agent and budget.
                     # The canonical application is shared, but this score/spend
                     # belongs to the role whose specification produced it.
-                    "role_id": int(role.id),
+                    "role_id": int(generation.locator.role_id),
                     # Stable across retries so metering/caches can deduplicate a
                     # worker death after provider success but before row ack.
-                    "entity_id": f"sister_evaluation:{evaluation.id}",
+                    "entity_id": f"sister_evaluation:{generation.locator.evaluation_id}",
                 },
-                workable_context=context,
+                workable_context=inputs.workable_context,
             )
+            db.rollback()
+            locked = lock_sister_score_rows(
+                db,
+                locator=generation.locator,
+                skip_locked=False,
+            )
+            if locked is None:
+                db.rollback()
+                return _superseded_sister_score_result(
+                    evaluation_id, reason="scoring_rows_unavailable"
+                )
+            is_current, current_inputs = sister_score_generation_is_current(
+                locked, expected=generation
+            )
+            if not is_current:
+                return _supersede_sister_score_generation(
+                    db,
+                    locked=locked,
+                    expected=generation,
+                    current_inputs=current_inputs,
+                )
+            authority_hold = _hold_sister_score_if_authority_blocked(
+                db,
+                locked=locked,
+            )
+            if authority_hold is not None:
+                return authority_hold
+            evaluation = locked.evaluation
             scoring_status = getattr(
                 output.scoring_status, "value", str(output.scoring_status)
             )
@@ -334,41 +547,74 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
                 evaluation.dispatch_attempted_at = None
                 evaluation.started_at = None
                 evaluation.scored_at = _now()
+            saved_status = str(evaluation.status)
+            saved_score = evaluation.role_fit_score
+            saved_error = evaluation.last_error_code
+            saved_role_id = int(generation.locator.role_id)
+            saved_evaluation_id = int(generation.locator.evaluation_id)
             db.commit()
-            if evaluation.status == SISTER_EVAL_DONE:
+            if saved_status == SISTER_EVAL_DONE:
                 try:
                     related_role_agent_cycle.delay(
-                        int(role.id), evaluation_id=int(evaluation.id)
+                        saved_role_id, evaluation_id=saved_evaluation_id
                     )
                 except Exception:
                     # The score is durable; the role sweep can recover a
                     # missed decision kick without paying to score again.
                     logger.exception(
                         "Related-role decision kick failed evaluation_id=%s role_id=%s",
-                        evaluation.id,
-                        role.id,
+                        saved_evaluation_id,
+                        saved_role_id,
                     )
             return {
-                "status": evaluation.status,
+                "status": saved_status,
                 "evaluation_id": evaluation_id,
-                "score": evaluation.role_fit_score,
-                "error_code": evaluation.last_error_code,
+                "score": saved_score,
+                "error_code": saved_error,
             }
         except Exception as exc:  # noqa: BLE001 - all transient failures persist
             error_type = type(exc).__name__
-            logger.error(
-                "Related-role scoring failed evaluation_id=%s error_code=provider_exception error_type=%s",
-                evaluation_id,
-                error_type,
-            )
             db.rollback()
-            evaluation = db.get(SisterRoleEvaluation, int(evaluation_id))
-            if evaluation is not None and evaluation.status != SISTER_EVAL_DONE:
+            locked = lock_sister_score_rows(
+                db,
+                locator=generation.locator,
+                skip_locked=False,
+            )
+            if locked is not None:
+                is_current, current_inputs = sister_score_generation_is_current(
+                    locked, expected=generation
+                )
+            else:
+                is_current, current_inputs = False, None
+            if locked is not None and not is_current:
+                return _supersede_sister_score_generation(
+                    db,
+                    locked=locked,
+                    expected=generation,
+                    current_inputs=current_inputs,
+                )
+            if locked is not None:
+                authority_hold = _hold_sister_score_if_authority_blocked(
+                    db,
+                    locked=locked,
+                )
+                if authority_hold is not None:
+                    return authority_hold
+                logger.error(
+                    "Related-role scoring failed evaluation_id=%s error_code=provider_exception error_type=%s",
+                    evaluation_id,
+                    error_type,
+                )
                 _set_retry(
-                    evaluation,
+                    locked.evaluation,
                     error_code=f"provider_exception_{error_type}",
                 )
                 db.commit()
+            else:
+                db.rollback()
+                return _superseded_sister_score_result(
+                    evaluation_id, reason="scoring_rows_unavailable"
+                )
             return {
                 "status": "retry_wait",
                 "evaluation_id": evaluation_id,
@@ -397,6 +643,7 @@ def score_sister_role(role_id: int) -> dict:
     with SessionLocal() as db:
         evaluations = (
             db.query(SisterRoleEvaluation)
+            .options(joinedload(SisterRoleEvaluation.source_application))
             .filter(
                 SisterRoleEvaluation.role_id == int(role_id),
                 SisterRoleEvaluation.status.in_(
@@ -406,10 +653,12 @@ def score_sister_role(role_id: int) -> dict:
             .order_by(SisterRoleEvaluation.id.asc())
             .all()
         )
-        # This role-level kick is used by Turn on, Resume and an explicit
-        # re-score. Those commands revoke an earlier authority hold, so do not
-        # leave retry_wait rows sleeping until the periodic recovery sweep.
+        # Ordinary role cycles can be triggered by any completed evaluation.
+        # They must respect another row's provider backoff. Explicit recruiter
+        # boundaries persist retry_wait -> pending before publishing this
+        # backward-compatible one-argument task.
         dispatchable = []
+        now = _now()
         for evaluation in evaluations:
             if source_application_is_globally_advanced(
                 evaluation.source_application
@@ -425,12 +674,19 @@ def score_sister_role(role_id: int) -> dict:
                     evaluation, to_stage="advanced", source="system"
                 )
                 continue
-            if evaluation.status == SISTER_EVAL_RETRY_WAIT:
-                evaluation.status = SISTER_EVAL_PENDING
-                evaluation.next_attempt_at = None
-                evaluation.dispatch_attempted_at = None
-                evaluation.started_at = None
-            dispatchable.append(evaluation)
+            pending_due = evaluation.status == SISTER_EVAL_PENDING and (
+                evaluation.dispatch_attempted_at is None
+                or _at_or_before(
+                    evaluation.dispatch_attempted_at,
+                    now - _DISPATCH_STALE_AFTER,
+                )
+            )
+            retry_due = evaluation.status == SISTER_EVAL_RETRY_WAIT and (
+                evaluation.next_attempt_at is None
+                or _at_or_before(evaluation.next_attempt_at, now)
+            )
+            if pending_due or retry_due:
+                dispatchable.append(evaluation)
         db.commit()
         evaluation_ids = [int(evaluation.id) for evaluation in dispatchable]
         results = [
@@ -459,8 +715,6 @@ def related_role_agent_cycle(
     evaluations are materialised into this role's own assessment/decision
     funnel. Standard cohort code is deliberately never invoked here.
     """
-
-    from sqlalchemy.orm import joinedload
 
     from ..models.role import ROLE_KIND_SISTER, Role
     from ..platform.database import SessionLocal

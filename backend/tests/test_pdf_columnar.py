@@ -2,7 +2,7 @@
 
 These exercise the geometry (``_detect_column_split`` / ``_fragments_to_lines``)
 with synthetic fragments — no real PDF needed. Fragments are
-``(x, y, text, font_size)`` as produced by the PyPDF2 visitor.
+``(x, y, text, font_size)`` as produced by the pypdf visitor.
 """
 
 from __future__ import annotations

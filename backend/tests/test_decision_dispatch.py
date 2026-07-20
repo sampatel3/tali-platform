@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.actions import approve_decision as approve_decision_action
 from app.actions.types import ACTOR_RECRUITER, Actor
+from app.components.scoring.freshness import capture_score_generation
 from app.models.agent_decision import AgentDecision
 from app.models.background_job_run import (
     JOB_KIND_DECISION_BATCH,
@@ -23,6 +24,7 @@ from app.models.background_job_run import (
 )
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.cv_score_job import CvScoreJob
 from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
@@ -87,10 +89,23 @@ def _add_decision(db, org, role, *, status="processing", decision_type="skip_ass
         pipeline_stage_source="recruiter",
         application_outcome="open",
         source="manual",
+        cv_match_score=80.0,
         workable_candidate_id=("wkbl_1" if workable_linked else None),
     )
     db.add(app)
     db.flush()
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="done",
+        )
+    )
+    db.flush()
+    generation = capture_score_generation(
+        db, role=role, application_id=int(app.id)
+    )
+    assert generation is not None
     decision = AgentDecision(
         organization_id=int(org.id),
         role_id=int(role.id),
@@ -106,6 +121,7 @@ def _add_decision(db, org, role, *, status="processing", decision_type="skip_ass
         idempotency_key=f"pre_screen_reject:{int(app.id)}",
         active_capabilities={},
         token_spend={},
+        input_fingerprint={"score_generation": generation.as_fingerprint()},
     )
     db.add(decision)
     db.flush()
@@ -317,9 +333,9 @@ def test_batch_success_approves_and_records_job(db):
     )
     assert out["status"] == "completed" and out["succeeded"] == 1
     db.expire_all()
-    assert db.query(AgentDecision).get(decision.id).status == "approved"
-    assert db.query(CandidateApplication).get(app.id).application_outcome == "rejected"
-    job = db.query(BackgroundJobRun).get(job_id)
+    assert db.get(AgentDecision, decision.id).status == "approved"
+    assert db.get(CandidateApplication, app.id).application_outcome == "rejected"
+    job = db.get(BackgroundJobRun, job_id)
     assert job.status == "completed"
     assert job.counters["succeeded"] == 1
     assert job.finished_at is not None
@@ -342,10 +358,10 @@ def test_batch_requeues_failed_decision_to_queue(db):
         )
     assert out["status"] == "completed_with_errors" and out["requeued"] == 1
     db.expire_all()
-    refreshed = db.query(AgentDecision).get(decision.id)
+    refreshed = db.get(AgentDecision, decision.id)
     assert refreshed.status == "pending", "must return to the queue, not be lost"
     assert "Workable didn't accept the update" in (refreshed.resolution_note or "")
-    job = db.query(BackgroundJobRun).get(job_id)
+    job = db.get(BackgroundJobRun, job_id)
     assert job.status == "completed_with_errors" and job.counters["requeued"] == 1
 
 
@@ -366,7 +382,7 @@ def test_batch_requeues_send_assessment_when_role_has_no_task(db):
     )
     assert out["status"] == "completed_with_errors" and out["requeued"] == 1
     db.expire_all()
-    refreshed = db.query(AgentDecision).get(decision.id)
+    refreshed = db.get(AgentDecision, decision.id)
     assert refreshed.status == "pending", "must return to the queue, not be approved"
     note = (refreshed.resolution_note or "").lower()
     assert "no active tasks linked" in note
@@ -407,7 +423,7 @@ def test_batch_resolves_per_role_workable_stage(db):
 
     def _fake_run(db_, actor, *, organization_id, decision_id, note=None, workable_target_stage=None, **kw):
         seen[int(decision_id)] = workable_target_stage
-        d = db_.query(AgentDecision).get(int(decision_id))
+        d = db_.get(AgentDecision, int(decision_id))
         d.status = "approved"
         return d
 
@@ -446,8 +462,8 @@ def test_enqueue_batch_flips_creates_one_job_and_completes(db):
     assert result["failures"] == []
     db.expire_all()
     # Eager Celery drained the batch inline → both approved.
-    assert db.query(AgentDecision).get(d1.id).status == "approved"
-    assert db.query(AgentDecision).get(d2.id).status == "approved"
+    assert db.get(AgentDecision, d1.id).status == "approved"
+    assert db.get(AgentDecision, d2.id).status == "approved"
     # Exactly one background job for the whole request.
     jobs = (
         db.query(BackgroundJobRun)
@@ -474,6 +490,24 @@ def test_enqueue_batch_reports_non_pending_failures(db):
     assert len(result["failures"]) == 1
     assert result["failures"][0]["decision_id"] == int(d2.id)
     assert result["failures"][0]["status_code"] == 409
+
+
+def test_accept_for_processing_keeps_taught_decision_actionable(db):
+    org, role, _user = _seed(db)
+    _app, decision = _add_decision(
+        db, org, role, status="reverted_for_feedback"
+    )
+    db.commit()
+
+    accepted = approve_decision_action._accept_for_processing(
+        db,
+        organization_id=int(org.id),
+        decision_id=int(decision.id),
+        note="Approve after teaching the agent.",
+    )
+
+    assert accepted.status == "processing"
+    assert accepted.resolution_note == "Approve after teaching the agent."
 
 
 def test_enqueue_batch_commits_processing_and_tracking_atomically(db):
@@ -656,6 +690,355 @@ def test_enqueue_one_rejects_non_pending(db):
     assert ei.value.status_code == 409
 
 
+def test_accept_for_processing_refreshes_stale_identity_map_after_edit_wins(db):
+    """The Role lock can wait behind an intent edit after the route loaded the
+    row. Re-querying with populate_existing must observe the edit's discard,
+    not reuse the identity map's old pending status."""
+    from fastapi import HTTPException
+
+    org, role, _user = _seed(db)
+    _app, decision = _add_decision(db, org, role, status="pending")
+    db.commit()
+    cached = db.query(AgentDecision).filter_by(id=int(decision.id)).one()
+    db.query(AgentDecision).filter_by(id=int(decision.id)).update(
+        {AgentDecision.status: "discarded"}, synchronize_session=False
+    )
+    assert cached.status == "pending"
+
+    with pytest.raises(HTTPException) as exc:
+        approve_decision_action._accept_for_processing(
+            db,
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            note=None,
+        )
+
+    assert exc.value.status_code == 409
+    assert "discarded" in str(exc.value.detail)
+
+
+def test_accept_for_processing_rejects_resolved_application_audit_snapshot(db):
+    """Frozen historical staleness is not approval execution authority."""
+    from fastapi import HTTPException
+
+    org, role, _user = _seed(db)
+    app, decision = _add_decision(db, org, role, status="pending")
+    app.application_outcome = "rejected"
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        approve_decision_action._accept_for_processing(
+            db,
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            note=None,
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "application_resolved"
+    assert db.get(AgentDecision, int(decision.id)).status == "pending"
+
+
+def test_bulk_acceptance_does_not_implicitly_force_old_engine(db, monkeypatch):
+    """Bulk has no explicit force control, so engine-only staleness blocks."""
+    from types import SimpleNamespace
+
+    from app.services import decision_approval_guard
+
+    org, role, _user = _seed(db)
+    _app, decision = _add_decision(db, org, role, status="pending")
+    db.commit()
+    monkeypatch.setattr(
+        decision_approval_guard,
+        "approval_staleness_report",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            is_stale=True,
+            reasons=["engine_outdated"],
+            summary="Older scoring engine",
+        ),
+    )
+
+    result = approve_decision_action.enqueue_batch(
+        db,
+        Actor.recruiter(_user),
+        organization_id=int(org.id),
+        decision_ids=[int(decision.id)],
+    )
+
+    assert result["accepted"] == []
+    assert result["failures"][0]["status_code"] == 409
+    assert "engine_outdated" in result["failures"][0]["error"]
+    assert db.get(AgentDecision, int(decision.id)).status == "pending"
+
+
+def test_reverted_decision_requires_explicit_engine_force(db, monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services import decision_approval_guard
+
+    org, role, user = _seed(db)
+    _app, decision = _add_decision(
+        db, org, role, status="reverted_for_feedback"
+    )
+    db.commit()
+    monkeypatch.setattr(
+        decision_approval_guard,
+        "approval_staleness_report",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            is_stale=True,
+            reasons=["engine_outdated"],
+            summary="Older scoring engine",
+        ),
+    )
+
+    blocked = approve_decision_action.enqueue_batch(
+        db,
+        Actor.recruiter(user),
+        organization_id=int(org.id),
+        decision_ids=[int(decision.id)],
+    )
+    assert blocked["accepted"] == []
+    assert db.get(AgentDecision, int(decision.id)).status == "reverted_for_feedback"
+
+    published: dict = {}
+    monkeypatch.setattr(
+        "app.services.workable_op_runner.persist_workable_op_run",
+        lambda *_args, **_kwargs: 123,
+    )
+    monkeypatch.setattr(
+        "app.services.workable_op_runner.publish_workable_op",
+        lambda **kwargs: published.update(kwargs),
+    )
+    accepted = approve_decision_action.enqueue_batch(
+        db,
+        Actor.recruiter(user),
+        organization_id=int(org.id),
+        decision_ids=[int(decision.id)],
+        allow_engine_outdated_decision_ids={int(decision.id)},
+    )
+
+    assert accepted["accepted"] == [int(decision.id)]
+    assert published["payload"]["allow_engine_outdated_decision_ids"] == [
+        int(decision.id)
+    ]
+
+
+def test_worker_applies_engine_force_only_to_explicitly_authorized_id(db):
+    from app.services import workable_op_runner
+
+    org, role, user = _seed(db)
+    _app_one, decision_one = _add_decision(db, org, role, status="processing")
+    _app_two, decision_two = _add_decision(db, org, role, status="processing")
+    db.commit()
+    observed: list[tuple[int, bool]] = []
+
+    def _run(*_args, **kwargs):
+        observed.append(
+            (
+                int(kwargs["decision_id"]),
+                bool(kwargs["allow_engine_outdated"]),
+            )
+        )
+
+    with patch.object(approve_decision_action, "run", side_effect=_run):
+        result = workable_op_runner._op_approve_decisions(
+            db,
+            int(org.id),
+            {
+                "decision_ids": [int(decision_one.id), int(decision_two.id)],
+                "user_id": int(user.id),
+                "allow_engine_outdated_decision_ids": [int(decision_one.id)],
+            },
+        )
+
+    assert result["succeeded"] == 2
+    assert observed == [
+        (int(decision_one.id), True),
+        (int(decision_two.id), False),
+    ]
+
+
+def test_approve_worker_refreshes_preloaded_processing_row_after_terminal_race(db):
+    from fastapi import HTTPException
+
+    org, role, user = _seed(db)
+    _app, decision = _add_decision(db, org, role, status="processing")
+    db.commit()
+    cached = db.query(AgentDecision).filter_by(id=int(decision.id)).one()
+    db.query(AgentDecision).filter_by(id=int(decision.id)).update(
+        {AgentDecision.status: "approved"}, synchronize_session=False
+    )
+    assert cached.status == "processing"
+
+    with patch("app.actions.approve_decision.reject_application.run") as reject:
+        with pytest.raises(HTTPException) as exc:
+            approve_decision_action.run(
+                db,
+                Actor.recruiter(user),
+                organization_id=int(org.id),
+                decision_id=int(decision.id),
+            )
+
+    assert exc.value.status_code == 409
+    assert "approved" in str(exc.value.detail)
+    reject.assert_not_called()
+
+
+def test_approve_worker_blocks_processing_card_for_resolved_application(db):
+    from fastapi import HTTPException
+
+    org, role, user = _seed(db)
+    app, decision = _add_decision(db, org, role, status="processing")
+    app.application_outcome = "hired"
+    db.commit()
+
+    with patch("app.actions.approve_decision.reject_application.run") as reject:
+        with pytest.raises(HTTPException) as exc:
+            approve_decision_action.run(
+                db,
+                Actor.recruiter(user),
+                organization_id=int(org.id),
+                decision_id=int(decision.id),
+            )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "application_resolved"
+    reject.assert_not_called()
+
+
+def test_advance_action_rejects_resolved_application(db):
+    from fastapi import HTTPException
+
+    from app.actions import advance_stage
+
+    org, role, user = _seed(db)
+    app, _decision = _add_decision(db, org, role, status="discarded")
+    app.application_outcome = "rejected"
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        advance_stage.run(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            application_id=int(app.id),
+            to_stage="advanced",
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "application_resolved"
+    assert db.get(CandidateApplication, int(app.id)).pipeline_stage == "review"
+
+
+@pytest.mark.parametrize("application_outcome", ("hired", "withdrawn"))
+def test_override_worker_rejects_resolved_application(db, application_outcome):
+    from fastapi import HTTPException
+
+    from app.actions import override_decision
+
+    org, role, user = _seed(db)
+    app, decision = _add_decision(db, org, role, status="processing")
+    app.application_outcome = application_outcome
+    db.commit()
+
+    with patch.object(override_decision.advance_stage, "run") as advance:
+        with pytest.raises(HTTPException) as exc:
+            override_decision.run(
+                db,
+                Actor.recruiter(user),
+                organization_id=int(org.id),
+                decision_id=int(decision.id),
+                override_action="advance",
+            )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "application_resolved"
+    advance.assert_not_called()
+
+
+def test_approve_worker_blocks_processing_card_after_new_score_generation(db):
+    """Acceptance of generation A cannot authorize execution after B lands."""
+    from fastapi import HTTPException
+
+    org, role, user = _seed(db)
+    app, decision = _add_decision(db, org, role, status="processing")
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="done",
+        )
+    )
+    db.commit()
+
+    with patch("app.actions.approve_decision.reject_application.run") as reject:
+        with pytest.raises(HTTPException) as exc:
+            approve_decision_action.run(
+                db,
+                Actor.recruiter(user),
+                organization_id=int(org.id),
+                decision_id=int(decision.id),
+            )
+
+    assert exc.value.status_code == 409
+    assert "score_generation_changed" in str(exc.value.detail)
+    reject.assert_not_called()
+
+
+def test_approve_worker_locks_owner_and_acting_roles_before_freshness(db):
+    org, owner_role, user = _seed(db)
+    app, decision = _add_decision(
+        db, org, owner_role, status="processing", decision_type="reject"
+    )
+    acting_role = Role(
+        organization_id=int(org.id),
+        name="Related role",
+        source="manual",
+        role_kind="sister",
+        ats_owner_role_id=int(owner_role.id),
+        agentic_mode_enabled=True,
+    )
+    db.add(acting_role)
+    db.flush()
+    decision.role_id = int(acting_role.id)
+    db.commit()
+    events: list[str] = []
+    locked_role_ids: list[int] = []
+    real_lock = approve_decision_action.lock_resolution_roles
+
+    def _lock_roles(*args, **kwargs):
+        locked_role_ids.extend(int(value) for value in kwargs["role_ids"])
+        events.append("roles")
+        return real_lock(*args, **kwargs)
+
+    def _freshness(*_args, **_kwargs):
+        events.append("freshness")
+
+    def _reject(*_args, **_kwargs):
+        events.append("action")
+        return app
+
+    with patch.object(
+        approve_decision_action, "lock_resolution_roles", side_effect=_lock_roles
+    ), patch.object(
+        approve_decision_action,
+        "enforce_decision_approval_eligibility",
+        side_effect=_freshness,
+    ), patch.object(
+        approve_decision_action.reject_application, "run", side_effect=_reject
+    ):
+        approve_decision_action.run(
+            db,
+            Actor.recruiter(user),
+            organization_id=int(org.id),
+            decision_id=int(decision.id),
+            collect_side_effects={},
+        )
+
+    assert set(locked_role_ids) == {int(owner_role.id), int(acting_role.id)}
+    assert events[:3] == ["roles", "freshness", "action"]
+
+
 def test_enqueue_one_does_not_query_after_durable_acceptance(db):
     result = {"job_run_id": 123, "accepted": [456], "failures": []}
     actor = Actor(type=ACTOR_RECRUITER, user_id=None)
@@ -689,7 +1072,7 @@ def test_enqueue_one_success_completes_eager(db):
     )
     assert returned is not None
     db.expire_all()
-    assert db.query(AgentDecision).get(decision.id).status == "approved"
+    assert db.get(AgentDecision, decision.id).status == "approved"
 
 
 # --- other ops through the generic runner -----------------------------------
@@ -712,7 +1095,7 @@ def test_override_op_requeues_on_workable_failure(db):
         )
     assert out["status"] == "failed"
     db.expire_all()
-    assert db.query(AgentDecision).get(decision.id).status == "pending"
+    assert db.get(AgentDecision, decision.id).status == "pending"
 
 
 def test_move_stage_op_success_sets_stage(db):
@@ -731,7 +1114,7 @@ def test_move_stage_op_success_sets_stage(db):
         )
     assert out["status"] == "completed" and mk.called
     db.expire_all()
-    assert db.query(CandidateApplication).get(app.id).workable_stage == "Technical Interview"
+    assert db.get(CandidateApplication, app.id).workable_stage == "Technical Interview"
 
 
 def test_post_note_op_raises_retriable_on_failure(db):
@@ -831,6 +1214,137 @@ def test_bulk_override_dispatches_per_decision_with_resolved_stage(db, monkeypat
     assert [f.decision_id for f in result.failures] == [999_999]
     assert sorted(c[0] for c in calls) == sorted([d1.id, d2.id])
     assert all(c[1] == "advance" and c[2] == "Phone Screen" for c in calls)
+
+
+def test_bulk_override_reauthorizes_locked_current_decision_role(db, monkeypatch):
+    """A decision moved after the bulk snapshot must not inherit old-role auth."""
+    from fastapi import HTTPException
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, user = _seed(db)
+    other_role = Role(
+        organization_id=int(org.id),
+        name="Restricted role",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add(other_role)
+    db.flush()
+    _, decision = _add_decision(
+        db, org, role, status="pending", decision_type="reject"
+    )
+    db.commit()
+    permission_checks: list[int] = []
+
+    def _permission(db_, *, current_user, role_id, permission):
+        permission_checks.append(int(role_id))
+        if len(permission_checks) == 1:
+            db_.query(AgentDecision).filter(
+                AgentDecision.id == int(decision.id)
+            ).update(
+                {AgentDecision.role_id: int(other_role.id)},
+                synchronize_session=False,
+            )
+        if int(role_id) == int(other_role.id):
+            raise HTTPException(status_code=403, detail="restricted role")
+        return role
+
+    monkeypatch.setattr(agentic_routes, "require_job_permission", _permission)
+    enqueue = patch.object(agentic_routes.override_decision_action, "enqueue")
+    with enqueue as mock_enqueue, pytest.raises(HTTPException) as exc:
+        agentic_routes.bulk_override(
+            agentic_routes.BulkOverrideBody(
+                decision_ids=[int(decision.id)], override_action="advance"
+            ),
+            db=db,
+            current_user=user,
+        )
+
+    assert exc.value.status_code == 403
+    assert permission_checks == [int(role.id), int(other_role.id)]
+    mock_enqueue.assert_not_called()
+
+
+def test_bulk_override_reauthorizes_role_before_locking_decision(db, monkeypatch):
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, user = _seed(db)
+    _grant_agent_control(db, org=org, role=role, user=user)
+    _, decision = _add_decision(
+        db, org, role, status="pending", decision_type="reject"
+    )
+    db.commit()
+    events: list[str] = []
+    real_permission = agentic_routes.require_job_permission
+    real_lock = agentic_routes.decision_membership.lock_role_membership
+
+    def _permission(*args, **kwargs):
+        events.append(f"role:{int(kwargs['role_id'])}")
+        return real_permission(*args, **kwargs)
+
+    def _lock(*args, **kwargs):
+        events.append("decision")
+        return real_lock(*args, **kwargs)
+
+    monkeypatch.setattr(agentic_routes, "require_job_permission", _permission)
+    monkeypatch.setattr(
+        agentic_routes.decision_membership, "lock_role_membership", _lock
+    )
+    with patch.object(agentic_routes.override_decision_action, "enqueue"):
+        result = agentic_routes.bulk_override(
+            agentic_routes.BulkOverrideBody(
+                decision_ids=[int(decision.id)], override_action="advance"
+            ),
+            db=db,
+            current_user=user,
+        )
+
+    assert result.accepted == 1
+    assert events == [f"role:{int(role.id)}", f"role:{int(role.id)}", "decision"]
+
+
+def test_bulk_approve_rejects_membership_change_after_permission_snapshot(
+    db, monkeypatch
+):
+    from fastapi import HTTPException
+    from app.domains.agentic import routes as agentic_routes
+
+    org, role, user = _seed(db)
+    _grant_agent_control(db, org=org, role=role, user=user)
+    other_role = Role(
+        organization_id=int(org.id),
+        name="Other role",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add(other_role)
+    db.flush()
+    _, decision = _add_decision(
+        db, org, role, status="pending", decision_type="reject"
+    )
+    db.commit()
+
+    def _permission(db_, *, current_user, role_id, permission):
+        db_.query(AgentDecision).filter(
+            AgentDecision.id == int(decision.id)
+        ).update(
+            {AgentDecision.role_id: int(other_role.id)},
+            synchronize_session=False,
+        )
+        return role
+
+    monkeypatch.setattr(agentic_routes, "require_job_permission", _permission)
+    with patch.object(
+        agentic_routes.approve_decision_action, "enqueue_batch"
+    ) as enqueue, pytest.raises(HTTPException) as exc:
+        agentic_routes.bulk_approve(
+            agentic_routes.BulkApproveBody(decision_ids=[int(decision.id)]),
+            db=db,
+            current_user=user,
+        )
+
+    assert exc.value.status_code == 409
+    enqueue.assert_not_called()
 
 
 def test_bulk_override_skip_assessment_advance_reclassifies_not_enqueues(db, monkeypatch):

@@ -55,6 +55,8 @@ def _seed(db, *, stage="sourced", outcome="open", **cols):
         source="manual",
         auto_reject=False,
         agentic_mode_enabled=True,
+        score_threshold=50,
+        auto_reject_threshold_mode="manual",
     )
     db.add(role)
     db.flush()

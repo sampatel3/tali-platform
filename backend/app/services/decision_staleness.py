@@ -1,23 +1,10 @@
-"""A2: read-time decision-staleness detection.
-
-Given an ``AgentDecision`` row whose A1 ``input_fingerprint`` was captured
-at queue time, this service answers: "have any of the inputs the agent
-cited shifted since then?". Used by the Decision Hub on every fetch so
-recruiters see an "Inputs changed" badge instead of approving stale
-decisions.
-
-Resolved applications (per A6) are always treated as fresh — their
-snapshot is frozen by design and must not be re-evaluated.
-
-Pre-A1 decisions (empty fingerprint) are also always fresh — we have
-no baseline to compare against, so we don't flag them.
-"""
+"""Read-time detection of changed inputs behind queued decisions."""
 
 from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy.orm import Session
 
@@ -28,13 +15,19 @@ from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..models.role_criterion import RoleCriterion
 from ..models.role_feedback_note import RoleFeedbackNote
+from .decision_policy_generation import (
+    DecisionPolicyGeneration,
+    policy_generation_drift,
+)
+from .decision_staleness_labels import summarize_staleness
+from .knockout_generation import is_knockout_decision, knockout_generation_drift
+
+if TYPE_CHECKING:
+    from ..components.scoring.freshness import ScoreAttempt
 
 
-# Score-shift threshold. Pre-screen and cv-match live on a 0-100 scale
-# where the recruiter cutoff is 50; 5 points is one decision-meaningful
-# tier (the gap between "borderline reject" and "borderline accept").
-# Below the band we treat the score as unchanged so noise from
-# re-scoring (different prompt seed etc.) doesn't churn the queue.
+# Five points is one decision-meaningful tier on the 0-100 score scale;
+# smaller re-score noise must not churn the review queue.
 SCORE_DRIFT_BAND = 5.0
 
 
@@ -48,31 +41,21 @@ class StalenessReport:
 
 @dataclass
 class StalenessCache:
-    """Per-request memo for batch ``evaluate`` calls.
-
-    A list of pending decisions usually shares a handful of roles, so the
-    per-role criteria fingerprint and latest-note lookups would otherwise
-    re-run once per decision (N+1). Pass a single instance to every
-    ``evaluate`` call in the batch to collapse those to one query per
-    distinct role. Scope it to a single request — it holds no TTL.
-    """
+    """Request-scoped memo that keeps batch evaluation at O(distinct roles)."""
 
     criteria_fp: dict[int, str | None] = field(default_factory=dict)
     latest_note_id: dict[int, int | None] = field(default_factory=dict)
-    # Related-role decisions resolve their send/reject boundary independently
-    # from the owner application. Keep that potentially DB-backed lookup at
-    # O(distinct roles) on a Hub page, just like criteria and recruiter notes.
+    # Related-role thresholds are independently DB-backed per acting role.
     role_fit_threshold: dict[int, float | None] = field(default_factory=dict)
+    latest_score_attempt: dict[int, "ScoreAttempt | None"] = field(default_factory=dict)
+    role_intent_fp: dict[int, str] = field(default_factory=dict)
+    criteria_rows: dict[int, tuple[RoleCriterion, ...]] = field(default_factory=dict)
+    policy_generation: dict[int, DecisionPolicyGeneration] = field(default_factory=dict)
+    knockout_generation: dict[int, str] = field(default_factory=dict)
 
 
 def _score_drift(old: Optional[float], new: Optional[float]) -> bool:
-    """True if both sides have a value and they differ by >= the band.
-
-    Asymmetric None handling is deliberate: a score going from None to a
-    value (or vice versa) is a NEW input, not drift — the
-    'cv_replaced' / 'assessment_score_shifted' reasons cover those.
-    We only flag here when both old and new are concrete.
-    """
+    """Whether two concrete scores differ by a decision-meaningful band."""
     if old is None or new is None:
         return False
     try:
@@ -84,31 +67,22 @@ def _score_drift(old: Optional[float], new: Optional[float]) -> bool:
 def criteria_content_fingerprint(
     db: Session, role_id: int, *, cache: "StalenessCache | None" = None
 ) -> str | None:
-    """Content-only fingerprint of a role's active criteria.
-
-    Hashes the SORTED ``text:bucket:weight:must_have`` of each criterion and
-    deliberately EXCLUDES the volatile row ``id``. ``sync_derived_criteria``
-    hard-deletes + re-inserts the derived criteria with fresh ids on every
-    sync; an id-based hash therefore churned on each tick and spuriously marked
-    every pending decision stale even when the job spec (and thus the criteria
-    text) was unchanged. Content-only means re-deriving identical criteria is a
-    no-op for staleness — only a real text/bucket/weight/must-have change flips
-    it.
-
-    This is the single source of truth shared by the queue-time capture
-    (``queue_decision``) and the staleness recompute so the two can never
-    diverge. Returns None when the role has no criteria.
-    """
+    """Hash active criteria content, excluding volatile database row IDs."""
     if cache is not None and role_id in cache.criteria_fp:
         return cache.criteria_fp[role_id]
-    rows = (
-        db.query(RoleCriterion)
-        .filter(
-            RoleCriterion.role_id == role_id,
-            RoleCriterion.deleted_at.is_(None),
+    if cache is not None and role_id in cache.criteria_rows:
+        rows = cache.criteria_rows[role_id]
+    else:
+        rows = tuple(
+            db.query(RoleCriterion)
+            .filter(
+                RoleCriterion.role_id == role_id,
+                RoleCriterion.deleted_at.is_(None),
+            )
+            .all()
         )
-        .all()
-    )
+        if cache is not None:
+            cache.criteria_rows[role_id] = rows
     if not rows:
         result: str | None = None
     else:
@@ -127,20 +101,29 @@ _recompute_criteria_fingerprint = criteria_content_fingerprint
 
 
 def rebaseline_pending_criteria_fingerprint(db: Session, *, role_id: int) -> int:
-    """Re-point every pending decision's criteria fingerprint at the role's
-    CURRENT content fingerprint, without re-running the agent.
+    """Re-point pending decisions at an explicitly accepted role generation.
 
     Used when criteria change in a way that must NOT invalidate in-flight
     decisions — e.g. an immaterial Workable spec edit, or the one-time
-    backfill after the id->content fingerprint migration. Touches ONLY the
-    criteria dimension; cv/score/note/cutoff drift on a decision stays as
-    captured, so a decision with a genuine other-input change remains stale.
+    backfill after the id->content fingerprint migration. The criteria hash
+    and the role-intent component of the score token move together because
+    both describe the same accepted role edit. Candidate, score-job, note,
+    and cutoff state remain untouched.
 
     Returns the number of decisions updated.
     """
     from ..models.agent_decision import AgentDecision
 
-    new_fp = criteria_content_fingerprint(db, int(role_id))
+    role = db.query(Role).filter(Role.id == int(role_id)).one_or_none()
+    if role is None:
+        return 0
+    from .role_intent_fingerprint import role_intent_fingerprint
+
+    cache = StalenessCache()
+    new_fp = criteria_content_fingerprint(db, int(role_id), cache=cache)
+    new_role_fp = role_intent_fingerprint(
+        role, db=db, criteria_rows=cache.criteria_rows[int(role_id)]
+    )
     pending = (
         db.query(AgentDecision)
         .filter(
@@ -154,10 +137,26 @@ def rebaseline_pending_criteria_fingerprint(db: Session, *, role_id: int) -> int
         fp = decision.input_fingerprint or {}
         if not fp:
             continue  # pre-A1: no baseline, leave alone
-        if decision.criteria_fingerprint == new_fp and fp.get("criteria_fingerprint") == new_fp:
+        score_generation = fp.get("score_generation")
+        next_generation = (
+            {
+                **score_generation,
+                "role_intent_fingerprint": new_role_fp,
+            }
+            if isinstance(score_generation, dict)
+            else score_generation
+        )
+        if (
+            decision.criteria_fingerprint == new_fp
+            and fp.get("criteria_fingerprint") == new_fp
+            and next_generation == score_generation
+        ):
             continue
         decision.criteria_fingerprint = new_fp
-        decision.input_fingerprint = {**fp, "criteria_fingerprint": new_fp}
+        next_fp = {**fp, "criteria_fingerprint": new_fp}
+        if isinstance(next_generation, dict):
+            next_fp["score_generation"] = next_generation
+        decision.input_fingerprint = next_fp
         db.add(decision)
         updated += 1
     return updated
@@ -181,11 +180,9 @@ def _latest_recruiter_note_id(
 
 
 def _engine_outdated(application: CandidateApplication) -> bool:
-    """True when the application's stored score is from a superseded engine AND
-    re-scoring would actually upgrade it (the org is on the current holistic
-    engine). Lazy import keeps the heavy scoring stack off this module's import
-    path and avoids a cycle; any error fails safe to 'not stale' so a staleness
-    read never crashes the Hub."""
+    """Whether the stored score would upgrade to the current holistic engine.
+
+    Lazy import avoids a cycle; read errors must not crash the Hub."""
     try:
         from .cv_score_orchestrator import score_is_outdated
 
@@ -226,12 +223,103 @@ def evaluate(
 
     reasons: list[str] = []
     details: dict = {}
+    fingerprint = decision.input_fingerprint or {}
+    if role is None:
+        role = db.query(Role).filter(Role.id == int(decision.role_id)).one_or_none()
 
-    # Engine-version staleness — independent of the queue-time fingerprint.
-    # A superseded-engine score is stale regardless of when the decision
-    # queued, and we know it from the stored blob alone, so it flags even
-    # pre-A1 (fingerprint-less) rows. Held aside and appended LAST so genuine
-    # input drift leads the one-line summary when both are present.
+    # Standard owner-role cards require a completed current score generation;
+    # related-role and deterministic knockout cards have separate lifecycles.
+    if role is not None and str(getattr(decision, "status", "")) in {
+        "pending",
+        "processing",
+        "reverted_for_feedback",
+    }:
+        policy_drift = policy_generation_drift(
+            db,
+            decision,
+            role,
+            cache.policy_generation if cache is not None else None,
+        )
+        if policy_drift is not None:
+            reasons.append("policy_generation_changed")
+            details["policy_generation_changed"] = policy_drift
+        knockout_drift = knockout_generation_drift(
+            db, decision, cache.knockout_generation if cache is not None else None
+        )
+        if knockout_drift is not None:
+            reason, drift = knockout_drift
+            reasons.append(reason)
+            details[reason] = drift
+        from ..components.scoring.freshness import (
+            application_score_status_allows_decision,
+            latest_score_attempts,
+            score_generation_from_fingerprint,
+            score_generation_matches_observed,
+            standard_owner_score_guard_applies,
+        )
+
+        if (
+            not is_knockout_decision(decision)
+            and application.role_id is not None
+            and standard_owner_score_guard_applies(
+                application_role_id=int(application.role_id),
+                decision_role_id=int(decision.role_id),
+                role_kind=getattr(role, "role_kind", None),
+                decision_type=str(decision.decision_type),
+            )
+        ):
+            application_id = int(application.id)
+            if cache is not None and application_id in cache.latest_score_attempt:
+                latest_attempt = cache.latest_score_attempt[application_id]
+            else:
+                latest_attempt = latest_score_attempts(db, [application_id]).get(
+                    application_id
+                )
+                if cache is not None:
+                    cache.latest_score_attempt[application_id] = latest_attempt
+            latest_status = (
+                latest_attempt.status if latest_attempt is not None else None
+            )
+            if not application_score_status_allows_decision(
+                application, latest_status
+            ):
+                reasons.append("score_refresh_required")
+                details["score_refresh_required"] = {
+                    "latest_score_job_status": latest_status,
+                }
+            else:
+                generation = score_generation_from_fingerprint(fingerprint)
+                if generation is not None:
+                    role_id = int(role.id)
+                    if cache is not None and role_id in cache.role_intent_fp:
+                        role_intent_fp = cache.role_intent_fp[role_id]
+                    else:
+                        from .role_intent_fingerprint import role_intent_fingerprint
+
+                        criteria_rows = None
+                        if cache is not None:
+                            criteria_content_fingerprint(db, role_id, cache=cache)
+                            criteria_rows = cache.criteria_rows[role_id]
+                        role_intent_fp = role_intent_fingerprint(
+                            role, db=db, criteria_rows=criteria_rows
+                        )
+                        if cache is not None:
+                            cache.role_intent_fp[role_id] = role_intent_fp
+                if generation is not None and not score_generation_matches_observed(
+                    db, expected=generation, role=role, application=application,
+                    current_attempt=latest_attempt,
+                    current_role_intent_fingerprint=role_intent_fp,
+                ):
+                    current_job_id = (
+                        latest_attempt.job_id if latest_attempt is not None else None
+                    )
+                    reasons.append("score_generation_changed")
+                    details["score_generation_changed"] = {
+                        "at_emit": generation.job_id,
+                        "current": current_job_id,
+                    }
+
+    # Engine staleness is independent of fingerprints and sorts after input drift.
     engine_stale = _engine_outdated(application)
     engine_details = (
         {
@@ -255,16 +343,13 @@ def evaluate(
         return StalenessReport(
             is_stale=is_stale,
             reasons=all_reasons,
-            summary=_summarize(all_reasons) if is_stale else None,
+            summary=summarize_staleness(all_reasons) if is_stale else None,
             details=all_details,
         )
 
-    fingerprint = decision.input_fingerprint or {}
     if not fingerprint:
         return _finish()
 
-    if role is None:
-        role = db.query(Role).filter(Role.id == int(decision.role_id)).one_or_none()
     if role is None:
         return _finish()
 
@@ -377,12 +462,9 @@ def _verdict_holds(
     application: CandidateApplication,
     role: Role,
 ) -> bool:
-    """True iff the deterministic policy verdict against the CURRENT scores
-    equals the decision's queued ``decision_type`` — i.e. the score drift is
-    immaterial to the outcome. Conservative: any error, or a now-ambiguous
-    (escalate / skip) verdict, returns False so the banner stays. Lazy import
-    avoids a circular dependency (bulk_decision_service → queue_decision →
-    decision_staleness)."""
+    """Whether current scores preserve the queued deterministic verdict.
+
+    Errors/ambiguous verdicts retain the stale banner; lazy import avoids a cycle."""
     try:
         from .bulk_decision_service import recompute_persisted_verdict
 
@@ -423,24 +505,3 @@ def is_human_suppression_live(
     return not evaluate(
         db, decision, application=application, role=role, cache=cache
     ).is_stale
-
-
-_REASON_LABELS = {
-    "criteria_changed": "Role criteria edited",
-    "cv_replaced": "Candidate uploaded a new CV",
-    "pre_screen_score_shifted": "Pre-screen score changed",
-    "assessment_score_shifted": "Assessment score changed",
-    "cutoff_changed": "Pre-screen cutoff changed",
-    "recruiter_note_added": "Recruiter note added",
-    "engine_outdated": "Scored by an older model",
-}
-
-
-def _summarize(reasons: list[str]) -> str:
-    """One-line human summary for the Decision Hub badge."""
-    if not reasons:
-        return ""
-    if len(reasons) == 1:
-        return _REASON_LABELS.get(reasons[0], reasons[0])
-    primary = _REASON_LABELS.get(reasons[0], reasons[0])
-    return f"{primary} (+{len(reasons) - 1} more)"

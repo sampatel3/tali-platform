@@ -23,9 +23,11 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import and_
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session
 
+from ..components.scoring.role_intent_inputs import (
+    load_active_role_intent_with_predecessor,
+)
 from ..models.decision_feedback import DecisionFeedback
 from ..models.role_intent import RoleIntent
 from ..services.role_intent_text import (
@@ -55,27 +57,10 @@ def fetch_active_intent(
     case is normal during rollout and the calling sub-agents must
     handle it (treat as "no intent overlay").
     """
-    target = t or datetime.now(timezone.utc)
-    previous_intent = aliased(RoleIntent)
-    result = (
-        db.query(RoleIntent, previous_intent.free_text)
-        .outerjoin(
-            previous_intent,
-            and_(
-                RoleIntent.superseded_id == previous_intent.id,
-                RoleIntent.role_id == previous_intent.role_id,
-                RoleIntent.organization_id == previous_intent.organization_id,
-            ),
-        )
-        .filter(
-            RoleIntent.role_id == role_id,
-            RoleIntent.valid_from <= target,
-        )
-        .filter(
-            (RoleIntent.valid_to.is_(None)) | (RoleIntent.valid_to > target)
-        )
-        .order_by(RoleIntent.version.desc())
-        .first()
+    result = load_active_role_intent_with_predecessor(
+        db,
+        role_id=int(role_id),
+        at=t,
     )
     if result is None:
         return None

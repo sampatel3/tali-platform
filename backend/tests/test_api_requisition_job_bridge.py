@@ -355,6 +355,62 @@ def test_republish_reuses_ref_code_and_role_no_duplicate(client, db):
     assert len(roles) == 1
 
 
+def test_changed_republish_invalidates_and_dispatches_provider_artifacts_after_commit(
+    client, db
+):
+    headers, _ = auth_headers(client)
+    brief_id = _make_requisition(client, headers, title="Provider lifecycle")
+    first = _publish(
+        client,
+        headers,
+        brief_id,
+        jd="# Provider lifecycle\n\nOwn the original platform scope.",
+    )
+    role = db.get(Role, int(first["role_id"]))
+    role.interview_focus = {"questions": [{"question": "Old focus"}]}
+    role.screening_pack_template = {
+        "stage": "screening",
+        "questions": [{"question": "Old screening question"}],
+    }
+    role.tech_interview_pack_template = {
+        "stage": "tech_stage_2",
+        "questions": [{"question": "Old technical-pack question"}],
+    }
+    role.tech_questions_cached = [{"question": "Old technical question"}]
+    role.tech_questions_signature = "old-provider-generation"
+    db.commit()
+
+    with (
+        patch(
+            "app.tasks.automation_tasks.generate_role_interview_focus.delay"
+        ) as focus_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.delay"
+        ) as tech_dispatch,
+    ):
+        second = _publish(
+            client,
+            headers,
+            brief_id,
+            jd="# Provider lifecycle\n\nOwn the revised distributed platform scope.",
+        )
+
+    assert second["role_id"] == first["role_id"]
+    # Inactive requisitions remain spend-gated even though the durable refresh
+    # kicks are emitted after commit. Activation later authorizes provider work.
+    focus_dispatch.assert_called_once_with(
+        int(first["role_id"]), requires_running_agent=True
+    )
+    tech_dispatch.assert_called_once_with(int(first["role_id"]))
+    db.expire_all()
+    saved = db.get(Role, int(first["role_id"]))
+    assert saved.interview_focus is None
+    assert saved.screening_pack_template is None
+    assert saved.tech_interview_pack_template is None
+    assert saved.tech_questions_cached == [{"question": "Old technical question"}]
+    assert saved.tech_questions_signature is None
+
+
 def test_republish_rejects_a_stale_linked_role_version(client, db):
     headers, _ = auth_headers(client)
     brief_id = _make_requisition(client, headers, title="Concurrency Engineer")
@@ -535,9 +591,17 @@ def test_identical_republish_keeps_running_agent_and_generated_task(client, db):
     role = db.query(Role).filter(Role.id == first["role_id"]).one()
     task = _make_running_generated_requisition(db, role=role)
 
-    with patch(
-        "app.tasks.assessment_tasks.generate_assessment_task_for_role.delay"
-    ) as generation:
+    with (
+        patch(
+            "app.tasks.assessment_tasks.generate_assessment_task_for_role.delay"
+        ) as generation,
+        patch(
+            "app.tasks.automation_tasks.generate_role_interview_focus.delay"
+        ) as focus_dispatch,
+        patch(
+            "app.tasks.automation_tasks.regenerate_role_tech_questions.delay"
+        ) as tech_dispatch,
+    ):
         second = _publish(client, headers, brief_id, jd=jd)
 
     assert second["job_status"] == JOB_STATUS_OPEN
@@ -550,6 +614,8 @@ def test_identical_republish_keeps_running_agent_and_generated_task(client, db):
     assert any(linked.id == task.id for linked in role.tasks)
     assert role.assessment_task_provisioning["activation_intent"]["status"] == "succeeded"
     generation.assert_not_called()
+    focus_dispatch.assert_not_called()
+    tech_dispatch.assert_not_called()
 
 
 def test_changed_republish_preserves_manual_task_but_blocks_for_hitl(client, db):

@@ -20,6 +20,7 @@ from ...models.sister_role_evaluation import (
     SISTER_EVAL_PENDING,
     SISTER_EVAL_RETRY_WAIT,
     SISTER_EVAL_RUNNING,
+    SISTER_EVAL_STALE_HELD,
     SISTER_EVAL_UNSCORABLE,
     SisterRoleEvaluation,
 )
@@ -188,6 +189,7 @@ def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
     for key in (
         SISTER_EVAL_PENDING, SISTER_EVAL_RUNNING, SISTER_EVAL_RETRY_WAIT, SISTER_EVAL_DONE,
         SISTER_EVAL_ERROR, SISTER_EVAL_UNSCORABLE, SISTER_EVAL_EXCLUDED,
+        SISTER_EVAL_STALE_HELD,
     ):
         counts.setdefault(key, 0)
     total = sum(counts.values())
@@ -212,7 +214,9 @@ def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
         or 0
     )
     waiting_reason = None
-    if authority_waiting:
+    if counts[SISTER_EVAL_STALE_HELD]:
+        waiting_reason = "recruiter_re_evaluate_required"
+    elif authority_waiting:
         waiting_reason = (
             role_paid_ats_work_block_reason(role, db=db)
             or "authority_blocked"
@@ -224,7 +228,7 @@ def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
         or counts[SISTER_EVAL_PENDING]
     ):
         overall = "running"
-    elif counts[SISTER_EVAL_RETRY_WAIT]:
+    elif counts[SISTER_EVAL_RETRY_WAIT] or counts[SISTER_EVAL_STALE_HELD]:
         overall = "waiting"
     elif counts[SISTER_EVAL_ERROR] and not counts[SISTER_EVAL_DONE]:
         overall = "error"

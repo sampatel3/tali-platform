@@ -8,12 +8,15 @@ write-back behavior per ``kind``.
 
 from __future__ import annotations
 
-import pytest
+from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 from app.actions import ask_recruiter
 from app.actions.types import Actor
 from app.agent_runtime.role_intent import fetch_active_intent
+from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
+from app.models.cv_score_job import CvScoreJob
 from app.models.role_change_event import RoleChangeEvent
 from app.models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
 from app.models.role_intent import RoleIntent
@@ -241,7 +244,6 @@ def test_budget_answer_large_dollar_amount_is_dollars_not_cents(db):
 
 def _stub_chip_parser(monkeypatch, chips):
     """Patch out the LLM call so tests don't hit Claude."""
-    from app.actions import ask_recruiter as ar
     from app.services.intent_chip_parser import ParsedChip
 
     def _fake(db, *, organization_id, role, answer_text, agent_question=None, existing_chip_texts=None):
@@ -473,3 +475,126 @@ def test_chip_parser_failure_does_not_block_intent_write(db, monkeypatch):
         .count()
     )
     assert chip_count == 0
+
+
+def test_intent_answer_without_chips_invalidates_scores_without_paid_dispatch(
+    db, monkeypatch
+):
+    """Free-text intent changes the scoring bar even when parsing yields no chips."""
+    org, role, _, app = make_world(db, pre_screen=72.0, cv_match=78.0)
+    app.pre_screen_run_at = datetime.now(timezone.utc)
+    role.tech_questions_signature = "still-current-without-new-chips"
+    pending = AgentDecision(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="pending",
+        reasoning="Prior score cleared the bar",
+        model_version="bulk-deterministic",
+        prompt_version="single_threshold_v1",
+        idempotency_key=f"before-intent-{app.id}",
+    )
+    db.add(pending)
+    db.flush()
+    _stub_chip_parser(monkeypatch, [])
+    from app.tasks import automation_tasks
+
+    dispatch = MagicMock()
+    monkeypatch.setattr(
+        automation_tasks.regenerate_role_tech_questions,
+        "apply_async",
+        dispatch,
+    )
+    agent = _agent_actor(db, role)
+    row = ask_recruiter.open(
+        db,
+        agent,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="intent_slot_missing",
+        prompt="What matters most?",
+    )
+    rec, _ = _recruiter_actor(db, int(org.id))
+
+    ask_recruiter.answer(
+        db,
+        rec,
+        organization_id=int(org.id),
+        needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
+        response={"value": "Candidates must overlap Dubai mornings."},
+    )
+
+    db.refresh(app)
+    db.refresh(pending)
+    db.refresh(role)
+    assert app.pre_screen_run_at is None
+    assert pending.status == "discarded"
+    assert "role_intent_changed" in (pending.resolution_note or "")
+    assert (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == int(app.id), CvScoreJob.status == "stale")
+        .count()
+        == 1
+    )
+    assert role.tech_questions_signature == "still-current-without-new-chips"
+    dispatch.assert_not_called()
+
+
+def test_intent_writeback_failure_rolls_back_score_invalidation(db, monkeypatch):
+    """Intent, stale marker, and decision supersession share one savepoint."""
+    org, role, _, app = make_world(db, pre_screen=72.0, cv_match=78.0)
+    screened_at = datetime.now(timezone.utc)
+    app.pre_screen_run_at = screened_at
+    pending = AgentDecision(
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="pending",
+        reasoning="Prior score cleared the bar",
+        model_version="bulk-deterministic",
+        prompt_version="single_threshold_v1",
+        idempotency_key=f"rollback-intent-{app.id}",
+    )
+    db.add(pending)
+    db.flush()
+    _stub_chip_parser(monkeypatch, [])
+
+    def _fail_audit(*_args, **_kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(ask_recruiter, "add_role_change_event", _fail_audit)
+    agent = _agent_actor(db, role)
+    row = ask_recruiter.open(
+        db,
+        agent,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="intent_slot_missing",
+        prompt="What matters most?",
+    )
+    rec, _ = _recruiter_actor(db, int(org.id))
+
+    answered = ask_recruiter.answer(
+        db,
+        rec,
+        organization_id=int(org.id),
+        needs_input_id=int(row.id),
+        expected_version=int(role.version or 1),
+        response={"value": "Candidates must overlap Dubai mornings."},
+    )
+
+    db.expire_all()
+    refreshed_app = db.query(type(app)).filter(type(app).id == int(app.id)).one()
+    refreshed_decision = (
+        db.query(AgentDecision).filter(AgentDecision.id == int(pending.id)).one()
+    )
+    assert answered.resolved_at is not None
+    assert refreshed_app.pre_screen_run_at == screened_at.replace(tzinfo=None)
+    assert refreshed_decision.status == "pending"
+    assert db.query(RoleIntent).filter(RoleIntent.role_id == int(role.id)).count() == 0
+    assert db.query(CvScoreJob).filter(CvScoreJob.application_id == int(app.id)).count() == 0

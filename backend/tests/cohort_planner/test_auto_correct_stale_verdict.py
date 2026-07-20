@@ -4,6 +4,7 @@ subset of stale agent-decision verdict flips."""
 from __future__ import annotations
 
 from app.models.agent_decision import AgentDecision
+from app.models.cv_score_job import CvScoreJob
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.services import bulk_decision_service as bds
 
@@ -31,7 +32,7 @@ def _decision(db, org, role, app, decision_type, *, reasoning="r", evidence=None
 
 
 def test_send_flips_to_reject_is_corrected(db, monkeypatch):
-    org, role, _, app = make_world(db)
+    org, role, _, app = make_world(db, pre_screen=80.0, cv_match=30.0)
     d = _decision(
         db, org, role, app, "send_assessment",
         evidence={
@@ -57,8 +58,31 @@ def test_send_flips_to_reject_is_corrected(db, monkeypatch):
     assert "Send the assessment" not in str(d.evidence)
 
 
-def test_reject_flips_to_send_is_corrected(db, monkeypatch):
+def test_auto_correct_refuses_old_pending_card_while_latest_score_is_stale(
+    db, monkeypatch
+):
     org, role, _, app = make_world(db)
+    decision = _decision(db, org, role, app, "send_assessment")
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id), role_id=int(role.id), status="stale"
+        )
+    )
+    db.flush()
+    monkeypatch.setattr(
+        bds,
+        "recompute_persisted_verdict",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("stale score must not be recomputed")
+        ),
+    )
+
+    assert bds.auto_correct_stale_verdict(db, app=app, role=role) is None
+    assert decision.decision_type == "send_assessment"
+
+
+def test_reject_flips_to_send_is_corrected(db, monkeypatch):
+    org, role, _, app = make_world(db, pre_screen=80.0, cv_match=85.0)
     d = _decision(
         db, org, role, app, "reject",
         evidence={
@@ -82,7 +106,7 @@ def test_reject_flips_to_send_is_corrected(db, monkeypatch):
 def test_auto_correct_scopes_shared_application_to_owner_not_two_related_roles(
     db, monkeypatch
 ):
-    org, owner, _, app = make_world(db)
+    org, owner, _, app = make_world(db, pre_screen=80.0, cv_match=30.0)
     related_roles = [
         Role(
             organization_id=int(org.id),

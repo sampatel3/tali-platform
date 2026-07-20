@@ -4,8 +4,11 @@ leak in the public payload."""
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
+from app.actions import approve_decision
+from app.actions.types import Actor
 from app.domains.job_pages import routes as jp_routes
 from app.domains.job_pages.screening_service import create_role_question
 from app.models import (
@@ -23,6 +26,8 @@ from app.models import (
 from app.models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN
 from app.platform.config import settings
 from app.services import rate_limit
+from app.services import decision_staleness
+from app.services.decision_approval_guard import enforce_decision_approval_freshness
 from app.services.rate_limit import reset_memory_buckets
 
 
@@ -71,6 +76,73 @@ def _published_page(
 
 def _url(page):
     return f"/api/v1/public/job-pages/{page.token}/apply"
+
+
+def test_native_intake_lock_precedes_caller_owned_flush(db, monkeypatch):
+    """Role edits lock Role before applications; intake must use that order."""
+    from app.services.job_page_lifecycle import lock_native_intake_authority
+    from app.services import workspace_agent_control
+
+    _org, role, _page = _published_page(db, slug="intake-lock")
+    db.commit()
+    events: list[str] = []
+    real_flush = db.flush
+    real_snapshot = workspace_agent_control.workspace_agent_control_snapshot
+
+    def _flush(*args, **kwargs):
+        events.append("flush")
+        return real_flush(*args, **kwargs)
+
+    def _workspace_snapshot(*args, **kwargs):
+        events.append("organization_lock")
+        return real_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(db, "flush", _flush)
+    monkeypatch.setattr(
+        workspace_agent_control,
+        "workspace_agent_control_snapshot",
+        _workspace_snapshot,
+    )
+
+    assert lock_native_intake_authority(db, role=role) is not None
+    assert events.index("organization_lock") < events.index("flush")
+
+
+def test_new_application_locks_role_before_reading_knockout_configuration(
+    db, monkeypatch
+):
+    from app.domains.job_pages import apply_service
+    from app.services.job_page_lifecycle import lock_native_intake_authority
+
+    org, role, _page = _published_page(db, slug="knockout-generation")
+    db.commit()
+    events: list[str] = []
+    real_list = apply_service.list_role_questions
+
+    def _lock(db_, *, role):
+        events.append("role_lock")
+        return lock_native_intake_authority(db_, role=role)
+
+    def _list(*args, **kwargs):
+        events.append("questions")
+        return real_list(*args, **kwargs)
+
+    monkeypatch.setattr(
+        apply_service, "lock_native_intake_authority", _lock, raising=False
+    )
+    monkeypatch.setattr(apply_service, "list_role_questions", _list)
+
+    result = apply_service.submit_application(
+        db,
+        int(org.id),
+        role,
+        full_name="Locked Applicant",
+        email="locked-applicant@example.test",
+        answers={},
+    )
+
+    assert result.created is True
+    assert events.index("role_lock") < events.index("questions")
 
 
 def test_apply_creates_candidate_and_application(client, db):
@@ -182,6 +254,10 @@ def test_knockout_failure_queues_decision_on_hub(client, db):
     assert decision is not None
     assert decision.decision_type == "skip_assessment_reject"
     assert decision.evidence.get("source") == "knockout_screening"
+    assert str((decision.input_fingerprint or {}).get("knockout_generation", "")).startswith(
+        "v1:"
+    )
+    assert decision_staleness.evaluate(db, decision).is_stale is False
     # The ATS owns any structured disposition catalog — the knockout reject
     # carries only the free-text reason, no catalog id.
     assert decision.evidence.get("disqualification_reason_id") is None
@@ -195,6 +271,86 @@ def test_knockout_failure_queues_decision_on_hub(client, db):
         .first()
     )
     assert event is not None and event.actor_type == "system"
+
+
+def test_knockout_question_edit_marks_card_stale_and_blocks_approval(client, db):
+    org, role, page = _published_page(db, slug="knockout-staleness")
+    question = create_role_question(
+        db, org.id, role.id,
+        prompt="Are you authorized to work locally?", kind="boolean",
+        required=True, knockout=True, knockout_expected=[True],
+    )
+    db.commit()
+    response = client.post(
+        _url(page),
+        data={"full_name": "Changed", "email": "changed@x.test", "answers": "{}"},
+    )
+    decision = db.query(AgentDecision).filter_by(
+        application_id=response.json()["application_id"], status="pending"
+    ).one()
+
+    question.prompt = "Do you currently have local work authorization?"
+    db.commit()
+
+    report = decision_staleness.evaluate(db, decision)
+    assert "screening_questions_changed" in report.reasons
+    result = approve_decision.enqueue_batch(
+        db,
+        Actor(type="recruiter", user_id=999),
+        organization_id=int(org.id),
+        decision_ids=[int(decision.id)],
+    )
+    assert result["accepted"] == []
+    assert result["job_run_id"] is None
+    assert db.get(AgentDecision, int(decision.id)).status == "pending"
+
+
+@pytest.mark.parametrize(
+    ("stored_generation", "expected_reason"),
+    [
+        (None, None),
+        ("unavailable", "screening_questions_unavailable"),
+        ("malformed", "screening_questions_unavailable"),
+    ],
+)
+def test_knockout_generation_legacy_and_unverifiable_contract(
+    client, db, stored_generation, expected_reason
+):
+    org, role, page = _published_page(db, slug=f"knockout-{stored_generation}")
+    create_role_question(
+        db, org.id, role.id,
+        prompt="Are you authorized to work locally?", kind="boolean",
+        required=True, knockout=True, knockout_expected=[True],
+    )
+    db.commit()
+    response = client.post(
+        _url(page),
+        data={
+            "full_name": "Generation",
+            "email": f"generation-{stored_generation}@x.test",
+            "answers": "{}",
+        },
+    )
+    decision = db.query(AgentDecision).filter_by(
+        application_id=response.json()["application_id"], status="pending"
+    ).one()
+    decision.input_fingerprint = (
+        {} if stored_generation is None else {"knockout_generation": stored_generation}
+    )
+    db.commit()
+
+    report = decision_staleness.evaluate(db, decision)
+    if expected_reason is None:
+        assert "screening_questions_unavailable" not in report.reasons
+    else:
+        assert expected_reason in report.reasons
+    if expected_reason is not None:
+        with pytest.raises(HTTPException) as exc_info:
+            enforce_decision_approval_freshness(
+                db, decision, allow_engine_outdated=True
+            )
+        assert exc_info.value.status_code == 409
+        assert expected_reason in exc_info.value.detail["reasons"]
 
 
 def test_apply_flag_off_returns_503(client, db, monkeypatch):

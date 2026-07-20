@@ -28,6 +28,7 @@ from ...services.task_catalog import (
     canonical_task_catalog_dir,
     sync_template_task_specs,
 )
+from ...services.task_mutation_guard import lock_task_mutation_boundary
 from ...services.task_spec_loader import load_task_specs
 
 logger = logging.getLogger(__name__)
@@ -189,6 +190,9 @@ def admin_delete_template_task(
     )
     if not task:
         raise HTTPException(status_code=404, detail=f"No template task found with task_key={task_key!r}")
+    task = lock_task_mutation_boundary(db, task_ids=[int(task.id)]).task(int(task.id))
+    if task is None or task.task_key != task_key or not task.is_template or task.organization_id is not None:
+        raise HTTPException(status_code=409, detail="Template task changed; refresh and retry")
     db.delete(task)
     db.commit()
     return {"status": "ok", "message": f"Deleted template task task_key={task_key!r}"}
@@ -329,6 +333,9 @@ def reject_generated_task(
     )
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    task = lock_task_mutation_boundary(db, task_ids=[int(task.id)]).task(int(task.id))
+    if task is None or task.organization_id != current_user.organization_id:
+        raise HTTPException(status_code=404, detail="Task not found")
     extra = task.extra_data if isinstance(task.extra_data, dict) else {}
     if not extra.get("generated") or task.is_active:
         raise HTTPException(status_code=400, detail="Only un-approved generated drafts can be rejected")
@@ -396,6 +403,9 @@ def update_task(
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    task = lock_task_mutation_boundary(db, task_ids=[int(task.id)]).task(int(task.id))
+    if task is None or task.organization_id != current_user.organization_id:
+        raise HTTPException(status_code=404, detail="Task not found")
     update_data = _normalize_task_payload(data.model_dump(exclude_unset=True))
     update_data = _ensure_repo_structure(update_data, fallback_task=task)
     for k, v in update_data.items():
@@ -426,6 +436,9 @@ def delete_task(
         Task.organization_id == current_user.organization_id,
     ).first()
     if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    task = lock_task_mutation_boundary(db, task_ids=[int(task.id)]).task(int(task.id))
+    if task is None or task.organization_id != current_user.organization_id:
         raise HTTPException(status_code=404, detail="Task not found")
     in_use = db.query(Assessment).filter(
         Assessment.task_id == task_id,

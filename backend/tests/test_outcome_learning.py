@@ -21,7 +21,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-import pytest
 from sqlalchemy import event
 
 from app.actions import approve_decision
@@ -37,6 +36,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 
 
@@ -506,6 +506,35 @@ def _pending_decision(
     application: CandidateApplication,
     decision_type: str,
 ) -> AgentDecision:
+    evidence: dict[str, object] = {}
+    if int(role.id) == int(application.role_id):
+        # Approval now fails closed for a genuinely cold owner-role application.
+        # Give this outcome-learning fixture the persisted legacy score it claims
+        # the already-processing decision consumed; freshness itself is covered
+        # independently in test_decision_staleness.py.
+        application.cv_match_score = 80.0
+        db.add(application)
+    else:
+        # Related-role decisions consume their own durable evaluation rather
+        # than the ATS owner's score columns.  A decision without that row is
+        # correctly non-executable, so model the completed evaluation that led
+        # to this processing approval.
+        evaluation = SisterRoleEvaluation(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            source_application_id=int(application.id),
+            status="done",
+            pipeline_stage="review",
+            spec_fingerprint=f"outcome-learning:{role.id}",
+            role_fit_score=80.0,
+        )
+        db.add(evaluation)
+        db.flush()
+        evidence = {
+            "sister_evaluation_id": int(evaluation.id),
+            "role_fit_score": 80.0,
+            "evaluation_spec_fingerprint": evaluation.spec_fingerprint,
+        }
     decision = AgentDecision(
         organization_id=org.id,
         role_id=role.id,
@@ -516,7 +545,7 @@ def _pending_decision(
         status="processing",
         reasoning="test reasoning",
         confidence=0.85,
-        evidence={},
+        evidence=evidence,
         model_version="test-model",
         prompt_version="test-prompt",
         idempotency_key=f"approve-test:{application.id}:{decision_type}",

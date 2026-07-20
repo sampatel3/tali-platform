@@ -582,7 +582,7 @@ def pre_screen_reject_sweep(self, cap: int = PRE_SCREEN_REJECT_SWEEP_CAP) -> dic
     recommendation (covers must-have misses / invalidated scores). Fully
     cv_match-scored candidates are excluded — the agent owns those.
     """
-    from sqlalchemy import and_, func, or_, exists
+    from sqlalchemy import and_, func, or_
 
     from ..models.agent_decision import AgentDecision
     from ..models.candidate_application import CandidateApplication
@@ -1063,12 +1063,14 @@ ACTIVATION_AUTO_SCORE_CAP = 500
 
 
 def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[int]]:
-    """Replay latest score attempts that temporary authority holds deferred.
+    """Replay the explicitly allowed latest stale attempts within ``limit``.
 
     A normal unscored drain misses forced rescores whose previous numeric score
     is still present.  Persisting the hold as a stale CvScoreJob and draining it
     first makes Resume/Turn on complete both first scores and re-scores without
-    a manual click or a six-hour stale-job timeout.
+    a manual click or a six-hour stale-job timeout. Recruiter-authored
+    ``role_intent_changed`` rows share this same active-role, spend-guarded,
+    capped recovery path; every other stale reason remains explicit-only.
     """
     from sqlalchemy import func
 
@@ -1085,33 +1087,44 @@ def _requeue_deferred_agent_scores(db, *, role, limit: int) -> tuple[int, set[in
     if automatic_role_action_block_reason(role, db=db) is not None:
         return 0, set()
 
-    latest_id = (
+    row_number = func.row_number().over(
+        partition_by=CvScoreJob.application_id,
+        order_by=CvScoreJob.id.desc(),
+    )
+    latest = (
         db.query(
-            CvScoreJob.application_id.label("application_id"),
-            func.max(CvScoreJob.id).label("job_id"),
+            CvScoreJob.id.label("job_id"),
+            CvScoreJob.application_id,
+            CvScoreJob.status,
+            CvScoreJob.error_message,
+            CvScoreJob.force_full_score,
+            row_number.label("rn"),
         )
         .filter(CvScoreJob.role_id == int(role.id))
-        .group_by(CvScoreJob.application_id)
         .subquery()
     )
     rows = (
         db.query(
-            CvScoreJob.application_id,
-            CvScoreJob.force_full_score,
+            latest.c.application_id,
+            latest.c.force_full_score,
         )
-        .join(latest_id, CvScoreJob.id == latest_id.c.job_id)
         .filter(
-            CvScoreJob.status == SCORE_JOB_STALE,
-            CvScoreJob.error_message.in_(
+            latest.c.rn == 1,
+            latest.c.status == SCORE_JOB_STALE,
+            latest.c.error_message.in_(
                 (
                     "deferred_workspace_paused",
                     "deferred_agent_paused",
                     "deferred_agent_off",
                     "deferred_role_not_runnable",
+                    # Recruiter intent edits create durable stale rows inside
+                    # the answer transaction. Recover them only through this
+                    # existing active-agent, spend-guarded, per-tick cap.
+                    "role_intent_changed",
                 )
             ),
         )
-        .order_by(CvScoreJob.id.asc())
+        .order_by(latest.c.job_id.asc())
         .limit(bounded)
         .all()
     )
@@ -1176,7 +1189,7 @@ def _auto_enqueue_scoring(
     """
     role_id = int(role.id)
     try:
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timezone
         from sqlalchemy import and_, func, not_, or_
 
         from ..platform.config import settings

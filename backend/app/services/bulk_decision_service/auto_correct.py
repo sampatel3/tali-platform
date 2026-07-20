@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from typing import TYPE_CHECKING
 
 from sqlalchemy.orm import Session
 
@@ -30,6 +31,9 @@ from ..decision_presentation_service import normalize_candidate_summary
 from ._shared import _inputs_for, _policy_evidence, _recruiter_reasoning, _role_fit_score
 
 logger = logging.getLogger("taali.bulk_decision")
+
+if TYPE_CHECKING:
+    from ...components.scoring.freshness import ScoreGenerationToken
 
 
 # Hard external constraints the deterministic score band can't see — a verdict
@@ -77,7 +81,11 @@ def _verdict_has_independent_gate(decision: AgentDecision) -> bool:
 
 
 def auto_correct_stale_verdict(
-    db: Session, *, app: CandidateApplication, role: Role
+    db: Session,
+    *,
+    app: CandidateApplication,
+    role: Role,
+    expected_score_generation: ScoreGenerationToken | None = None,
 ) -> str | None:
     """After a (re)score, correct the app's single PENDING agent decision in
     place when the deterministic verdict has FLIPPED and it's safe to — so a
@@ -95,6 +103,43 @@ def auto_correct_stale_verdict(
     Does NOT commit — the caller does.
     """
     try:
+        from ...components.scoring.freshness import (
+            capture_score_generation,
+            score_generation_is_current,
+        )
+        from ..role_execution_guard import lock_live_role
+
+        score_generation = expected_score_generation or capture_score_generation(
+            db, role=role, application_id=int(app.id)
+        )
+        locked_role = lock_live_role(
+            db,
+            role_id=int(role.id),
+            organization_id=int(role.organization_id),
+        )
+        app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(app.id),
+                CandidateApplication.organization_id == int(role.organization_id),
+                CandidateApplication.role_id == int(role.id),
+            )
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        if (
+            locked_role is None
+            or app is None
+            or not score_generation_is_current(
+                db,
+                expected=score_generation,
+                locked_role=locked_role,
+                application=app,
+            )
+        ):
+            return None
+        role = locked_role
         # Resolve recompute through the package namespace so a test that
         # monkeypatches ``bulk_decision_service.recompute_persisted_verdict``
         # (the same knob the decision-staleness suite patches) is honoured here.
@@ -126,8 +171,13 @@ def auto_correct_stale_verdict(
             _capture_input_fingerprint,
             _compute_dedup_key,
         )
+        from ..decision_policy_generation import (
+            POLICY_GENERATION_FINGERPRINT_KEY,
+            capture_decision_policy_generation,
+        )
 
         eff = resolve_role_fit_threshold(db, role=role)
+        policy_generation = capture_decision_policy_generation(db, role=role)
         prior_type = decision.decision_type
         decision.decision_type = new_type
         decision.recommendation = new_type
@@ -148,6 +198,7 @@ def auto_correct_stale_verdict(
         fresh_evidence = None
         try:
             inputs = _inputs_for(
+                db,
                 app,
                 role_id=int(role.id),
                 org_id=int(role.organization_id),
@@ -213,6 +264,7 @@ def auto_correct_stale_verdict(
                 "policy_basis": policy_reasoning,
                 "decision_trigger": trigger,
                 "decision_source": "policy",
+                "policy_revision_id": policy_generation.policy_revision_id,
                 "source": "rescore_auto_correction",
             }
             if candidate_summary:
@@ -229,13 +281,22 @@ def auto_correct_stale_verdict(
         decision.evidence = ev
         try:
             fp, cfp, cvfp = _capture_input_fingerprint(
-                db, application_id=int(app.id), role_id=int(role.id)
+                db,
+                application_id=int(app.id),
+                role_id=int(role.id),
+                score_generation=score_generation,
+            )
+            fp[POLICY_GENERATION_FINGERPRINT_KEY] = (
+                policy_generation.as_fingerprint()
             )
             decision.input_fingerprint = fp
             decision.criteria_fingerprint = cfp
             decision.cv_fingerprint = cvfp
             decision.decision_dedup_key = _compute_dedup_key(
-                db, application_id=int(app.id), decision_type=new_type
+                db,
+                application_id=int(app.id),
+                decision_type=new_type,
+                policy_generation=policy_generation.as_fingerprint(),
             )
         except Exception:  # pragma: no cover — fingerprint refresh is best-effort
             pass
@@ -261,6 +322,7 @@ def auto_correct_stale_verdict(
             force_human_review=is_post_handover_workable_stage(
                 getattr(app, "workable_stage", None)
             ),
+            expected_score_generation=score_generation,
         )
         return new_type
     except Exception:  # noqa: BLE001 — never break scoring

@@ -1224,6 +1224,8 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
         role_id=int(role.id),
         task_id=int(task_id) if task_id is not None else None,
         duration_minutes=int(duration) if duration is not None else 90,
+        expected_score_generation=_score_generation_for(agent_run, application_id),
+        expected_decision_type=_policy_decision_for(agent_run, application_id),
     )
     return result.as_dict()
 
@@ -1622,6 +1624,23 @@ def _queue_evidence(
     return _stamp_policy_revision_in_evidence(db, role=role, evidence=base)
 
 
+def _score_generation_for(agent_run: AgentRun, application_id: int) -> Any | None:
+    """Server-owned generation captured by this cycle's policy evaluation."""
+    snapshots = getattr(agent_run, "__engine_policy_snapshots__", None) or {}
+    snapshot = snapshots.get(int(application_id))
+    return snapshot.get("_score_generation") if isinstance(snapshot, dict) else None
+
+
+def _policy_decision_for(agent_run: AgentRun, application_id: int) -> str | None:
+    """Server-owned deterministic decision captured by evaluate_policy."""
+    snapshots = getattr(agent_run, "__engine_policy_snapshots__", None) or {}
+    snapshot = snapshots.get(int(application_id))
+    if not isinstance(snapshot, dict):
+        return None
+    value = snapshot.get("_persisted_decision_type")
+    return str(value) if value is not None else None
+
+
 # Maps each queueable decision_type to the role attribute that expresses its
 # autonomy preference. A matching toggle is necessary but not sufficient for
 # auto-execution: the role must also be enabled/unpaused and on-policy, and the
@@ -1714,6 +1733,7 @@ def _is_on_policy(
 _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES: frozenset[str] = frozenset(
     {"reject", "skip_assessment_reject"}
 )
+_AUTO_EXECUTE_ROLE_NOT_LOCKED = object()
 
 
 def _is_deterministic_full_score_reject(decision: Any, decision_type: str) -> bool:
@@ -1736,6 +1756,8 @@ def _auto_execute_decision(
     role: Role,
     decision: Any,
     decision_type: str,
+    _locked_live_role: Role | None | object = _AUTO_EXECUTE_ROLE_NOT_LOCKED,
+    expected_score_generation: Any | None = None,
 ) -> bool:
     """Resolve and execute an AgentDecision immediately as a system action.
 
@@ -1775,10 +1797,14 @@ def _auto_execute_decision(
         lock_live_role,
     )
 
-    live_role = lock_live_role(
-        db,
-        role_id=int(role.id),
-        organization_id=int(role.organization_id),
+    live_role = (
+        lock_live_role(
+            db,
+            role_id=int(role.id),
+            organization_id=int(role.organization_id),
+        )
+        if _locked_live_role is _AUTO_EXECUTE_ROLE_NOT_LOCKED
+        else _locked_live_role
     )
     role_block = automatic_role_action_block_reason(live_role, db=db)
     auto_toggle = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
@@ -1788,6 +1814,72 @@ def _auto_execute_decision(
         and not automation_enabled_for_decision(live_role, decision_type)
     ):
         role_block = f"role.{auto_toggle} is disabled"
+    if live_role is None:
+        return False
+    # Use this populate-existing row for every subsequent check. The Role lock
+    # serializes a stale queued action against Turn off / requisition republish.
+    role = live_role
+
+    # The same lock also linearizes automatic actions with recruiter RoleIntent
+    # edits. Edit-first leaves a non-done latest score job and is held here;
+    # action-first completes before the edit, whose invalidation then owns all
+    # still-pending score decisions. Related roles use SisterRoleEvaluation and
+    # are deliberately independent of the ATS owner's score-job lifecycle.
+    score_app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(decision.application_id),
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+    if score_app is None:
+        return False
+
+    # Recruiter approval first claims a row by moving it from ``pending`` to
+    # ``processing``.  Cohort recovery and score-time correction can both hold
+    # an older ORM snapshot of that same row.  Lock and reload the decision only
+    # after the canonical Organization -> Role -> Application locks are held,
+    # then require the exact live pending row before any candidate-facing side
+    # effect.  Whichever actor claims the decision lock first owns the action;
+    # the other observes the resulting non-pending status and stops.
+    decision_id = getattr(decision, "id", None)
+    if decision_id is None:
+        return False
+    live_decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.id == int(decision_id),
+            AgentDecision.organization_id == int(role.organization_id),
+            AgentDecision.role_id == int(role.id),
+            AgentDecision.application_id == int(score_app.id),
+        )
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+    if (
+        live_decision is None
+        or str(live_decision.status) != "pending"
+        or str(live_decision.decision_type) != str(decision_type)
+    ):
+        return False
+    decision = live_decision
+
+    from ..domains.assessments_runtime.role_support import is_resolved
+
+    if is_resolved(score_app):
+        decision.status = "discarded"
+        decision.resolved_at = datetime.now(timezone.utc)
+        decision.resolution_note = "superseded: application already resolved"
+        db.add(decision)
+        return False
+
+    # Do not even annotate a stale/claimed decision from an old ORM snapshot.
+    # Hold evidence is an action-owned mutation too, so it belongs behind the
+    # same live pending-row fence as candidate-facing effects.
     if role_block:
         held = dict(decision.evidence or {})
         held["auto_execute_hold"] = {
@@ -1797,10 +1889,55 @@ def _auto_execute_decision(
         decision.evidence = held
         db.add(decision)
         return False
-    # ``live_role`` is non-null when no block reason was returned. Use this
-    # populate-existing row for every subsequent side effect; the Role lock
-    # serializes a stale queued action against Turn off / requisition republish.
-    role = live_role
+
+    generation = expected_score_generation
+    if score_app.role_id is not None:
+        from ..components.scoring.freshness import (
+            score_generation_from_fingerprint,
+            score_generation_is_current,
+            standard_owner_score_guard_applies,
+        )
+
+        persisted_generation = score_generation_from_fingerprint(
+            getattr(decision, "input_fingerprint", None)
+        )
+        generation = generation or persisted_generation
+        generation_matches_decision = bool(
+            persisted_generation is not None
+            and (
+                expected_score_generation is None
+                or persisted_generation == expected_score_generation
+            )
+        )
+
+        if (
+            standard_owner_score_guard_applies(
+                application_role_id=int(score_app.role_id),
+                decision_role_id=int(decision.role_id),
+                role_kind=getattr(role, "role_kind", None),
+                decision_type=decision_type,
+            )
+            and (
+                not generation_matches_decision
+                or not score_generation_is_current(
+                    db,
+                    expected=generation,
+                    locked_role=role,
+                    application=score_app,
+                )
+            )
+        ):
+            held = dict(decision.evidence or {})
+            held["auto_execute_hold"] = {
+                "status": "score_refresh_required",
+                "detail": (
+                    "Candidate scoring inputs changed; wait for the latest "
+                    "score before automatic action."
+                ),
+            }
+            decision.evidence = held
+            db.add(decision)
+            return False
 
     if decision_type == "advance_to_interview":
         prior_assessment = (
@@ -1872,6 +2009,8 @@ def _auto_execute_decision(
             role_id=int(role.id),
             task_id=int(ev["task_id"]) if ev.get("task_id") is not None else None,
             duration_minutes=int(ev.get("duration_minutes") or 90),
+            expected_score_generation=generation,
+            expected_decision_type="send_assessment",
         )
         # A billing/configuration guard can legitimately no-op the send. Do not
         # close the decision as approved when no invite exists; keep the card
@@ -1923,14 +2062,7 @@ def _auto_execute_decision(
     # Auto resolution must have the same external/audit consequences as a
     # human approval. Previously the local stage changed but Workable stage
     # writeback, the activity note and graph/outcome trail were skipped.
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(decision.application_id),
-            CandidateApplication.organization_id == int(role.organization_id),
-        )
-        .first()
-    )
+    app = score_app
     org = (
         db.query(Organization)
         .filter(Organization.id == int(role.organization_id))
@@ -1971,6 +2103,7 @@ def maybe_auto_execute_decision(
     decision_type: str,
     on_policy: bool = True,
     force_human_review: bool = False,
+    expected_score_generation: Any | None = None,
 ) -> dict[str, bool | str | None]:
     """Apply the role's autonomy contract to a freshly queued decision.
 
@@ -2043,7 +2176,19 @@ def maybe_auto_execute_decision(
         # raised after ``send_assessment`` flushed its rows could be swallowed by
         # the caller and those partial changes would be committed with the rest
         # of the cohort.
-        db.flush()
+        # Establish Organization -> Role before flushing a corrected/new
+        # AgentDecision. RoleIntent edits take Role before touching decision
+        # rows; flushing first would invert that order for auto-correct callers.
+        # ``lock_live_role`` flushes only after both locks are held, and the
+        # locked row is reused inside the savepoint to avoid an unverifiable
+        # caller-owned-lock flag.
+        from ..services.role_execution_guard import lock_live_role
+
+        locked_live_role = lock_live_role(
+            db,
+            role_id=int(role.id),
+            organization_id=int(role.organization_id),
+        )
         try:
             with db.begin_nested():
                 executed = bool(
@@ -2052,6 +2197,8 @@ def maybe_auto_execute_decision(
                         role=role,
                         decision=decision,
                         decision_type=decision_type,
+                        _locked_live_role=locked_live_role,
+                        expected_score_generation=expected_score_generation,
                     )
                 )
         except Exception as exc:
@@ -2102,6 +2249,9 @@ def _queue(
     idempotency_key_suffix: Optional[str] = None,
 ) -> Any:
     actor = Actor.agent(int(agent_run.id))
+    score_generation = _score_generation_for(
+        agent_run, int(args["application_id"])
+    )
     evidence = _queue_evidence(
         db,
         agent_run=agent_run,
@@ -2123,6 +2273,7 @@ def _queue(
         model_version=str(agent_run.model_version or ""),
         prompt_version=str(agent_run.prompt_version or ""),
         idempotency_key_suffix=idempotency_key_suffix,
+        expected_score_generation=score_generation,
     )
     # Per-cycle decision budget counts ACTUAL new rows, not tool calls.
     # The orchestrator's by-name counter over-counted dedup paths
@@ -2146,6 +2297,7 @@ def _queue(
         decision=decision,
         decision_type=decision_type,
         on_policy=on_policy,
+        expected_score_generation=score_generation,
     )
     if autonomy["off_policy_withheld"]:
         logging.getLogger("taali.agent.policy").warning(
@@ -2209,6 +2361,116 @@ def _tool_queue_escalate_decision(
     )
 
 
+def _queue_forced_policy_score_refresh(
+    db: Session,
+    *,
+    role: Role,
+    application_id: int,
+) -> dict[str, Any]:
+    """Turn ``evaluate_policy(skip_cache=True)`` into a durable re-score.
+
+    A forced refresh must never run ephemeral scoring sub-agents and then bind
+    their verdict to the prior durable generation. Invalidate first, enqueue the
+    canonical score pipeline, and return a non-actionable sentinel. Repeated
+    requests reuse an already-pending/running attempt instead of creating a
+    second paid job.
+    """
+    from ..models.cv_score_job import (
+        SCORE_JOB_PENDING,
+        SCORE_JOB_RUNNING,
+        CvScoreJob,
+    )
+    from ..services.cv_score_orchestrator import (
+        enqueue_score,
+        mark_application_scores_stale,
+        supersede_pending_decisions_for_app,
+    )
+    from ..services.role_execution_guard import lock_live_role
+
+    live_role = lock_live_role(
+        db,
+        role_id=int(role.id),
+        organization_id=int(role.organization_id),
+    )
+    if live_role is None:
+        return {
+            "decision_type": "score_refresh_pending",
+            "status": "not_found",
+            "application_id": int(application_id),
+            "score_job_id": None,
+            "reasoning": "Role is unavailable for a durable score refresh.",
+        }
+    role = live_role
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(role.organization_id),
+            CandidateApplication.role_id == int(role.id),
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+    if app is None:
+        return {
+            "decision_type": "score_refresh_pending",
+            "status": "not_found",
+            "application_id": int(application_id),
+            "score_job_id": None,
+            "reasoning": "Application is unavailable for a durable score refresh.",
+        }
+
+    active = (
+        db.query(CvScoreJob)
+        .filter(
+            CvScoreJob.application_id == int(app.id),
+            CvScoreJob.role_id == int(role.id),
+            CvScoreJob.status.in_((SCORE_JOB_PENDING, SCORE_JOB_RUNNING)),
+        )
+        .order_by(CvScoreJob.id.desc())
+        .with_for_update()
+        .first()
+    )
+    if active is not None:
+        # The active attempt already makes every score-backed action fail
+        # closed. Remove any old pending card without inserting a newer stale
+        # row that would overtake and strand the in-flight job.
+        supersede_pending_decisions_for_app(
+            db, int(app.id), reason="agent_forced_refresh"
+        )
+        db.commit()
+        job = active
+        sentinel = "score_refresh_pending"
+    else:
+        mark_application_scores_stale(
+            db, int(app.id), reason="agent_forced_refresh"
+        )
+        job = enqueue_score(
+            db,
+            app,
+            bypass_pre_screen=True,
+            requires_active_agent=True,
+        )
+        if job is None:
+            db.commit()
+        sentinel = "score_refresh_queued" if job is not None else "score_refresh_pending"
+
+    return {
+        "decision_type": sentinel,
+        "status": str(getattr(job, "status", None) or "pending"),
+        "application_id": int(app.id),
+        "score_job_id": (
+            int(job.id) if job is not None and getattr(job, "id", None) is not None else None
+        ),
+        "reasoning": (
+            "A durable score refresh is queued or running. Wait for it to finish, "
+            "then evaluate policy again before taking any action."
+        ),
+    }
+
+
 def _tool_evaluate_policy(
     db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
 ) -> Any:
@@ -2228,6 +2490,21 @@ def _tool_evaluate_policy(
 
     application_id = int(args["application_id"])
     skip_cache = bool(args.get("skip_cache", False))
+
+    if skip_cache:
+        # Revoke any earlier same-cycle verdict before starting the durable
+        # refresh. A model cannot queue from the old snapshot while B is pending.
+        snapshots = getattr(agent_run, "__engine_policy_snapshots__", None)
+        if isinstance(snapshots, dict):
+            snapshots.pop(application_id, None)
+        verdicts = getattr(agent_run, "__engine_verdicts__", None)
+        if isinstance(verdicts, dict):
+            verdicts.pop(application_id, None)
+        return _queue_forced_policy_score_refresh(
+            db,
+            role=role,
+            application_id=application_id,
+        )
 
     # Cycle-scoped already-evaluated tracker — keyed on the agent_run row
     # so each cycle starts fresh. ``__evaluated_apps__`` is an attribute
@@ -2256,6 +2533,17 @@ def _tool_evaluate_policy(
         }
     evaluated.add(application_id)
     agent_run.__evaluated_apps__ = evaluated  # type: ignore[attr-defined]
+
+    # Capture the exact durable score generation BEFORE policy evaluation
+    # hydrates any candidate inputs. A later queue/send must match this token;
+    # a replacement score reaching DONE is not permission to use this verdict.
+    from ..components.scoring.freshness import capture_score_generation
+
+    score_generation = capture_score_generation(
+        db,
+        role=role,
+        application_id=application_id,
+    )
 
     # org/role/entity must be present so the sub-agents' Anthropic calls
     # (cv_scoring, pre_screen) write attributable usage_events and count
@@ -2304,7 +2592,7 @@ def _tool_evaluate_policy(
     if snapshots is None:
         snapshots = {}
         agent_run.__engine_policy_snapshots__ = snapshots  # type: ignore[attr-defined]
-    snapshots[int(application_id)] = _policy_snapshot_for_evaluation(
+    snapshot = _policy_snapshot_for_evaluation(
         db,
         role=role,
         application_id=application_id,
@@ -2312,6 +2600,8 @@ def _tool_evaluate_policy(
         sub_outputs=sub_outputs,
         persisted_decision_type=persisted_decision_type,
     )
+    snapshot["_score_generation"] = score_generation
+    snapshots[int(application_id)] = snapshot
     # Telemetry: structured log so the Hub's signals dashboard can
     # bucket evaluations per (org, role, decision_type, revision).
     logging.getLogger("taali.policy.evaluation").info(

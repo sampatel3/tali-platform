@@ -39,6 +39,11 @@ import { ScoreProvenance } from '../../features/candidates/ScoreProvenance';
 import { IntegrityFlags } from './IntegrityFlags';
 import { DecisionNarrative } from './DecisionNarrative';
 import { applicationDateContext, ruleChipText } from './decisionPresentation';
+import {
+  decisionStalenessReasons,
+  isApprovalBlockingStale,
+  isEngineOnlyStale,
+} from './decisionStaleness';
 import { normaliseDecisionText } from './decisionText';
 import {
   buildRejectConsequenceCopy,
@@ -84,8 +89,9 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   // Old-model staleness reads differently from an input change — the inputs
   // didn't move, the scoring engine did. Re-evaluate here re-scores on the
   // current engine rather than just re-running the agent.
-  const stalenessReasons = Array.isArray(decision.staleness_reasons) ? decision.staleness_reasons : [];
-  const staleEngineOnly = stalenessReasons.length > 0 && stalenessReasons.every((r) => r === 'engine_outdated');
+  const stalenessReasons = decisionStalenessReasons(decision);
+  const staleEngineOnly = isEngineOnlyStale(decision);
+  const approvalBlockedByStaleness = isApprovalBlockingStale(decision);
 
   const isPending = decision.status === 'pending' || decision.status === 'reverted_for_feedback';
   // A re-score is running for this candidate (Re-evaluate on an old-engine
@@ -126,7 +132,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   const primaryTitle = staleEngineOnly
     ? 'Scored by an older version of Taali’s scoring — this approves the old score as-is. Re-evaluate first to refresh it.'
     : isStale
-      ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
+      ? 'Inputs changed since this was decided — re-evaluate before approving.'
       : undefined;
   // Same reject consequence the candidate-report rail shows, from the shared
   // source — so a recruiter approving a reject from the hub queue sees what it
@@ -253,7 +259,7 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
             size="md"
             className="rq-rec-btn"
             onClick={() => onApprove(decision)}
-            disabled={frozen}
+            disabled={frozen || approvalBlockedByStaleness}
             title={primaryButtonTitle}
           >
             <PrimaryIcon size={16} strokeWidth={2.4} aria-hidden="true" />

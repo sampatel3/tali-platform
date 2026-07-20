@@ -44,6 +44,11 @@ def _seed_role(db, org, *, auto_reject=False, agentic=True, auto_reject_pre_scre
         auto_reject=auto_reject,
         auto_reject_pre_screen=auto_reject_pre_screen,
         score_threshold=50,
+        # Keep the expected 50-point policy stable. The model default is auto,
+        # which deliberately recalibrates the live cutoff; the generation
+        # fence must reject a caller verdict captured against a different
+        # threshold rather than silently relabel it as current.
+        auto_reject_threshold_mode="manual",
         monthly_usd_budget_cents=0,
         job_spec_text="Requirements\n- Python\n",
     )
@@ -71,6 +76,12 @@ def _seed_app(db, org, role, *, workable_id="wk-1") -> CandidateApplication:
         source="manual",
         workable_candidate_id=workable_id,
         pre_screen_score_100=10,
+        # A real completed pre-screen persists both the display score and this
+        # durable source score. ``run_auto_reject_if_needed`` refreshes display
+        # fields before evaluating, while the freshness fence deliberately
+        # requires a surviving persisted-score authority for legacy rows that
+        # predate ``CvScoreJob``. Keep this fixture faithful to that contract.
+        genuine_pre_screen_score_100=10,
         pre_screen_recommendation="Below threshold",
         pre_screen_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )

@@ -16,7 +16,6 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..actions import queue_decision
 from ..actions.types import Actor
-from ..agent_runtime.decision_translation import role_has_assessment_stage
 from ..models.agent_decision import AgentDecision
 from ..models.agent_run import AgentRun
 from ..models.assessment import Assessment, AssessmentStatus
@@ -24,13 +23,16 @@ from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import SISTER_EVAL_DONE, SisterRoleEvaluation
 from .agent_policy_settings import automation_enabled_for_decision
-from .auto_threshold_service import resolve_role_fit_threshold
 from .decision_role_context import (
     compact_requirements_from_details,
     integrity_from_evaluation,
     score_provenance_from_evaluation,
 )
-from .role_execution_guard import automatic_role_action_block_reason
+from .decision_policy_generation import (
+    DecisionPolicyGeneration,
+    capture_decision_policy_generation,
+)
+from .role_execution_guard import automatic_role_action_block_reason, lock_live_role
 from .sister_role_service import (
     source_application_is_globally_advanced,
     source_application_is_globally_closed,
@@ -137,6 +139,7 @@ def _queue_role_decision(
     threshold: float,
     assessment: Assessment | None,
     run: AgentRun,
+    policy_generation: DecisionPolicyGeneration,
 ) -> tuple[AgentDecision, bool]:
     app = evaluation.source_application
     stage = "assessment" if assessment is not None else "full_scoring"
@@ -153,6 +156,8 @@ def _queue_role_decision(
         # score before assessment and the role-owned assessment score after it.
         "taali_score": float(score),
         "effective_threshold": float(threshold),
+        "has_assessment_task": policy_generation.has_assessment_task,
+        "policy_revision_id": policy_generation.policy_revision_id,
         "shared_ats_application": True,
         "candidate_summary": evaluation.summary,
         "score_provenance": score_provenance_from_evaluation(evaluation),
@@ -241,6 +246,38 @@ def run_related_role_cycle(
 ) -> dict:
     """Materialise decisions/actions for one related role's local funnel."""
 
+    role_id = int(role.id)
+    organization_id = int(role.organization_id)
+    # Queueing can immediately auto-execute. Establish the platform-wide lock
+    # order before any shared Application or role-local evaluation lock so that
+    # the later side-effect boundary cannot invert Application -> Org/Role.
+    locked_role = lock_live_role(
+        db,
+        role_id=role_id,
+        organization_id=organization_id,
+    )
+    if locked_role is None:
+        return {
+            "status": "skipped",
+            "reason": "role is unavailable",
+            "role_id": role_id,
+        }
+    # The caller commonly loaded Role before entering this service. Finish that
+    # transaction while only the canonical Org/Role pair is held, then reacquire
+    # the live pair in a fresh transaction before any candidate-row claim.
+    db.commit()
+    locked_role = lock_live_role(
+        db,
+        role_id=role_id,
+        organization_id=organization_id,
+    )
+    if locked_role is None:
+        return {
+            "status": "skipped",
+            "reason": "role is unavailable",
+            "role_id": role_id,
+        }
+    role = locked_role
     if str(role.role_kind or "") != ROLE_KIND_SISTER or not role.ats_owner_role_id:
         raise ValueError("Role is not a coupled related role")
     block_reason = automatic_role_action_block_reason(role, db=db)
@@ -248,7 +285,7 @@ def run_related_role_cycle(
         return {
             "status": "skipped",
             "reason": block_reason,
-            "role_id": int(role.id),
+            "role_id": role_id,
         }
 
     query = (
@@ -268,13 +305,14 @@ def run_related_role_cycle(
     evaluation_ids = [int(row_id) for (row_id,) in rows]
     summary: Counter = Counter()
     run: AgentRun | None = None
-    resolved_threshold = resolve_role_fit_threshold(db, role=role)
+    policy_generation = capture_decision_policy_generation(db, role=role)
+    resolved_threshold = policy_generation.effective_threshold
     threshold = float(
         resolved_threshold
         if resolved_threshold is not None
         else (role.score_threshold if role.score_threshold is not None else 50)
     )
-    has_assessment = role_has_assessment_stage(role)
+    has_assessment = policy_generation.has_assessment_task
 
     for current_evaluation_id in evaluation_ids:
         locator = (
@@ -357,6 +395,7 @@ def run_related_role_cycle(
                     threshold=threshold,
                     assessment=assessment,
                     run=run,
+                    policy_generation=policy_generation,
                 )
                 summary["created" if created else "deduplicated"] += 1
                 summary["resend_assessment_invite"] += 1
@@ -403,6 +442,7 @@ def run_related_role_cycle(
             threshold=threshold,
             assessment=assessment,
             run=run,
+            policy_generation=policy_generation,
         )
         summary["created" if created else "deduplicated"] += 1
         summary[decision_type] += 1
@@ -424,7 +464,7 @@ def run_related_role_cycle(
         role.agent_bootstrap_error = None
         role.agent_bootstrap_completed_at = run.finished_at
     db.commit()
-    return {"status": "ok", "role_id": int(role.id), **dict(summary)}
+    return {"status": "ok", "role_id": role_id, **dict(summary)}
 
 
 __all__ = ["run_related_role_cycle"]

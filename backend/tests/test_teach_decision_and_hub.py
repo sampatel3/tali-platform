@@ -394,6 +394,11 @@ def test_approve_sets_human_disposition(db):
 
     s = _seed(db)
     user = _user(db, s.org)
+    # This is a legacy pre-fingerprint card, but it still needs a real
+    # persisted score to be actionable. A score-backed decision with no score
+    # generation correctly fails closed as ``score_refresh_required``.
+    s.application.pre_screen_score_100 = 80.0
+    db.flush()
 
     # Stub out the side-effect dispatch (advance_stage / reject_application)
     # so we don't need a real pipeline_service in these unit tests.
@@ -745,6 +750,37 @@ def test_snooze_route_hides_decision_from_pending(client):
     rows = listing.json()
     ids = [row["id"] for row in rows]
     assert seeded["decision_id"] not in ids, "snoozed row should be hidden from pending"
+
+
+def test_snooze_route_accepts_reverted_decision_and_hides_it_from_home(client):
+    from tests.conftest import auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_via_session(org_name="Snoozed Taught Org")
+    _attach_user_to_org(email, seeded["org_id"])
+
+    feedback = client.post(
+        "/api/v1/agent/feedback",
+        headers=headers,
+        json={
+            "decision_id": seeded["decision_id"],
+            "failure_mode": "rubric_mismatch",
+            "correction_text": "Use the corrected role rubric.",
+            "scope": "role",
+        },
+    )
+    assert feedback.status_code == 200, feedback.text
+    assert feedback.json()["decision_status"] == "reverted_for_feedback"
+
+    snooze = client.post(
+        f"/api/v1/agent-decisions/{seeded['decision_id']}/snooze",
+        headers=headers,
+    )
+    assert snooze.status_code == 200, snooze.text
+
+    listing = client.get("/api/v1/agent-decisions", headers=headers)
+    assert listing.status_code == 200, listing.text
+    assert seeded["decision_id"] not in {row["id"] for row in listing.json()}
 
 
 def test_list_feedback_route_returns_seeded_rows(client):

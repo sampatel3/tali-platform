@@ -34,7 +34,8 @@ from app.tasks.agent_tasks import (
 
 def _seed_role(db, *, agentic_mode_enabled: bool = True) -> tuple[Organization, Role]:
     org = Organization(name="O", slug=f"o-{id(db)}")
-    db.add(org); db.flush()
+    db.add(org)
+    db.flush()
     role = Role(
         organization_id=org.id,
         name="R",
@@ -43,7 +44,8 @@ def _seed_role(db, *, agentic_mode_enabled: bool = True) -> tuple[Organization, 
         monthly_usd_budget_cents=5000,
         job_spec_text="hire stuff",
     )
-    db.add(role); db.flush()
+    db.add(role)
+    db.flush()
     return org, role
 
 
@@ -62,7 +64,8 @@ def _seed_app(
         email=f"{uuid.uuid4().hex[:8]}@x.test",
         full_name="C",
     )
-    db.add(cand); db.flush()
+    db.add(cand)
+    db.flush()
     app = CandidateApplication(
         organization_id=org.id,
         candidate_id=cand.id,
@@ -75,7 +78,8 @@ def _seed_app(
         cv_text=cv_text,
         cv_match_score=cv_match_score,
     )
-    db.add(app); db.flush()
+    db.add(app)
+    db.flush()
     return app
 
 
@@ -141,6 +145,115 @@ def test_auto_enqueue_replays_paused_deferred_rescore_after_resume(db):
         bypass_pre_screen=True,
         requires_active_agent=True,
     )
+
+
+def test_active_agent_replays_role_intent_change_with_visible_old_score(db):
+    org, role = _seed_role(db)
+    app = _seed_app(db, org=org, role=role, cv_match_score=72.0)
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="stale",
+            error_message="role_intent_changed",
+            requires_active_agent=True,
+        )
+    )
+    db.commit()
+
+    with patch(
+        "app.services.cv_score_orchestrator.enqueue_score", return_value=object()
+    ) as enqueue:
+        count = _auto_enqueue_scoring(db, role=role, limit=1)
+
+    assert count == 1
+    enqueue.assert_called_once_with(
+        db,
+        app,
+        force=True,
+        bypass_pre_screen=False,
+        requires_active_agent=True,
+    )
+
+
+@pytest.mark.parametrize("held", ("paused", "off"))
+def test_role_intent_change_waits_while_agent_is_not_runnable(db, held):
+    org, role = _seed_role(db)
+    app = _seed_app(db, org=org, role=role, cv_match_score=72.0)
+    if held == "paused":
+        role.agent_paused_at = datetime.now(timezone.utc)
+    else:
+        role.agentic_mode_enabled = False
+    stale = CvScoreJob(
+        application_id=int(app.id),
+        role_id=int(role.id),
+        status="stale",
+        error_message="role_intent_changed",
+        requires_active_agent=True,
+    )
+    db.add(stale)
+    db.commit()
+
+    with patch("app.services.cv_score_orchestrator.enqueue_score") as enqueue:
+        count = _auto_enqueue_scoring(db, role=role, limit=1)
+
+    assert count == 0
+    enqueue.assert_not_called()
+    db.refresh(stale)
+    assert stale.status == "stale"
+
+
+def test_other_stale_reason_never_enters_automatic_intent_recovery(db):
+    org, role = _seed_role(db)
+    app = _seed_app(db, org=org, role=role, cv_match_score=72.0)
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="stale",
+            error_message="candidate_data_changed",
+            requires_active_agent=True,
+        )
+    )
+    db.commit()
+
+    with patch("app.services.cv_score_orchestrator.enqueue_score") as enqueue:
+        count = _auto_enqueue_scoring(db, role=role, limit=1)
+
+    assert count == 0
+    enqueue.assert_not_called()
+
+
+def test_recovery_uses_largest_job_id_when_latest_attempt_is_backdated(db):
+    org, role = _seed_role(db)
+    app = _seed_app(db, org=org, role=role, cv_match_score=72.0)
+    # The later INSERT is the causal successor even if mixed timestamp sources
+    # give it an older queued_at value.
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="done",
+            queued_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        )
+    )
+    db.flush()
+    db.add(
+        CvScoreJob(
+            application_id=int(app.id),
+            role_id=int(role.id),
+            status="stale",
+            error_message="role_intent_changed",
+            queued_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+    )
+    db.commit()
+
+    with patch("app.services.cv_score_orchestrator.enqueue_score") as enqueue:
+        count = _auto_enqueue_scoring(db, role=role, limit=1)
+
+    assert count == 1
+    enqueue.assert_called_once()
 
 
 def test_auto_enqueue_skips_apps_without_cv_text(db):

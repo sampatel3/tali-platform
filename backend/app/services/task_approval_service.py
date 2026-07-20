@@ -146,9 +146,28 @@ def approve_task_for_use(
     task approval with the role activation transaction.  Callers must commit on
     success and roll back on :class:`TaskApprovalError` or database failure.
     """
-    # Keep this check outside the provisioning helper too: tests and alternate
-    # adapters may replace the remote provisioning seam, but can never bypass
-    # the candidate-content validation contract.
+    # Validate the caller-visible draft before the lock query refreshes the
+    # canonical row.  A battle-test worker may have changed this JSON in the
+    # current transaction; silently replacing a failed/pending verdict with an
+    # older persisted pass would turn the row refresh into an approval bypass.
+    # The second validation below is still required for changes committed by a
+    # concurrent transaction before we acquire the Task lock.
+    _validate_generated_battle_test(task)
+
+    # Lock every workspace/role currently linked to this draft before touching
+    # either its repository or active flag. Automatic sends hold this same
+    # Organization -> Role boundary through provisioning, so approval cannot
+    # race a send or invert Role/Task lock order.
+    from .task_mutation_guard import lock_task_mutation_boundary
+
+    boundary = lock_task_mutation_boundary(db, task_ids=[int(task.id)])
+    task = boundary.task(int(task.id))
+    if task is None:
+        raise TaskApprovalError("Task disappeared before approval")
+
+    # Keep this post-lock check outside the provisioning helper too: tests and
+    # alternate adapters may replace the remote provisioning seam, but can
+    # never bypass the canonical candidate-content validation contract.
     _validate_generated_battle_test(task)
     repo_url = provision_and_validate_task_repository(task, settings_obj=settings_obj)
     extra = dict(task.extra_data) if isinstance(task.extra_data, dict) else {}
@@ -169,19 +188,20 @@ def approve_task_for_use(
     # approval makes the task executable, close the role's stale setup prompt
     # in this same transaction. Keeping this at the shared approval boundary
     # covers Tasks, Agent Chat, and durable Turn-on without route drift.
-    from ..models.role import Role, role_tasks
+    from ..models.role import role_tasks
     from .agent_activation_checklist import resolve_satisfied_activation_questions
 
-    linked_roles = (
-        db.query(Role)
-        .join(role_tasks, role_tasks.c.role_id == Role.id)
-        .filter(role_tasks.c.task_id == int(task.id))
-        .all()
-    )
-    for role in linked_roles:
-        has_other_active_task = any(
-            int(linked.id) != int(task.id) and bool(linked.is_active)
-            for linked in list(role.tasks or [])
+    for role in boundary.roles:
+        has_other_active_task = (
+            db.query(Task.id)
+            .join(role_tasks, role_tasks.c.task_id == Task.id)
+            .filter(
+                role_tasks.c.role_id == int(role.id),
+                Task.id != int(task.id),
+                Task.is_active.is_(True),
+            )
+            .first()
+            is not None
         )
         if not has_other_active_task:
             # This draft was the reason assessment skipping was fixed on.

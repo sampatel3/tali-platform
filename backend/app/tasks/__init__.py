@@ -55,11 +55,10 @@ from .sister_role_tasks import (
 # trap as scoring_tasks if skipped.
 from .corroboration_tasks import enrich_corroboration_job  # noqa: F401
 # Eager-import automation_tasks so Celery registers the event-driven
-# auto-tasks (interview focus, interview pack regen, auto-reject pre-
-# screen). Skipping this would leave them unregistered and silently
-# dropped — same trap as scoring_tasks above.
+# auto-tasks (interview focus and auto-reject pre-screen). Skipping this
+# would leave them unregistered and silently dropped — same trap as
+# scoring_tasks above.
 from .automation_tasks import (
-    generate_application_interview_pack,
     generate_role_interview_focus,
     parse_application_cv_sections,
     run_application_auto_reject,
@@ -217,7 +216,6 @@ __all__ = [
     "related_role_agent_cycle",
     "rescore_pool_against_requirement",
     "generate_role_interview_focus",
-    "generate_application_interview_pack",
     "parse_application_cv_sections",
     "run_application_auto_reject",
     "dispatch_application_cv_parse_outbox",

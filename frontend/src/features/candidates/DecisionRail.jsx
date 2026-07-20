@@ -31,6 +31,10 @@ import {
   withRoleAwareRejectCopy,
 } from '../../shared/decisions/decisionActions';
 import { ruleChipText } from '../../shared/decisions/decisionPresentation';
+import {
+  isApprovalBlockingStale,
+  isEngineOnlyStale,
+} from '../../shared/decisions/decisionStaleness';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
 
 const fmt = (v) => (v == null || Number.isNaN(Number(v)) ? '—' : Math.round(Number(v)));
@@ -96,16 +100,16 @@ export const DecisionRail = ({
   // score lands — mirrors the hub's AgentDecisionCard (PR 872). The report's
   // decision poll un-freezes it automatically.
   const rescoring = isActionable && Boolean(decision?.rescore_in_flight);
-  // Inputs (or the scoring engine) changed since this was decided. Approving
-  // acts on the OLD score — warn, don't block (Taali advises, never refuses).
+  // Changed inputs require re-evaluation. An unchanged score from an older
+  // engine retains the deliberately bounded single-row approval path.
   const isStale = isActionable && Boolean(decision?.is_stale);
-  const stalenessReasons = Array.isArray(decision?.staleness_reasons) ? decision.staleness_reasons : [];
-  const staleEngineOnly = stalenessReasons.length > 0 && stalenessReasons.every((r) => r === 'engine_outdated');
+  const staleEngineOnly = isEngineOnlyStale(decision);
+  const approvalBlockedByStaleness = isApprovalBlockingStale(decision);
   const frozen = busy || rescoring;
   const primaryTitle = staleEngineOnly
     ? 'Scored by an older version of Taali’s scoring — this approves the old score as-is. Re-evaluate first to refresh it.'
     : isStale
-      ? 'Inputs changed since this was decided — this acts on them anyway. Re-evaluate first to refresh.'
+      ? 'Inputs changed since this was decided — re-evaluate before approving.'
       : undefined;
   const spec = isActionable ? (DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS) : null;
   const PrimaryIcon = spec?.primaryIcon || Check;
@@ -207,11 +211,11 @@ export const DecisionRail = ({
             <AgentLoop
               as="button"
               kind="flow"
-              active={!frozen}
+              active={!frozen && !approvalBlockedByStaleness}
               type="button"
               className="dr-rec-btn"
               onClick={() => onApprove?.(decision)}
-              disabled={frozen}
+              disabled={frozen || approvalBlockedByStaleness}
               title={primaryButtonTitle}
             >
               <PrimaryIcon size={16} strokeWidth={2.2} aria-hidden="true" /> {spec.primaryLabel}
@@ -225,8 +229,8 @@ export const DecisionRail = ({
             </div>
           </div>
 
-          {/* Stale inputs / old engine: warn before the one-click approve.
-              Advice, never a block — the button stays live. */}
+          {/* Changed inputs block the primary recommendation; old-engine-only
+              staleness remains explicitly approvable for this single row. */}
           {isStale && !rescoring ? (
             <div className="dr-hint" role="alert">
               <span>

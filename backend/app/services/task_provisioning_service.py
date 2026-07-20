@@ -200,33 +200,30 @@ def generate_and_link_task_for_role(
         )
 
     spec = result.spec
-    # Re-lock immediately before persistence.  Generation is deliberately done
-    # without holding a row lock; this claim-token check prevents an older
-    # worker persisting stale output if the requisition was republished during
-    # the model calls.  The linked-task check also makes redelivery idempotent.
+    # Re-lock immediately before persistence. Generation is deliberately done
+    # without holding a row lock; the shared Organization -> Role boundary
+    # serializes this new link with assessment sends and recruiter unlinking.
+    from .task_mutation_guard import lock_task_mutation_boundary
+
+    boundary = lock_task_mutation_boundary(
+        db,
+        role_ids=[int(role.id)],
+        organization_ids=[int(organization_id)],
+    )
+    locked_role = boundary.role(int(role.id))
+    if locked_role is None:
+        db.rollback()
+        raise TaskProvisioningSupersededError("role was removed during generation")
     if claim_token:
-        locked_role = (
-            db.query(Role)
-            .filter(
-                Role.id == int(role.id),
-                Role.organization_id == int(organization_id),
-            )
-            .with_for_update()
-            .populate_existing()
-            .one_or_none()
-        )
-        if locked_role is None:
-            db.rollback()
-            raise TaskProvisioningSupersededError("role was removed during generation")
         state = task_provisioning_state(locked_role)
         if str(state.get("claim_token") or "") != str(claim_token):
             db.rollback()
             raise TaskProvisioningSupersededError(
                 "a newer role publish superseded this generation claim"
             )
-        if _linked_task_id(db, int(role.id)) is not None:
-            db.rollback()
-            return None
+    if _linked_task_id(db, int(role.id)) is not None:
+        db.rollback()
+        return None
 
     try:
         task = _persist_generated_task(

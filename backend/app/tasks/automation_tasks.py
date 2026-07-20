@@ -93,6 +93,19 @@ def _set_activation_tech_state(
     role.assessment_task_provisioning = provisioning
 
 
+def _superseded_role_artifact_result(*, role_id: int, fence) -> dict | None:
+    if fence.current:
+        return None
+    result = {
+        "status": "superseded",
+        "reason": str(fence.reason or "role_inputs_changed"),
+        "role_id": int(role_id),
+    }
+    if fence.detail:
+        result["detail"] = str(fence.detail)
+    return result
+
+
 @celery_app.task(
     name="app.tasks.automation_tasks.regenerate_role_tech_questions",
     bind=True,
@@ -101,10 +114,9 @@ def _set_activation_tech_state(
 def regenerate_role_tech_questions(self, role_id: int) -> dict:
     """Refresh the role-level cached tech screening questions.
 
-    Dispatched from ``mark_role_scores_stale`` after a job-spec or
-    criteria change. Async because the LLM call adds ~2-3s of latency
-    and we don't want to slow down the recruiter's PATCH /roles or the
-    chip-CRUD endpoints by that much.
+    Dispatched after commit by the role provider-artifact lifecycle after a
+    job-spec or criteria change. Async because the LLM call adds ~2-3s of
+    latency and must not slow down the recruiter's role or criterion edit.
 
     Idempotent: ``get_or_regenerate`` checks the signature and skips the
     LLM call if nothing changed since the previous run, so a burst of
@@ -113,7 +125,10 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
     from ..models.role import Role
     from ..platform.database import SessionLocal
     from ..services.provider_usage_admission import serialize_provider_work
-    from ..services.role_tech_questions_service import get_or_regenerate
+    from ..services.role_tech_questions_service import (
+        RoleTechQuestionGenerationSuperseded,
+        get_or_regenerate,
+    )
 
     db = SessionLocal()
     try:
@@ -133,7 +148,23 @@ def regenerate_role_tech_questions(self, role_id: int) -> dict:
                 "detail": role_block,
                 "role_id": role_id,
             }
-        result = get_or_regenerate(db, role)
+        try:
+            result = get_or_regenerate(
+                db,
+                role,
+                requires_running_agent=True,
+                raise_on_superseded=True,
+            )
+        except RoleTechQuestionGenerationSuperseded as exc:
+            db.rollback()
+            response = {
+                "status": "superseded",
+                "reason": str(exc.reason),
+                "role_id": int(role_id),
+            }
+            if exc.detail:
+                response["detail"] = str(exc.detail)
+            return response
         if role.tech_questions_signature:
             _set_activation_tech_state(role, status="succeeded")
         else:
@@ -178,7 +209,10 @@ def generate_role_interview_focus(
     from ..services.interview_focus_service import generate_interview_focus_sync
     from ..services.interview_support_service import build_role_interview_pack_templates
     from ..services.provider_usage_admission import serialize_provider_work
-    from ..services.role_criteria_service import render_role_intent_block
+    from ..services.role_provider_generation import (
+        capture_role_provider_generation,
+        lock_and_check_role_provider_generation,
+    )
 
     db = SessionLocal()
     try:
@@ -210,8 +244,14 @@ def generate_role_interview_focus(
                     "detail": role_block,
                     "role_id": role_id,
                 }
-        job_spec_text = (role.job_spec_text or "").strip()
-        if not job_spec_text:
+        expected_generation = capture_role_provider_generation(
+            db,
+            role_id=int(role.id),
+            organization_id=int(role.organization_id),
+        )
+        if expected_generation is None:
+            return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        if not expected_generation.job_spec_text:
             return {"status": "skipped", "reason": "no_job_spec", "role_id": role_id}
         # Publish/spec-update paths clear this cache before dispatch. A duplicate
         # delivery after the first worker committed is therefore a true no-op,
@@ -232,10 +272,12 @@ def generate_role_interview_focus(
 
         try:
             interview_focus = generate_interview_focus_sync(
-                job_spec_text=job_spec_text,
+                job_spec_text=expected_generation.job_spec_text,
                 api_key=settings.ANTHROPIC_API_KEY,
                 model=settings.resolved_claude_scoring_model,
-                additional_requirements=render_role_intent_block(role) or None,
+                additional_requirements=(
+                    expected_generation.recruiter_requirements or None
+                ),
                 metering={
                     "feature": "interview_focus",
                     "organization_id": getattr(role, "organization_id", None),
@@ -248,18 +290,40 @@ def generate_role_interview_focus(
         except Exception as exc:
             logger.exception("generate_role_interview_focus failed role_id=%s", role_id)
             db.rollback()
-            role = db.query(Role).filter(Role.id == role_id).first()
-            if role is not None:
-                _set_activation_focus_state(
-                    role,
-                    status="retry_wait",
-                    error=f"{type(exc).__name__}: {exc}",
-                    retry_after=timedelta(minutes=5),
-                )
-                db.commit()
+            fence = lock_and_check_role_provider_generation(
+                db,
+                expected=expected_generation,
+                requires_running_agent=requires_running_agent,
+            )
+            superseded = _superseded_role_artifact_result(
+                role_id=role_id, fence=fence
+            )
+            if superseded is not None:
+                db.rollback()
+                return superseded
+            role = fence.role
+            _set_activation_focus_state(
+                role,
+                status="retry_wait",
+                error=f"{type(exc).__name__}: {exc}",
+                retry_after=timedelta(minutes=5),
+            )
+            db.commit()
             return {"status": "error", "role_id": role_id}
 
         if not interview_focus:
+            fence = lock_and_check_role_provider_generation(
+                db,
+                expected=expected_generation,
+                requires_running_agent=requires_running_agent,
+            )
+            superseded = _superseded_role_artifact_result(
+                role_id=role_id, fence=fence
+            )
+            if superseded is not None:
+                db.rollback()
+                return superseded
+            role = fence.role
             _set_activation_focus_state(
                 role,
                 status="retry_wait",
@@ -269,6 +333,18 @@ def generate_role_interview_focus(
             db.commit()
             return {"status": "no_output", "role_id": role_id}
 
+        fence = lock_and_check_role_provider_generation(
+            db,
+            expected=expected_generation,
+            requires_running_agent=requires_running_agent,
+        )
+        superseded = _superseded_role_artifact_result(
+            role_id=role_id, fence=fence
+        )
+        if superseded is not None:
+            db.rollback()
+            return superseded
+        role = fence.role
         role.interview_focus = interview_focus
         role.interview_focus_generated_at = datetime.now(timezone.utc)
         templates = build_role_interview_pack_templates(role)
@@ -282,49 +358,6 @@ def generate_role_interview_focus(
             logger.exception("commit failed for generate_role_interview_focus role_id=%s", role_id)
             return {"status": "error_commit", "role_id": role_id}
         return {"status": "ok", "role_id": role_id}
-    finally:
-        db.close()
-
-
-@celery_app.task(
-    name="app.tasks.automation_tasks.generate_application_interview_pack",
-    bind=True,
-    max_retries=0,
-)
-def generate_application_interview_pack(self, application_id: int) -> dict:
-    """Regenerate the screening + tech interview packs for an application.
-
-    Fired when an application is created (any source) or its inputs change
-    (CV uploaded, assessment submitted with new transcript, etc.). The
-    packs are stored on the application row; pipeline list reads them
-    from cache without making Claude calls per row.
-    """
-    from ..models.candidate_application import CandidateApplication
-    from ..platform.database import SessionLocal
-    from ..services.interview_support_service import refresh_application_interview_support
-
-    db = SessionLocal()
-    try:
-        app = (
-            db.query(CandidateApplication)
-            .filter(CandidateApplication.id == application_id)
-            .first()
-        )
-        if app is None:
-            return {"status": "skipped", "reason": "not_found", "application_id": application_id}
-        try:
-            refresh_application_interview_support(
-                app,
-                organization=getattr(app, "organization", None),
-            )
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception(
-                "generate_application_interview_pack failed application_id=%s", application_id
-            )
-            return {"status": "error", "application_id": application_id}
-        return {"status": "ok", "application_id": application_id}
     finally:
         db.close()
 
@@ -352,42 +385,73 @@ def run_application_auto_reject(
 
     db = SessionLocal()
     try:
-        app = (
-            db.query(CandidateApplication)
+        identity = (
+            db.query(
+                CandidateApplication.organization_id,
+                CandidateApplication.role_id,
+            )
             .filter(CandidateApplication.id == application_id)
-            .first()
+            .one_or_none()
         )
-        if app is None:
+        if identity is None:
             return {"status": "skipped", "reason": "not_found", "application_id": application_id}
-        # HARD GUARD: a `sourced` prospect is pre-applied — un-scored and never in
-        # the decision queue. Skip auto-reject entirely (the decision-creation
-        # emitters also refuse a sourced app; this avoids the wasted evaluation).
+        organization_id, role_id = identity
+        if role_id is None:
+            return {
+                "status": "skipped",
+                "reason": "role_unavailable",
+                "application_id": application_id,
+            }
+
+        # The deterministic verdict may still be carded while automation is
+        # held, but an irreversible provider/native reject must linearize with
+        # every score and role mutation. Establish Organization -> Role ->
+        # Application, then evaluate only populate-existing rows. A worker that
+        # waited behind a fresh passing score must never act on its cached old
+        # below-threshold application snapshot.
+        from ..services.role_execution_guard import lock_live_role
+
+        role = lock_live_role(
+            db,
+            role_id=int(role_id),
+            organization_id=int(organization_id),
+        )
+        app_query = db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(organization_id),
+            CandidateApplication.role_id == int(role_id),
+            CandidateApplication.deleted_at.is_(None),
+        )
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            app_query = app_query.with_for_update()
+        app = app_query.populate_existing().one_or_none()
+        if role is None or app is None:
+            return {
+                "status": "skipped",
+                "reason": "role_or_application_changed",
+                "application_id": application_id,
+            }
+        # HARD GUARD: a `sourced` prospect is pre-applied — un-scored and never
+        # in the decision queue. Re-check after the lock so a concurrent human
+        # stage/outcome transition always wins over this worker.
         if (app.pipeline_stage or "").strip().lower() == "sourced":
             return {"status": "skipped", "reason": "sourced_prospect", "application_id": application_id}
+        from ..domains.assessments_runtime.role_support import is_resolved
+
+        if is_resolved(app):
+            return {"status": "skipped", "reason": "application_resolved", "application_id": application_id}
+        from ..components.scoring.freshness import application_scores_allow_decision
+
+        if not application_scores_allow_decision(
+            db, int(app.id), application=app, role=role
+        ):
+            return {"status": "skipped", "reason": "score_not_fresh", "application_id": application_id}
         org = (
             db.query(Organization)
-            .filter(Organization.id == app.organization_id)
-            .first()
+            .filter(Organization.id == int(organization_id))
+            .populate_existing()
+            .one_or_none()
         )
-        role = app.role
-        if role is not None:
-            # The deterministic verdict may still be carded while automation is
-            # held, but an irreversible provider/native reject must linearize
-            # with workspace Pause and role Pause/Turn off.  Lock org -> role,
-            # then re-evaluate policy against that live snapshot below.
-            from ..services.role_execution_guard import lock_live_role
-
-            role = lock_live_role(
-                db,
-                role_id=int(role.id),
-                organization_id=int(app.organization_id),
-            )
-            org = (
-                db.query(Organization)
-                .filter(Organization.id == app.organization_id)
-                .populate_existing()
-                .one_or_none()
-            )
         try:
             result = run_auto_reject_if_needed(
                 db=db,

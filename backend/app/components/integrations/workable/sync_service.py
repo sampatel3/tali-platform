@@ -52,6 +52,8 @@ from ....services.fit_matching_service import (
 )
 from ....services.spec_normalizer import normalize_spec
 from ....services.interview_support_service import build_role_interview_pack_templates
+from .post_handover_boundary import prepare_post_handover_reconciliation
+from . import scoring_context_freshness as scoring_context
 from ....services.job_spec_override_service import has_manual_job_spec_override
 from ....services.pre_screening_service import refresh_pre_screening_fields
 from ....services.role_change_audit import (
@@ -2396,6 +2398,10 @@ class WorkableSyncService:
             )
             db.add(candidate)
 
+        app, prior_scoring_context = scoring_context.find_application_and_prior_context(
+            db, candidate=candidate, organization_id=org.id, role_id=role.id,
+        )
+        cv_snapshot = scoring_context.capture_workable_cv_snapshot(db, candidate, int(org.id)) if mode == "full" else None
         candidate.deleted_at = None  # restore if was soft-deleted
         if email:
             candidate.email = sanitize_text_for_storage(email)
@@ -2425,15 +2431,10 @@ class WorkableSyncService:
         db.flush()
         counters["candidate_upserted"] += 1
 
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.organization_id == org.id,
-                CandidateApplication.candidate_id == candidate.id,
-                CandidateApplication.role_id == role.id,
+        if app is None:
+            app = scoring_context.find_application_for_candidate(
+                db, candidate=candidate, organization_id=org.id, role_id=role.id,
             )
-            .first()
-        )
         created_application = False
         if not app:
             mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(str(stage or "applied"))
@@ -2487,18 +2488,21 @@ class WorkableSyncService:
                 comment_entries, other_entries = activities_split
                 app.workable_comments = sanitize_json_for_storage(comment_entries)
                 app.workable_activities = sanitize_json_for_storage(other_entries)
-        if not _stage_overwrite_blocked(app, stage):
+        if stage and not _stage_overwrite_blocked(app, stage):
             app.workable_stage = sanitize_text_for_storage(str(stage or ""))
             app.external_stage_raw = sanitize_text_for_storage(str(stage or ""))
             app.external_stage_normalized = normalize_pipeline_key(str(stage or ""))
-
-        # A recruiter moving the candidate forward in Workable (Phone Screen /
-        # Technical / Final Interview / Offer — a post-handover stage) is a
-        # hand-off: reflect it as `advanced` on Taali so they don't strand as
-        # `applied`, and so no stale reject/advance card lingers on someone the
-        # recruiter is already interviewing. Local only — Workable already has
-        # them there, nothing is written back. Disqualification is handled near
-        # the top of this function.
+        if "sourced" in candidate_payload:
+            app.workable_sourced = candidate_payload.get("sourced")
+        scoring_context_digest = scoring_context.invalidate_scores_for_workable_context_change(
+            db, candidate=candidate, application=app,
+            prior_digest=prior_scoring_context, created_application=created_application,
+        )
+        # Workable post-handover progress receives a local second opinion; the
+        # helper starts it after a clean canonical lock boundary.
+        role, app = prepare_post_handover_reconciliation(
+            db, app=app, role=role
+        )
         try:
             reconcile_post_handover_advanced(db, app=app, role=role)
         except Exception:  # pragma: no cover — never block the candidate sync
@@ -2521,12 +2525,11 @@ class WorkableSyncService:
                 "run_id": run.id if run else None,
                 "source": "workable",
                 "mode": mode,
+                scoring_context.SCORING_CONTEXT_DIGEST_KEY: scoring_context_digest,
             }
         )
         app.last_synced_at = now
 
-        # Extract application-level Workable fields
-        app.workable_sourced = candidate_payload.get("sourced", None)
         # Applied date: the payload's created_at is per JOB APPLICATION (the
         # Workable candidate id is per-application), so it belongs here — the
         # candidate-level copy is last-sync-wins across a person's applications.
@@ -2582,6 +2585,7 @@ class WorkableSyncService:
                         filename=filename,
                         content=content,
                     )
+            scoring_context.hold_changed_workable_cv_inputs(db, candidate, cv_snapshot)
             # Refresh the read-only score cache from existing fields. Paid
             # scoring is never run synchronously inside the sync loop. Newly
             # created applications on a running role agent are admitted to the
@@ -2603,13 +2607,7 @@ class WorkableSyncService:
                 allow_paid_work=paid_work_allowed,
                 parse_origin=CV_PARSE_ORIGIN_ATS_INGEST,
             )
-            # NOTE: syncs never dispatch paid re-scoring. A changed
-            # Workable context (new answers/comments/activities) is
-            # stored for display and for the NEXT recruiter-approved
-            # evaluation; re-scoring an already-scored application is
-            # recruiter-triggered only (agent chat quotes the cost
-            # first). The old auto-rescore-on-context-change trigger
-            # looped on multi-role candidates and burned credits.
+            # Invalidation records staleness only; sync never dispatches a paid re-score.
         else:
             refresh_pre_screening_fields(app)
         app.rank_score = _rank_score_for_application(app)
