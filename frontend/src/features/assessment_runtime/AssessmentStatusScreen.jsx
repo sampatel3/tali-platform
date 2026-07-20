@@ -19,6 +19,7 @@ const detectMacShortcut = () => {
 export const AssessmentStatusScreen = ({
   mode,
   lightMode = false,
+  submissionReceiptReconciled = false,
 }) => {
   if (mode === 'loading') {
     return (
@@ -76,7 +77,9 @@ export const AssessmentStatusScreen = ({
           Task submitted
         </h1>
         <p className="mb-0 text-[14.5px] leading-[1.6] text-[var(--taali-runtime-muted)]">
-          Your work is locked in. The hiring team will review the transcript, your prompts, and the evidence.
+          {submissionReceiptReconciled
+            ? 'The server confirmed that your submission snapshot was already locked. Any editor change that could not save before finalization was not included.'
+            : 'Your work is locked in. The hiring team will review the transcript, your prompts, and the evidence.'}
         </p>
         {closeAttempted ? (
           <div className="mt-6 rounded-[14px] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-5 py-4 text-[0.84375rem] leading-6 text-[var(--taali-runtime-text)]">

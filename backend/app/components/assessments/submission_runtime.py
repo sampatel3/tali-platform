@@ -1101,6 +1101,7 @@ def submit_assessment_impl(
     workspace_repo_root_fn: Callable[[Task], str],
     collect_git_evidence_fn: Callable[[Any, str], Dict[str, Any]],
     recover_retry_sandbox_fn: Callable[[Any, Assessment, Task], Any] | None = None,
+    completion_status: AssessmentStatus = AssessmentStatus.COMPLETED,
     retry_scoring: bool = False,
     defer_scoring: bool = False,
     suppress_completion_side_effects: bool = False,
@@ -1113,6 +1114,8 @@ def submit_assessment_impl(
         AssessmentStatus.COMPLETED,
         AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
     }
+    if completion_status not in terminal_statuses:
+        raise ValueError("Submission completion status must be terminal")
     if retry_scoring:
         if assessment.status not in terminal_statuses:
             raise HTTPException(status_code=400, detail="Only a completed assessment can be re-scored")
@@ -1120,7 +1123,7 @@ def submit_assessment_impl(
     else:
         if assessment.status != AssessmentStatus.IN_PROGRESS:
             raise HTTPException(status_code=400, detail="Assessment cannot be submitted in current state")
-        terminal_status = AssessmentStatus.COMPLETED
+        terminal_status = completion_status
 
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
@@ -1210,6 +1213,14 @@ def submit_assessment_impl(
                 "total_bytes": frozen_artifact["total_bytes"],
             }
             captured_timeline = list(assessment.timeline or []) + [artifact_event]
+            if terminal_status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT:
+                captured_timeline.append(
+                    {
+                        "event_type": "auto_submit_timeout_sweep",
+                        "timestamp": captured_at.isoformat(),
+                        "scoring_failed": False,
+                    }
+                )
             if not artifact_work_present:
                 captured_timeline.append(
                     {
@@ -1259,7 +1270,11 @@ def submit_assessment_impl(
                     )
                     .update(
                         {
-                            Assessment.status: AssessmentStatus.COMPLETED,
+                            Assessment.status: terminal_status,
+                            Assessment.completed_due_to_timeout: (
+                                terminal_status
+                                == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+                            ),
                             Assessment.completed_at: captured_at,
                             Assessment.code_snapshots: claimed_snapshots,
                             Assessment.ai_prompts: claimed_prompts,
@@ -1921,7 +1936,9 @@ def submit_assessment_impl(
     completion_ts = datetime.now(timezone.utc)
     assessment.status = terminal_status
     if not retry_scoring:
-        assessment.completed_due_to_timeout = False
+        assessment.completed_due_to_timeout = (
+            terminal_status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+        )
         assessment.completed_at = completion_ts
     elif not assessment.completed_at:
         assessment.completed_at = completion_ts

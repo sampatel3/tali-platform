@@ -17,11 +17,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.task import Task
 from ...components.integrations.e2b.service import E2BService
 from ...services.document_service import process_document_upload
-from ...services.assessment_repository_service import AssessmentRepositoryService
-from ...services.credit_ledger_service import append_credit_ledger_entry
 from ...services.candidate_cv_input_lifecycle import replace_candidate_cv_and_invalidate
-from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
-from ...services.task_repo_service import normalize_repo_files
 from ...services.task_battle_test import reconstruct_generated_task_spec
 from ...services.task_spec_loader import (
     TaskSpecValidationMode,
@@ -36,11 +32,10 @@ from ...domains.assessments_runtime.pipeline_service import (
 from ...domains.assessments_runtime.role_support import refresh_application_score_cache
 from .claude_budget import build_claude_budget_snapshot, resolve_effective_budget_limit_usd
 from .interrogation import render_opener
-from .submission_runtime import (
-    submit_assessment_impl,
-)
+from .submission_runtime import submit_assessment_impl
 from .task_snapshot import freeze_assessment_task, task_view_for_assessment
 from .terminal_runtime import resolve_ai_mode, terminal_capabilities
+from .timeout_finalization import reconcile_timeout_submission_http_error
 from .workspace_provisioning import (
     _ensure_workspace_repo_permissions,
     _execution_stdout_text,
@@ -474,34 +469,15 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
             final_code,
             int(assessment.tab_switch_count or 0),
             db,
+            completion_status=AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
             wake_agent_on_commit=False,
             defer_scoring=True,
             enqueue_rubric_retry_on_commit=False,
         )
     except HTTPException as exc:
-        if exc.status_code == 409:
-            db.rollback()
-            return {"status": "already_submitted", "assessment_id": assessment.id}
-        db.rollback()
-        current_status = (
-            db.query(Assessment.status)
-            .filter(Assessment.id == int(assessment.id))
-            .scalar()
-        )
-        if current_status == AssessmentStatus.IN_PROGRESS:
-            db.refresh(assessment)
-            assessment.scoring_failed = True
-            append_assessment_timeline_event(
-                assessment,
-                "auto_submit_timeout_capture_failed",
-                {"error": str(getattr(exc, "detail", exc))[:500]},
-            )
-            db.commit()
-            return {
-                "status": "capture_failed",
-                "assessment_id": assessment.id,
-                "scoring_failed": True,
-            }
+        outcome = reconcile_timeout_submission_http_error(assessment, task, db, exc)
+        if outcome is not None:
+            return outcome
         scoring_failed = True
         logger.warning(
             "Timed-out finalize: artifact capture failed assessment_id=%s detail=%s",
@@ -535,19 +511,12 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
         scoring_failed = True
         logger.exception("Timed-out finalize: artifact capture crashed assessment_id=%s", assessment.id)
 
-    # Relabel the successfully frozen terminal row as the more honest timeout
-    # completion. Pre-terminal capture failures returned above stay retryable
-    # for the next sweep and retain their live source sandbox.
-    assessment.status = AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
-    assessment.completed_due_to_timeout = True
-    if not assessment.completed_at:
-        assessment.completed_at = utcnow()
+    # The timeout status, marker and immutable artifact were accepted in one
+    # commit. Only a post-acceptance failure needs an additional durable marker;
+    # the normal path must not reopen the old relabel crash window.
     if scoring_failed:
         assessment.scoring_failed = True
-    append_assessment_timeline_event(
-        assessment, "auto_submit_timeout_sweep", {"scoring_failed": scoring_failed}
-    )
-    db.commit()
+        db.commit()
     grading_incomplete = bool(
         getattr(assessment, "scoring_failed", False)
         or getattr(assessment, "scoring_partial", False)
@@ -1301,6 +1270,7 @@ def submit_assessment(
     db: Session,
     *,
     wake_agent_on_commit: bool = True,
+    completion_status: AssessmentStatus = AssessmentStatus.COMPLETED,
     retry_scoring: bool = False,
     defer_scoring: bool = False,
     suppress_completion_side_effects: bool = False,
@@ -1317,6 +1287,7 @@ def submit_assessment(
             workspace_repo_root_fn=_workspace_repo_root,
             collect_git_evidence_fn=_collect_git_evidence_from_sandbox,
             recover_retry_sandbox_fn=None,
+            completion_status=completion_status,
             retry_scoring=retry_scoring,
             defer_scoring=defer_scoring,
             suppress_completion_side_effects=suppress_completion_side_effects,

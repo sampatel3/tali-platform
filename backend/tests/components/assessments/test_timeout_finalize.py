@@ -10,18 +10,24 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from fastapi import HTTPException
 
 from app.components.assessments import service as assessments_svc
+from app.components.assessments.submission_runtime import (
+    _build_submission_artifact,
+    build_submission_receipt,
+)
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.role import Role
+from app.models.task import Task
 from app.services.task_catalog import PERSISTED_TASK_SPEC_KEYS
 from app.tasks import agent_tasks, rubric_retry_tasks
 from app.tasks.assessment_tasks import (
     cleanup_expired_assessments,
     finalize_timed_out_assessments,
 )
-from tests.conftest import verify_user
+from tests.conftest import TestingSessionLocal, verify_user
 
 
 def _register_and_login(client):
@@ -96,12 +102,22 @@ def test_finalize_freezes_queues_and_marks_timeout(client, db, monkeypatch):
     a = _make_assessment(client, db, headers, task["id"],
                          status=AssessmentStatus.IN_PROGRESS, started_minutes_ago=40)
 
+    real_commit = db.commit
+    commit_calls: list[None] = []
+
+    def tracked_commit():
+        commit_calls.append(None)
+        real_commit()
+
+    monkeypatch.setattr(db, "commit", tracked_commit)
+
     def fake_submit(
         assessment,
         final_code,
         tab_switch_count,
         _db,
         *,
+        completion_status,
         wake_agent_on_commit=True,
         defer_scoring=False,
         enqueue_rubric_retry_on_commit=True,
@@ -109,7 +125,9 @@ def test_finalize_freezes_queues_and_marks_timeout(client, db, monkeypatch):
         assert wake_agent_on_commit is False
         assert defer_scoring is True
         assert enqueue_rubric_retry_on_commit is False
-        assessment.status = AssessmentStatus.COMPLETED
+        assert completion_status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+        assessment.status = completion_status
+        assessment.completed_due_to_timeout = True
         assessment.completed_at = datetime.now(timezone.utc)
         assessment.scoring_partial = True
         _db.commit()
@@ -135,6 +153,7 @@ def test_finalize_freezes_queues_and_marks_timeout(client, db, monkeypatch):
     assert a.taali_score is None
     assert dispatched == [a.id]
     assert a.completed_at is not None
+    assert len(commit_calls) == 1
 
 
 def test_timed_out_finalization_defers_role_wake_until_grading_completes(
@@ -168,6 +187,7 @@ def test_timed_out_finalization_defers_role_wake_until_grading_completes(
         tab_switch_count,
         _db,
         *,
+        completion_status,
         wake_agent_on_commit=True,
         defer_scoring=False,
         enqueue_rubric_retry_on_commit=True,
@@ -175,7 +195,9 @@ def test_timed_out_finalization_defers_role_wake_until_grading_completes(
         assert wake_agent_on_commit is False
         assert defer_scoring is True
         assert enqueue_rubric_retry_on_commit is False
-        assessment.status = AssessmentStatus.COMPLETED
+        assert completion_status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+        assessment.status = completion_status
+        assessment.completed_due_to_timeout = True
         assessment.completed_at = datetime.now(timezone.utc)
         assessment.scoring_partial = True
         _db.commit()
@@ -226,16 +248,39 @@ def test_finalize_capture_failure_stays_retryable(client, db, monkeypatch):
     assert a.completed_at is None
 
 
-def test_finalize_yields_to_racing_candidate_submit(client, db, monkeypatch):
-    """If the candidate's own submit won the atomic claim (409), don't relabel it
-    as a timeout completion."""
+@pytest.mark.parametrize("failure_status", [409, 503])
+def test_finalize_yields_to_candidate_submit_committed_before_first_refresh(
+    client, db, monkeypatch, failure_status,
+):
+    """A durable winner is authoritative regardless of the loser's HTTP status."""
     headers = _register_and_login(client)
     task = _create_task(client, headers)
     a = _make_assessment(client, db, headers, task["id"],
                          status=AssessmentStatus.IN_PROGRESS, started_minutes_ago=40)
 
-    def already_submitted(*_args, **_kwargs):
-        raise HTTPException(status_code=409, detail="Assessment already submitted")
+    initial_timeline = list(a.timeline or [])
+    accepted_event: dict[str, object] = {}
+
+    def already_submitted(assessment, *_args, **_kwargs):
+        artifact = _build_submission_artifact({"main.py": "print('submitted')\n"})
+        captured_at = datetime.now(timezone.utc)
+        accepted_event.update({
+            "event_type": "submission_artifact_frozen",
+            "timestamp": captured_at.isoformat(),
+            "sha256": artifact["sha256"],
+        })
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.completed_at = captured_at
+        assessment.submission_artifact = artifact
+        assessment.submission_artifact_sha256 = artifact["sha256"]
+        assessment.submission_artifact_captured_at = captured_at
+        assessment.scoring_failed = False
+        assessment.timeline = initial_timeline + [dict(accepted_event)]
+        db.commit()
+        raise HTTPException(
+            status_code=failure_status,
+            detail="Assessment submission response unavailable",
+        )
 
     monkeypatch.setattr(assessments_svc, "submit_assessment", already_submitted)
 
@@ -245,6 +290,186 @@ def test_finalize_yields_to_racing_candidate_submit(client, db, monkeypatch):
     db.refresh(a)
     assert a.completed_due_to_timeout in (False, None)
     assert a.status != AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+    assert a.scoring_failed is False
+    assert a.timeline == initial_timeline + [accepted_event]
+
+
+@pytest.mark.parametrize("failure_status", [409, 503])
+def test_finalize_does_not_overwrite_terminal_receipt_that_wins_during_reconcile(
+    client, db, monkeypatch, failure_status,
+):
+    """A terminal commit between reconciliation reads remains authoritative."""
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+    assessment_id = int(a.id)
+    task_id = int(a.task_id)
+    artifact = _build_submission_artifact({"main.py": "print('accepted')\n"})
+    captured_at = datetime.now(timezone.utc)
+    initial_timeline = list(a.timeline or [])
+    accepted_event = {
+        "event_type": "submission_artifact_frozen",
+        "timestamp": captured_at.isoformat(),
+        "sha256": artifact["sha256"],
+        "file_count": artifact["file_count"],
+        "total_bytes": artifact["total_bytes"],
+    }
+
+    def contested_submit(*_args, **_kwargs):
+        raise HTTPException(
+            status_code=failure_status,
+            detail="Submission capture did not return a receipt",
+        )
+
+    monkeypatch.setattr(assessments_svc, "submit_assessment", contested_submit)
+
+    real_rollback = db.rollback
+    rollback_calls = 0
+
+    def rollback_with_terminal_winner():
+        nonlocal rollback_calls
+        rollback_calls += 1
+        real_rollback()
+        # Reconciliation has observed IN_PROGRESS and deliberately closes that
+        # read transaction before checking again. Commit the competing accepted
+        # submission in a separate session inside that exact window.
+        if rollback_calls != 2:
+            return
+        with TestingSessionLocal() as winner_db:
+            winner = winner_db.get(Assessment, assessment_id)
+            winner.status = AssessmentStatus.COMPLETED
+            winner.completed_at = captured_at
+            winner.completed_due_to_timeout = False
+            winner.submission_artifact = artifact
+            winner.submission_artifact_sha256 = artifact["sha256"]
+            winner.submission_artifact_captured_at = captured_at
+            winner.scoring_partial = True
+            winner.scoring_failed = False
+            winner.timeline = list(winner.timeline or []) + [accepted_event]
+            winner_db.commit()
+
+    monkeypatch.setattr(db, "rollback", rollback_with_terminal_winner)
+
+    result = assessments_svc.finalize_timed_out_assessment(a, db)
+
+    assert result == {"status": "already_submitted", "assessment_id": assessment_id}
+    with TestingSessionLocal() as verify_db:
+        accepted = verify_db.get(Assessment, assessment_id)
+        receipt = build_submission_receipt(accepted, verify_db.get(Task, task_id))
+        assert receipt["artifact_gate"]["artifact_sha256"] == artifact["sha256"]
+        assert accepted.status == AssessmentStatus.COMPLETED
+        assert accepted.scoring_failed is False
+        assert accepted.timeline == initial_timeline + [accepted_event]
+        assert not any(
+            event.get("event_type") == "auto_submit_timeout_capture_failed"
+            for event in (accepted.timeline or [])
+        )
+
+
+def test_finalize_rejects_terminal_409_without_a_durable_receipt(client, db, monkeypatch):
+    """A terminal status alone cannot prove that candidate work was frozen."""
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+
+    def terminal_without_artifact(assessment, *_args, **_kwargs):
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        raise HTTPException(status_code=409, detail="Assessment already submitted")
+
+    monkeypatch.setattr(assessments_svc, "submit_assessment", terminal_without_artifact)
+
+    result = assessments_svc.finalize_timed_out_assessment(a, db)
+
+    assert result["status"] == "capture_failed"
+    assert result["scoring_failed"] is True
+    db.refresh(a)
+    assert a.status == AssessmentStatus.COMPLETED
+    assert a.submission_artifact is None
+    assert a.scoring_failed is True
+
+
+def test_finalize_records_non_conflict_http_capture_failure(client, db, monkeypatch):
+    """A non-conflict HTTP failure remains durably observable and retryable."""
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+
+    def unavailable(*_args, **_kwargs):
+        raise HTTPException(status_code=503, detail="Workspace capture unavailable")
+
+    monkeypatch.setattr(assessments_svc, "submit_assessment", unavailable)
+
+    result = assessments_svc.finalize_timed_out_assessment(a, db)
+
+    assert result["status"] == "capture_failed"
+    assert result["scoring_failed"] is True
+    db.refresh(a)
+    assert a.status == AssessmentStatus.IN_PROGRESS
+    assert a.scoring_failed is True
+    assert any(
+        event.get("event_type") == "auto_submit_timeout_capture_failed"
+        and event.get("error") == "Workspace capture unavailable"
+        for event in (a.timeline or [])
+    )
+
+
+@pytest.mark.parametrize("operation_kind", ["save", "claude_chat"])
+def test_finalize_keeps_live_workspace_lease_conflicts_retryable(
+    client, db, operation_kind,
+):
+    """A live save/Claude lease is not proof that submission completed."""
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _make_assessment(
+        client,
+        db,
+        headers,
+        task["id"],
+        status=AssessmentStatus.IN_PROGRESS,
+        started_minutes_ago=40,
+    )
+    a.runtime_operation_id = f"live-{operation_kind}"
+    a.runtime_operation_kind = operation_kind
+    a.runtime_operation_started_at = datetime.now(timezone.utc)
+    db.commit()
+
+    result = assessments_svc.finalize_timed_out_assessment(a, db)
+
+    assert result["status"] == "capture_failed"
+    assert result["scoring_failed"] is True
+    db.refresh(a)
+    assert a.status == AssessmentStatus.IN_PROGRESS
+    assert a.submission_artifact is None
+    assert a.runtime_operation_id == f"live-{operation_kind}"
+    assert a.runtime_operation_kind == operation_kind
+    assert a.scoring_failed in (False, None)
+    assert not any(
+        event.get("event_type") == "auto_submit_timeout_capture_failed"
+        for event in (a.timeline or [])
+    )
 
 
 def test_finalize_skips_already_terminal(client, db):
@@ -293,6 +518,7 @@ def test_sweep_finalizes_timed_out_and_skips_active(client, db, monkeypatch):
         tab_switch_count,
         _db,
         *,
+        completion_status,
         wake_agent_on_commit=True,
         defer_scoring=False,
         enqueue_rubric_retry_on_commit=True,
@@ -300,7 +526,9 @@ def test_sweep_finalizes_timed_out_and_skips_active(client, db, monkeypatch):
         assert wake_agent_on_commit is False
         assert defer_scoring is True
         assert enqueue_rubric_retry_on_commit is False
-        assessment.status = AssessmentStatus.COMPLETED
+        assert completion_status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+        assessment.status = completion_status
+        assessment.completed_due_to_timeout = True
         assessment.completed_at = datetime.now(timezone.utc)
         assessment.scoring_partial = True
         _db.commit()

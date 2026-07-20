@@ -1,9 +1,20 @@
+import { useEffect, useRef, useState } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useNavigate,
+  useSearchParams,
+} from 'react-router-dom';
 import { vi } from 'vitest';
 
+import { AssessmentLiveRoute } from '../../app/AssessmentRoutes';
 import AssessmentPage from '../../features/assessment_runtime/AssessmentPage';
+import { recoverCandidateRuntimeToken } from '../../shared/assessment/candidateProofBinding';
 
 const mockExecute = vi.fn();
+const mockStart = vi.fn();
 const mockSubmit = vi.fn();
 const mockSaveRepoFile = vi.fn();
 const mockGetRepoFile = vi.fn();
@@ -13,7 +24,7 @@ const mockKeepalive = vi.fn();
 
 vi.mock('../../shared/api', () => ({
   assessments: {
-    start: vi.fn(),
+    start: (...args) => mockStart(...args),
     execute: (...args) => mockExecute(...args),
     saveRepoFile: (...args) => mockSaveRepoFile(...args),
     getRepoFile: (...args) => mockGetRepoFile(...args),
@@ -43,12 +54,39 @@ vi.mock('../../components/assessment/CodeEditor', () => ({
   },
 }));
 
+const AppShellStartDataRaceHarness = ({ staleStartData }) => {
+  const [startData, setStartData] = useState(staleStartData);
+  const [searchParams] = useSearchParams();
+  const activeToken = searchParams.get('token');
+  const priorTokenRef = useRef(activeToken);
+  const navigate = useNavigate();
+
+  // AppShell currently clears its prior started payload in a passive effect.
+  // The route must reject a mismatched payload synchronously, before this runs.
+  useEffect(() => {
+    if (priorTokenRef.current !== activeToken) {
+      setStartData(null);
+      priorTokenRef.current = activeToken;
+    }
+  }, [activeToken]);
+
+  return (
+    <>
+      <button type="button" onClick={() => navigate('/assessment/live?token=token-b')}>
+        Switch to assessment B
+      </button>
+      <AssessmentLiveRoute startData={startData} />
+    </>
+  );
+};
+
 describe('AssessmentPage live agentic runtime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
     window.localStorage.clear();
     mockExecute.mockResolvedValue({ data: { success: true, stdout: '', stderr: '', error: null, results: [] } });
+    mockStart.mockResolvedValue({ data: {} });
     mockSaveRepoFile.mockResolvedValue({ data: { success: true, revision: 'b'.repeat(64) } });
     mockGetRepoFile.mockImplementation((assessmentId, path) => Promise.resolve({
       data: { path, content: '', revision: 'a'.repeat(64) },
@@ -62,6 +100,199 @@ describe('AssessmentPage live agentic runtime', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('never initializes token B with token A start data during the AppShell clear race', async () => {
+    const staleScenario = 'STALE A SCENARIO MUST NEVER RENDER';
+    const freshScenario = 'Fresh B scenario loaded from the B start API';
+    const staleStartData = {
+      assessment_id: 401,
+      token: 'token-a',
+      time_remaining: 1200,
+      task: {
+        name: 'Stale assessment A',
+        scenario: staleScenario,
+        duration_minutes: 30,
+      },
+    };
+    mockStart.mockResolvedValueOnce({
+      data: {
+        assessment_id: 402,
+        time_remaining: 1200,
+        task: {
+          name: 'Fresh assessment B',
+          scenario: freshScenario,
+          duration_minutes: 30,
+        },
+      },
+    });
+    render(
+      <MemoryRouter initialEntries={['/assessment/live?token=token-a']}>
+        <Routes>
+          <Route
+            path="/assessment/live"
+            element={<AppShellStartDataRaceHarness staleStartData={staleStartData} />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByText(staleScenario)).length).toBeGreaterThan(0);
+    await waitFor(() => expect(mockRuntimeEvent).toHaveBeenCalledWith(
+      401,
+      'runtime_loaded',
+      'token-a',
+      {},
+      expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    ));
+    mockRuntimeEvent.mockClear();
+    const staleFrames = [];
+    const observer = new MutationObserver(() => {
+      if (document.body.textContent?.includes(staleScenario)) {
+        staleFrames.push(document.body.textContent);
+      }
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to assessment B' }));
+      expect((await screen.findAllByText(freshScenario)).length).toBeGreaterThan(0);
+      await waitFor(() => expect(mockRuntimeEvent).toHaveBeenCalledWith(
+        402,
+        'runtime_loaded',
+        'token-b',
+        {},
+        expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+      ));
+    } finally {
+      observer.disconnect();
+    }
+
+    expect(mockStart).toHaveBeenCalledWith('token-b', {
+      candidate_session_key: expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    });
+    expect(staleFrames).toEqual([]);
+    expect(screen.queryByText(staleScenario)).not.toBeInTheDocument();
+    expect(mockRuntimeEvent.mock.calls.some((call) => (
+      call[0] === 401 || call[2] === 'token-a'
+    ))).toBe(false);
+  });
+
+  it('ignores a late token A start response after token B is already active', async () => {
+    let resolveTokenA;
+    const tokenAStart = new Promise((resolve) => {
+      resolveTokenA = resolve;
+    });
+    mockStart.mockImplementation((token) => {
+      if (token === 'token-a') return tokenAStart;
+      return Promise.resolve({
+        data: {
+          assessment_id: 412,
+          time_remaining: 1200,
+          task: {
+            name: 'Assessment B',
+            scenario: 'CURRENT B SCENARIO',
+            duration_minutes: 30,
+          },
+        },
+      });
+    });
+    window.history.replaceState(null, '', '/assessment/live?token=token-a');
+    const replaceStateSpy = vi.spyOn(window.history, 'replaceState');
+
+    try {
+      const view = render(<AssessmentPage token="token-a" />);
+      await waitFor(() => expect(mockStart).toHaveBeenCalledWith('token-a', {
+        candidate_session_key: expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+      }));
+
+      window.history.pushState(null, '', '/assessment/live?token=token-b');
+      view.rerender(<AssessmentPage token="token-b" />);
+
+      expect((await screen.findAllByText('CURRENT B SCENARIO')).length).toBeGreaterThan(0);
+      await waitFor(() => expect(recoverCandidateRuntimeToken()).toBe('token-b'));
+      expect(window.location.search).toBe('');
+      replaceStateSpy.mockClear();
+      mockRuntimeEvent.mockClear();
+
+      await act(async () => {
+        resolveTokenA({
+          data: {
+            assessment_id: 411,
+            time_remaining: 1200,
+            task: {
+              name: 'Assessment A',
+              scenario: 'STALE A RESPONSE',
+              duration_minutes: 30,
+            },
+          },
+        });
+      });
+
+      expect(recoverCandidateRuntimeToken()).toBe('token-b');
+      expect(replaceStateSpy).not.toHaveBeenCalled();
+      expect(screen.queryByText('STALE A RESPONSE')).not.toBeInTheDocument();
+      expect(mockRuntimeEvent.mock.calls.some((call) => (
+        call[0] === 411 || call[2] === 'token-a'
+      ))).toBe(false);
+    } finally {
+      replaceStateSpy.mockRestore();
+      window.history.replaceState(null, '', '/');
+    }
+  });
+
+  it('drops start data without an identifying token before loading an explicit route token', async () => {
+    const ambiguousScenario = 'AMBIGUOUS START DATA MUST NEVER RENDER';
+    const freshScenario = 'Explicit token B loaded from its own start API';
+    mockStart.mockResolvedValueOnce({
+      data: {
+        assessment_id: 404,
+        time_remaining: 1200,
+        task: {
+          name: 'Explicit assessment B',
+          scenario: freshScenario,
+          duration_minutes: 30,
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/assessment/live?token=token-b']}>
+        <Routes>
+          <Route
+            path="/assessment/live"
+            element={(
+              <AssessmentLiveRoute startData={{
+                assessment_id: 403,
+                time_remaining: 1200,
+                task: {
+                  name: 'Ambiguous prior assessment',
+                  scenario: ambiguousScenario,
+                  duration_minutes: 30,
+                },
+              }} />
+            )}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByText(freshScenario)).length).toBeGreaterThan(0);
+    expect(mockStart).toHaveBeenCalledWith('token-b', {
+      candidate_session_key: expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    });
+    expect(screen.queryByText(ambiguousScenario)).not.toBeInTheDocument();
+    await waitFor(() => expect(mockRuntimeEvent).toHaveBeenCalledWith(
+      404,
+      'runtime_loaded',
+      'token-b',
+      {},
+      expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    ));
   });
 
   it('sends submit tab_switch_count metadata', async () => {
@@ -594,6 +825,336 @@ describe('AssessmentPage live agentic runtime', () => {
     await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
     expect(editor).toBeDisabled();
     await act(async () => resolveSubmit({ data: { success: true } }));
+  });
+
+  it('starts the deadline submission five seconds early and freezes the latest edit', async () => {
+    const warmup = render(<AssessmentPage token="deadline-warmup-token" startData={{
+      assessment_id: 999,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 60,
+      task: {
+        name: 'Deadline warmup',
+        duration_minutes: 1,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    }} />);
+    await screen.findByRole('textbox', { name: 'Mock code editor' });
+    warmup.unmount();
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+
+    const revision = 'a'.repeat(64);
+    let resolveSubmit;
+    mockSubmit.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveSubmit = resolve;
+    }));
+    mockGetRepoFile.mockResolvedValueOnce({
+      data: { path: 'src/main.py', content: 'value = 1', revision },
+    });
+    render(<AssessmentPage token="deadline-token" startData={{
+      assessment_id: 128,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 6,
+      task: {
+        name: 'Deadline task',
+        duration_minutes: 1,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    }} />);
+
+    await act(async () => {});
+    const editor = screen.getByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'value = 2' } });
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    expect(mockSaveRepoFile).toHaveBeenCalledTimes(1);
+    expect(mockSaveRepoFile.mock.calls[0][1]).toEqual({
+      path: 'src/main.py',
+      content: 'value = 2',
+      base_revision: revision,
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+    expect(mockSubmit.mock.calls[0][1]).toMatchObject({
+      final_code: 'value = 2',
+      selected_file_path: 'src/main.py',
+    });
+    expect(mockSubmit.mock.calls[0][1]).not.toHaveProperty('repo_files');
+    expect(editor).toBeDisabled();
+    expect(screen.getByTestId('assessment-submit-status')).toHaveTextContent(/Finalizing your latest work/i);
+
+    await act(async () => {
+      resolveSubmit({ data: { success: true, grading_status: 'pending' } });
+    });
+    expect(screen.getByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['the timeout finalizer reports a conflict', {
+      status: 409,
+      data: { detail: 'Assessment time expired and was auto-submitted' },
+    }],
+    ['another terminal request makes the active-row lookup disappear', {
+      status: 404,
+      data: { detail: 'Active assessment not found' },
+    }],
+  ])('retrieves the durable receipt when %s during a slow multi-file flush', async (_label, response) => {
+    const warmup = render(<AssessmentPage token="deadline-multi-warmup" startData={{
+      assessment_id: 1000,
+      initial_selected_repo_path: 'src/one.py',
+      time_remaining: 60,
+      task: {
+        name: 'Deadline multi-file warmup',
+        duration_minutes: 1,
+        repo_structure: { files: { 'src/one.py': '' } },
+      },
+    }} />);
+    await screen.findByRole('textbox', { name: 'Mock code editor' });
+    warmup.unmount();
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+
+    mockGetRepoFile.mockImplementation((assessmentId, path) => Promise.resolve({
+      data: {
+        path,
+        content: path.endsWith('one.py') ? 'one = 1' : 'two = 2',
+        revision: (path.endsWith('one.py') ? '1' : '2').repeat(64),
+      },
+    }));
+    let resolveFirstSave;
+    mockSaveRepoFile
+      .mockImplementationOnce(() => new Promise((resolve) => {
+        resolveFirstSave = resolve;
+      }))
+      .mockRejectedValueOnce(Object.assign(new Error('workspace frozen'), {
+        response,
+      }));
+    mockSubmit.mockResolvedValueOnce({ data: {
+      success: true,
+      grading_status: 'pending',
+      artifact_gate: { status: 'satisfied' },
+    } });
+
+    render(<AssessmentPage token="deadline-multi-token" startData={{
+      assessment_id: 131,
+      initial_selected_repo_path: 'src/one.py',
+      time_remaining: 6,
+      task: {
+        name: 'Deadline multi-file task',
+        duration_minutes: 1,
+        repo_structure: {
+          files: {
+            'src/one.py': '',
+            'src/two.py': '',
+          },
+        },
+      },
+    }} />);
+
+    await act(async () => {});
+    const editor = screen.getByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'one = 10' } });
+    fireEvent.click(screen.getByRole('button', { name: /^two\.py$/i }));
+    await act(async () => {});
+    fireEvent.change(screen.getByRole('textbox', { name: 'Mock code editor' }), {
+      target: { value: 'two = 20' },
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(mockSaveRepoFile).toHaveBeenCalledTimes(1);
+    expect(mockSubmit).not.toHaveBeenCalled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(mockSaveRepoFile).toHaveBeenCalledTimes(1);
+    expect(mockSubmit).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveFirstSave({ data: { success: true, revision: '3'.repeat(64) } });
+    });
+
+    expect(mockSaveRepoFile).toHaveBeenCalledTimes(2);
+    expect(mockSaveRepoFile.mock.calls.map((call) => call[1])).toEqual([
+      { path: 'src/one.py', content: 'one = 10', base_revision: '1'.repeat(64) },
+      { path: 'src/two.py', content: 'two = 20', base_revision: '2'.repeat(64) },
+    ]);
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
+    expect(screen.getByText(/snapshot was already locked.*not included/i)).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['network failure', new Error('network unavailable'), /save your changes/i],
+    ['revision conflict', Object.assign(new Error('revision conflict'), {
+      response: {
+        status: 409,
+        data: { detail: {
+          code: 'FILE_REVISION_CONFLICT',
+          message: 'This file changed in the workspace. Review it before overwriting.',
+        } },
+      },
+    }), /file changed in the workspace/i],
+    ['live workspace lease', Object.assign(new Error('workspace busy'), {
+      response: {
+        status: 409,
+        data: { detail: 'Another workspace operation is still in progress. Please retry shortly.' },
+      },
+    }), /workspace operation is still in progress/i],
+    ['unrelated missing resource', Object.assign(new Error('missing resource'), {
+      response: {
+        status: 404,
+        data: { detail: 'Repository file not found' },
+      },
+    }), /repository file not found/i],
+  ])('does not submit past a dirty-file %s', async (_label, saveError, expectedMessage) => {
+    mockGetRepoFile.mockResolvedValueOnce({
+      data: { path: 'src/main.py', content: 'value = 1', revision: 'a'.repeat(64) },
+    });
+    mockSaveRepoFile.mockRejectedValueOnce(saveError);
+    render(<AssessmentPage token="save-failure-token" startData={{
+      assessment_id: 132,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 1200,
+      task: {
+        name: 'Save failure task',
+        duration_minutes: 30,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    }} />);
+
+    const editor = await screen.findByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'value = 2' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' }).at(-1));
+
+    await waitFor(() => expect(mockSaveRepoFile).toHaveBeenCalledTimes(1));
+    expect(mockSubmit).not.toHaveBeenCalled();
+    await waitFor(() => expect(editor).not.toBeDisabled());
+    expect(editor).toHaveValue('value = 2');
+    expect(screen.getByTestId('assessment-submit-error')).toHaveTextContent(expectedMessage);
+  });
+
+  it('keeps the workspace open when an exact terminal 404 has no durable receipt', async () => {
+    mockGetRepoFile.mockResolvedValueOnce({
+      data: { path: 'src/main.py', content: 'value = 1', revision: 'a'.repeat(64) },
+    });
+    mockSaveRepoFile.mockRejectedValueOnce(Object.assign(new Error('active row gone'), {
+      response: {
+        status: 404,
+        data: { detail: 'Active assessment not found' },
+      },
+    }));
+    mockSubmit.mockRejectedValueOnce(Object.assign(new Error('receipt unavailable'), {
+      response: {
+        status: 409,
+        data: { detail: 'Submission receipt is not available' },
+      },
+    }));
+    render(<AssessmentPage token="missing-receipt-token" startData={{
+      assessment_id: 133,
+      initial_selected_repo_path: 'src/main.py',
+      time_remaining: 1200,
+      task: {
+        name: 'Missing receipt task',
+        duration_minutes: 30,
+        repo_structure: { files: { 'src/main.py': '' } },
+      },
+    }} />);
+
+    const editor = await screen.findByRole('textbox', { name: 'Mock code editor' });
+    fireEvent.change(editor, { target: { value: 'value = 2' } });
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' })[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Submit' }).at(-1));
+
+    await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(editor).not.toBeDisabled());
+    expect(editor).toHaveValue('value = 2');
+    expect(screen.queryByRole('heading', { name: /Task submitted/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('assessment-submit-error')).toHaveTextContent(/receipt is not available/i);
+  });
+
+  it('retries a lost deadline response once at zero and accepts the idempotent receipt', async () => {
+    vi.useFakeTimers();
+    mockSubmit
+      .mockRejectedValueOnce(new Error('response lost after submission'))
+      .mockResolvedValueOnce({ data: { success: true, grading_status: 'pending' } });
+    render(<AssessmentPage token="deadline-retry-token" startData={{
+      assessment_id: 129,
+      time_remaining: 6,
+      task: {
+        name: 'Deadline retry task',
+        starter_code: 'value = 2',
+        duration_minutes: 1,
+      },
+    }} />);
+
+    expect(screen.getByText('00:06 left')).toBeInTheDocument();
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('assessment-submit-error')).toHaveTextContent(/connection/i);
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits for an in-flight safety attempt and never loops after the zero retry fails', async () => {
+    vi.useFakeTimers();
+    let rejectSafetySubmit;
+    mockSubmit
+      .mockImplementationOnce(() => new Promise((resolve, reject) => {
+        rejectSafetySubmit = reject;
+      }))
+      .mockRejectedValueOnce(new Error('retry response unavailable'));
+    render(<AssessmentPage token="deadline-bounded-token" startData={{
+      assessment_id: 130,
+      time_remaining: 6,
+      task: {
+        name: 'Bounded deadline task',
+        starter_code: 'value = 3',
+        duration_minutes: 1,
+      },
+    }} />);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      vi.advanceTimersByTime(5000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      rejectSafetySubmit(new Error('response lost after submission'));
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('assessment-submit-error')).toHaveTextContent(/connection/i);
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+    });
+    expect(mockSubmit).toHaveBeenCalledTimes(2);
   });
 
   it('keeps the visible timer running when submission fails', async () => {

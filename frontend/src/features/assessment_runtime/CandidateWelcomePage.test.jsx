@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 
 import { CandidateWelcomePage } from './CandidateWelcomePage';
+import { recoverCandidateRuntimeToken } from '../../shared/assessment/candidateProofBinding';
 
 const mockPreview = vi.fn();
 const mockStart = vi.fn();
@@ -98,6 +99,45 @@ describe('CandidateWelcomePage', () => {
       replace: true,
     });
     expect(JSON.stringify({ ...window.localStorage })).not.toContain('candidate-token');
+  });
+
+  it('ignores a late start response after the welcome token changes', async () => {
+    let resolveTokenAStart;
+    mockPreview.mockImplementation((token) => Promise.resolve({
+      data: {
+        assessment_id: token === 'token-a' ? 21 : 22,
+        candidate_name: token === 'token-a' ? 'Alpha Candidate' : 'Beta Candidate',
+        duration_minutes: 30,
+        start_gate: { can_start: true },
+        task: { name: `${token} task`, duration_minutes: 30 },
+      },
+    }));
+    mockStart.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveTokenAStart = resolve;
+    }));
+    const onNavigate = vi.fn();
+    const onStarted = vi.fn();
+    const view = render(
+      <CandidateWelcomePage token="token-a" onNavigate={onNavigate} onStarted={onStarted} />,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start assessment' }));
+    await waitFor(() => expect(mockStart).toHaveBeenCalledWith('token-a', {
+      candidate_session_key: expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    }));
+
+    view.rerender(
+      <CandidateWelcomePage token="token-b" onNavigate={onNavigate} onStarted={onStarted} />,
+    );
+    expect(await screen.findByText(/Hi Beta/i)).toBeInTheDocument();
+
+    await act(async () => {
+      resolveTokenAStart({ data: { assessment_id: 21 } });
+    });
+
+    expect(onStarted).not.toHaveBeenCalled();
+    expect(onNavigate).not.toHaveBeenCalled();
+    expect(recoverCandidateRuntimeToken()).toBeNull();
   });
 
   it('confirms an approved clipboard accommodation before start', async () => {

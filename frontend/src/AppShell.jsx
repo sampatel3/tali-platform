@@ -14,6 +14,11 @@ import { ToastProvider } from './context/ToastContext';
 import { JobStatusProvider } from './contexts/JobStatusContext';
 import { assessments as assessmentsApi } from './shared/api/assessmentsClient';
 import { pathForPage } from './app/routing';
+import {
+  AssessmentLiveRoute,
+  CandidateWelcomeRoute,
+  CandidateWelcomeWithIdRoute,
+} from './app/AssessmentRoutes';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
 import { Button, Panel, Spinner } from './shared/ui/TaaliPrimitives';
 import { ScrollToTop } from './shared/ui/ScrollToTop';
@@ -29,7 +34,6 @@ import {
   AgentPromptPreviewPage,
   AnalyticsMotionPreview,
   AnalyticsPage,
-  AssessmentPage,
   AssessmentsPage,
   AtsAdminPage,
   BackgroundJobsToaster,
@@ -38,7 +42,6 @@ import {
   BlogPostPage,
   ButtonShowcasePage,
   CandidateStandingReportPage,
-  CandidateWelcomePage,
   CareersPage,
   ChatPage,
   ChatShowcaseView,
@@ -176,6 +179,25 @@ function RecruiterJobStatusBoundary({ children }) {
   );
 }
 
+const lazyFallback = (
+  <div className="min-h-screen flex items-center justify-center">
+    <Spinner size={28} />
+  </div>
+);
+
+// Preserves the conversation id when redirecting from the v1
+// ``/copilot/:id`` URL to ``/chat/:id``.
+function RedirectCopilotConvo() {
+  const { conversationId } = useParams();
+  return <Navigate to={`/chat/${conversationId}`} replace />;
+}
+
+// Stable component identity keeps route-level navigation mounted across
+// AppContent updates (for example opening global recruiter UI).
+function DashboardNavWithMode(props) {
+  return <DashboardNav {...props} />;
+}
+
 function AppContent() {
   const { isAuthenticated, loading: authLoading } = useAuth();
   const location = useLocation();
@@ -190,10 +212,18 @@ function AppContent() {
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
   const [shortcutsModalOpen, setShortcutsModalOpen] = useState(false);
 
+  const recruiterShortcutsEnabled = isAuthenticated
+    && isProtectedRecruiterPath(location.pathname, location.search);
+
   useKeyboardShortcut(
     (e) => e.key === '?' && !e.metaKey && !e.ctrlKey && !e.altKey,
     () => setShortcutsModalOpen(true),
+    { enabled: recruiterShortcutsEnabled },
   );
+
+  useEffect(() => {
+    if (!recruiterShortcutsEnabled) setShortcutsModalOpen(false);
+  }, [recruiterShortcutsEnabled]);
 
   // The Hub (/home) is the agent-first landing — see docs/HOME_HUB_DESIGN.md.
   // Replaces /reporting as the default route after sign-in.
@@ -381,80 +411,7 @@ function AppContent() {
     );
   }
 
-  const lazyFallback = (
-    <div className="min-h-screen flex items-center justify-center">
-      <Spinner size={28} />
-    </div>
-  );
   // workflowModeLoading removed — there is no per-org workflow probe anymore.
-
-  const CandidateWelcomeRoute = () => {
-    const { token } = useParams();
-    return (
-      <Suspense fallback={lazyFallback}>
-        <CandidateWelcomePage
-          token={token || null}
-          onNavigate={navigateToPage}
-          onStarted={handleCandidateStarted}
-        />
-      </Suspense>
-    );
-  };
-
-  // Preserves the conversation id when redirecting from the v1
-  // ``/copilot/:id`` URL to ``/chat/:id``.
-  const RedirectCopilotConvo = () => {
-    const { conversationId } = useParams();
-    return <Navigate to={`/chat/${conversationId}`} replace />;
-  };
-
-  const CandidateWelcomeWithIdRoute = () => {
-    const token = searchParams.get('token');
-    if (!token) return <Navigate to="/" replace />;
-    return (
-      <Suspense fallback={lazyFallback}>
-        <CandidateWelcomePage
-          token={token}
-          onNavigate={navigateToPage}
-          onStarted={handleCandidateStarted}
-        />
-      </Suspense>
-    );
-  };
-
-  const AssessmentLiveRoute = () => {
-    const token = searchParams.get('token') || recoverCandidateRuntimeToken();
-    const demo = searchParams.get('demo') === '1';
-    const [demoFixtures, setDemoFixtures] = useState(null);
-    useEffect(() => {
-      if (demo && !demoFixtures) {
-        import('./features/demo/productWalkthroughModels').then((m) =>
-          setDemoFixtures({
-            startData: m.PRODUCT_WALKTHROUGH_START_DATA,
-            runtime: m.PRODUCT_WALKTHROUGH.runtime,
-          })
-        );
-      }
-    }, [demo, demoFixtures]);
-    if (demo && !demoFixtures) return lazyFallback;
-    return (
-      <Suspense fallback={lazyFallback}>
-        <AssessmentPage
-          token={demo ? null : token}
-          startData={demo ? demoFixtures.startData : startedAssessmentData}
-          demoMode={demo}
-          demoProfile={demo ? {
-            ...demoFixtures.runtime,
-            output: demoFixtures.runtime.output,
-          } : undefined}
-        />
-      </Suspense>
-    );
-  };
-
-  // Thin wrapper preserved so route-level <DashboardNav /> usage stays
-  // consistent if we add cross-cutting props later (e.g. environment banners).
-  const DashboardNavWithMode = (props) => <DashboardNav {...props} />;
 
   return (
     <>
@@ -1052,7 +1009,15 @@ function AppContent() {
         )}
       />
 
-      <Route path="/assess/:token" element={<CandidateWelcomeRoute />} />
+      <Route
+        path="/assess/:token"
+        element={(
+          <CandidateWelcomeRoute
+            onNavigate={navigateToPage}
+            onStarted={handleCandidateStarted}
+          />
+        )}
+      />
 
       {/* Public, no-auth careers-style job posting. The shareable link a
           published requisition produces. Like /assess/:token, it renders
@@ -1097,8 +1062,19 @@ function AppContent() {
         )}
       />
 
-      <Route path="/assessment/:assessmentId" element={<CandidateWelcomeWithIdRoute />} />
-      <Route path="/assessment/live" element={<AssessmentLiveRoute />} />
+      <Route
+        path="/assessment/:assessmentId"
+        element={(
+          <CandidateWelcomeWithIdRoute
+            onNavigate={navigateToPage}
+            onStarted={handleCandidateStarted}
+          />
+        )}
+      />
+      <Route
+        path="/assessment/live"
+        element={<AssessmentLiveRoute startData={startedAssessmentData} />}
+      />
 
       {/* Unknown URL → a real 404 with a way back, instead of silently
           teleporting to "/" (which then bounced authed users to /home and hid

@@ -48,11 +48,33 @@ import {
 
 const ASSESSMENT_THEME_STORAGE_KEY = 'taali_assessment_theme';
 const AUTOSAVE_DELAY_MS = 1200;
+const DEADLINE_SUBMIT_LEAD_SECONDS = 5;
 const KEEPALIVE_INTERVAL_MS = 5 * 60 * 1000;
 
 const candidateProofErrorMessage = (error) => (
   error instanceof CandidateProofUnavailableError ? error.message : null
 );
+
+const requiresSubmissionReceiptReconciliation = (error) => {
+  const status = error?.response?.status;
+  const detail = error?.response?.data?.detail;
+  const message = String(detail?.message || (typeof detail === 'string' ? detail : ''))
+    .trim()
+    .toLowerCase();
+  // Candidate workspace mutations first prove the token/session, then query
+  // for an IN_PROGRESS row. If another tab or the timeout sweep has already
+  // completed that row, this legacy query boundary reports 404. Treat that
+  // exact response as a reason to ask the idempotent submit endpoint for the
+  // durable receipt; the receipt call still fails closed for a missing run.
+  if (status === 404 && message === 'active assessment not found') return true;
+  if (status !== 409) return false;
+  const code = String(detail?.code || '').trim().toUpperCase();
+  if (code === 'ASSESSMENT_AUTO_SUBMITTED' || code === 'ASSESSMENT_TIMEOUT_FINALIZING') {
+    return true;
+  }
+  return message.startsWith('assessment time expired')
+    && (message.includes('auto-submitted') || message.includes('work capture'));
+};
 
 // Default orientation path shown when a task ships no two_stage config —
 // a visible way through the first minutes (where most drop-off happens).
@@ -237,6 +259,7 @@ export default function AssessmentPage({
   const [executing, setExecuting] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [submitted, setSubmitted] = useState(false);
+  const [submissionReceiptReconciled, setSubmissionReceiptReconciled] = useState(false);
   // The submit request is in flight. We keep the candidate in the workspace
   // (NOT on the submitted screen) until the API resolves 2xx, so a failure
   // never flashes the "Task submitted" screen and then silently reverts.
@@ -297,7 +320,7 @@ export default function AssessmentPage({
   // shared timer effect can read it via ref without circular dependencies.
   const preTimeoutSnapshotRef = useRef(null);
   const preTimeoutSnapshotFlushedRef = useRef(false);
-  const autoSubmitAttemptedRef = useRef(false);
+  const deadlineSubmitAttemptsRef = useRef({ safety: false, zero: false });
   const submitCancelButtonRef = useRef(null);
   const submitConfirmButtonRef = useRef(null);
 
@@ -441,6 +464,7 @@ export default function AssessmentPage({
       setStartError('This assessment link is incomplete. Reopen the original invite email or contact support.');
       return;
     }
+    let cancelled = false;
     const startAssessment = async () => {
       try {
         const sessionKey = getOrCreateCandidateSessionKey(token);
@@ -448,6 +472,10 @@ export default function AssessmentPage({
         const res = await assessments.start(token, {
           candidate_session_key: sessionKey,
         });
+        // A route-token change remounts the live runtime, but the old request
+        // can still finish. Stop it before any tab-scoped recovery, URL, or
+        // React state side effect so assessment A cannot overwrite B.
+        if (cancelled) return;
         const data = res.data;
         rememberCandidateRuntime(token, data.assessment_id);
         scrubCandidateInviteTokenFromUrl();
@@ -467,6 +495,7 @@ export default function AssessmentPage({
         setPauseReason(normalized.pause_reason || null);
         setClaudeBudget(normalized.claude_budget || null);
       } catch (error) {
+        if (cancelled) return;
         setStartError(
           error instanceof CandidateProofUnavailableError
             ? error.message
@@ -475,10 +504,13 @@ export default function AssessmentPage({
             : "Couldn't load the assessment. Refresh the page to try again.",
         );
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
-    startAssessment();
+    void startAssessment();
+    return () => {
+      cancelled = true;
+    };
   }, [demoMode, token, taskData, startData, startAttempt]);
 
   useEffect(() => {
@@ -501,7 +533,11 @@ export default function AssessmentPage({
         // 30s before zero, sync only candidate-edited files to the sandbox so
         // the server-side timeout artifact captures the latest work without a
         // browser round-trip of the untouched repository.
-        if (prev <= 31 && !preTimeoutSnapshotFlushedRef.current) {
+        if (
+          prev <= 31
+          && prev > DEADLINE_SUBMIT_LEAD_SECONDS + 1
+          && !preTimeoutSnapshotFlushedRef.current
+        ) {
           preTimeoutSnapshotFlushedRef.current = true;
           preTimeoutSnapshotRef.current?.();
         }
@@ -1217,8 +1253,8 @@ export default function AssessmentPage({
 
     setSavingRepoFile(true);
     let activePath = null;
+    let syncedSnapshot = repoSnapshot;
     try {
-      let syncedSnapshot = repoSnapshot;
       for (const fileEntry of unsyncedFiles) {
         activePath = fileEntry.path;
         setRepoFileSaveStates((current) => ({
@@ -1260,6 +1296,7 @@ export default function AssessmentPage({
         || detail?.message
         || (typeof detail === 'string' ? detail : "Couldn't save your changes. Try again.");
       const conflict = err?.response?.status === 409 && detail?.code === 'FILE_REVISION_CONFLICT';
+      const receiptReconciliationRequired = requiresSubmissionReceiptReconciliation(err);
       if (activePath) {
         setRepoFileSaveStates((current) => ({
           ...current,
@@ -1269,7 +1306,12 @@ export default function AssessmentPage({
           },
         }));
       }
-      return { success: false, repoSnapshot, errorMessage };
+      return {
+        success: false,
+        repoSnapshot: syncedSnapshot,
+        errorMessage,
+        receiptReconciliationRequired,
+      };
     } finally {
       setSavingRepoFile(false);
     }
@@ -1488,7 +1530,7 @@ export default function AssessmentPage({
   }, [handleSave, workspaceSecurity]);
 
   const handleSubmit = useCallback(
-    async (autoSubmit = false) => {
+    async (autoSubmit = false, deadlinePhase = null) => {
       if (submitted || submitting) return;
       // The demo / showcase preview is read-only — a viewer (or the pitch
       // deck) must never be able to submit the walkthrough assessment, which
@@ -1512,6 +1554,10 @@ export default function AssessmentPage({
         return;
       }
 
+      if (deadlinePhase === 'safety' || deadlinePhase === 'zero') {
+        deadlineSubmitAttemptsRef.current[deadlinePhase] = true;
+      }
+
       // Enter the in-flight state — the candidate STAYS in the workspace
       // (we do NOT flip to the submitted screen yet). Only a 2xx response
       // flips submitted=true below, so a failed submit never flashes the
@@ -1523,7 +1569,7 @@ export default function AssessmentPage({
       try {
         const id = assessment?.id || assessmentId;
         const syncResult = await syncUnsyncedRepoFilesToWorkspace(codeRef.current);
-        if (!syncResult.success) {
+        if (!syncResult.success && !syncResult.receiptReconciliationRequired) {
           setSubmitError(syncResult.errorMessage || "Couldn't sync your latest changes. Try submitting again.");
           return;
         }
@@ -1543,6 +1589,7 @@ export default function AssessmentPage({
         clearCandidateSessionKey(assessmentTokenForApi);
         clearCandidateRuntimeRecovery(assessmentTokenForApi);
         void clearCandidateProofBinding(assessmentTokenForApi);
+        setSubmissionReceiptReconciled(Boolean(syncResult.receiptReconciliationRequired));
         setSubmittedAtIso(new Date().toISOString());
         setSubmitted(true);
       } catch (err) {
@@ -1590,23 +1637,35 @@ export default function AssessmentPage({
     handleSubmitRef.current = handleSubmit;
   }, [handleSubmit]);
 
+  // Reset one-shot deadline work before the auto-submit effect observes the
+  // newly loaded assessment. AssessmentLiveRoute also keys this component by
+  // runtime identity, so a token change cannot inherit another run's flags.
   useEffect(() => {
+    preTimeoutSnapshotFlushedRef.current = false;
+    deadlineSubmitAttemptsRef.current = { safety: false, zero: false };
+  }, [assessment?.id, assessmentId]);
+
+  useEffect(() => {
+    const deadlinePhase = timeLeft <= 0
+      ? 'zero'
+      : (timeLeft <= DEADLINE_SUBMIT_LEAD_SECONDS ? 'safety' : null);
     if (
       loading
       || submitted
       || submitting
+      || demoMode
       || isTimerPaused
-      || timeLeft > 0
+      || !deadlinePhase
       || claudePending
       || refreshingClaudeChanges
       || executing
       || savingRepoFile
-      || autoSubmitAttemptedRef.current
+      || deadlineSubmitAttemptsRef.current[deadlinePhase]
     ) return;
-    autoSubmitAttemptedRef.current = true;
-    handleSubmitRef.current?.(true);
+    handleSubmitRef.current?.(true, deadlinePhase);
   }, [
     claudePending,
+    demoMode,
     executing,
     isTimerPaused,
     loading,
@@ -1626,13 +1685,6 @@ export default function AssessmentPage({
       syncUnsyncedRepoFilesToWorkspace(codeRef.current).catch(() => undefined);
     };
   }, [syncUnsyncedRepoFilesToWorkspace]);
-
-  // If the assessment changes (or the candidate starts a new one), allow the
-  // pre-timeout snapshot to fire again on the new run.
-  useEffect(() => {
-    preTimeoutSnapshotFlushedRef.current = false;
-    autoSubmitAttemptedRef.current = false;
-  }, [assessment?.id, assessmentId]);
 
   const totalDurationSeconds = Math.max(1, Number((assessment?.duration_minutes || 30) * 60));
   const remainingRatio = Math.max(0, Math.min(1, timeLeft / totalDurationSeconds));
@@ -1725,7 +1777,14 @@ export default function AssessmentPage({
   }
 
   if (submitted) {
-    return <AssessmentStatusScreen mode="submitted" submittedAt={submittedAtIso} lightMode={assessmentLightMode} />;
+    return (
+      <AssessmentStatusScreen
+        mode="submitted"
+        submittedAt={submittedAtIso}
+        lightMode={assessmentLightMode}
+        submissionReceiptReconciled={submissionReceiptReconciled}
+      />
+    );
   }
 
   return (
@@ -1799,6 +1858,16 @@ export default function AssessmentPage({
             // thing a visitor sees in the iframe; live candidates read it first.
             defaultExpanded={!demoMode}
           />
+
+          {submitting ? (
+            <div
+              className="mt-4 rounded-[var(--radius-md)] border border-[var(--taali-info-border)] bg-[var(--taali-info-soft)] px-4 py-3 font-mono text-[0.75rem] text-[var(--taali-info)]"
+              data-testid="assessment-submit-status"
+              role="status"
+            >
+              Finalizing your latest work. Editing and Claude are briefly locked so the submitted snapshot cannot change.
+            </div>
+          ) : null}
 
           <AssessmentWorkspace
             className="mt-4"

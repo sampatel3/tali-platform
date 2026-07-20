@@ -393,6 +393,8 @@ def test_submit_retry_returns_the_existing_durable_receipt(client, db) -> None:
         submission_artifact=artifact,
         submission_artifact_sha256=artifact["sha256"],
         submission_artifact_captured_at=captured_at,
+        code_snapshots=[{"final": "candidate work accepted by the first request"}],
+        tab_switch_count=3,
         scoring_partial=True,
         scoring_failed=False,
     )
@@ -404,7 +406,10 @@ def test_submit_retry_returns_the_existing_durable_receipt(client, db) -> None:
         client,
         assessment,
         path,
-        {"final_code": "a stale browser retry is ignored"},
+        {
+            "final_code": "a stale browser retry is ignored",
+            "tab_switch_count": 99,
+        },
     )
 
     assert response.status_code == 200, response.text
@@ -412,6 +417,11 @@ def test_submit_retry_returns_the_existing_durable_receipt(client, db) -> None:
     assert receipt["success"] is True
     assert receipt["grading_status"] == "pending"
     assert receipt["artifact_gate"]["artifact_sha256"] == artifact["sha256"]
+    db.refresh(assessment)
+    assert assessment.code_snapshots == [
+        {"final": "candidate work accepted by the first request"}
+    ]
+    assert assessment.tab_switch_count == 3
 
 
 def test_submit_at_deadline_returns_the_timeout_capture_receipt(
