@@ -1,9 +1,19 @@
+import { useEffect, useRef, useState } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  MemoryRouter,
+  Route,
+  Routes,
+  useNavigate,
+  useSearchParams,
+} from 'react-router-dom';
 import { vi } from 'vitest';
 
+import { AssessmentLiveRoute } from '../../app/AssessmentRoutes';
 import AssessmentPage from '../../features/assessment_runtime/AssessmentPage';
 
 const mockExecute = vi.fn();
+const mockStart = vi.fn();
 const mockSubmit = vi.fn();
 const mockSaveRepoFile = vi.fn();
 const mockGetRepoFile = vi.fn();
@@ -13,7 +23,7 @@ const mockKeepalive = vi.fn();
 
 vi.mock('../../shared/api', () => ({
   assessments: {
-    start: vi.fn(),
+    start: (...args) => mockStart(...args),
     execute: (...args) => mockExecute(...args),
     saveRepoFile: (...args) => mockSaveRepoFile(...args),
     getRepoFile: (...args) => mockGetRepoFile(...args),
@@ -43,12 +53,39 @@ vi.mock('../../components/assessment/CodeEditor', () => ({
   },
 }));
 
+const AppShellStartDataRaceHarness = ({ staleStartData }) => {
+  const [startData, setStartData] = useState(staleStartData);
+  const [searchParams] = useSearchParams();
+  const activeToken = searchParams.get('token');
+  const priorTokenRef = useRef(activeToken);
+  const navigate = useNavigate();
+
+  // AppShell currently clears its prior started payload in a passive effect.
+  // The route must reject a mismatched payload synchronously, before this runs.
+  useEffect(() => {
+    if (priorTokenRef.current !== activeToken) {
+      setStartData(null);
+      priorTokenRef.current = activeToken;
+    }
+  }, [activeToken]);
+
+  return (
+    <>
+      <button type="button" onClick={() => navigate('/assessment/live?token=token-b')}>
+        Switch to assessment B
+      </button>
+      <AssessmentLiveRoute startData={startData} />
+    </>
+  );
+};
+
 describe('AssessmentPage live agentic runtime', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
     window.localStorage.clear();
     mockExecute.mockResolvedValue({ data: { success: true, stdout: '', stderr: '', error: null, results: [] } });
+    mockStart.mockResolvedValue({ data: {} });
     mockSaveRepoFile.mockResolvedValue({ data: { success: true, revision: 'b'.repeat(64) } });
     mockGetRepoFile.mockImplementation((assessmentId, path) => Promise.resolve({
       data: { path, content: '', revision: 'a'.repeat(64) },
@@ -62,6 +99,136 @@ describe('AssessmentPage live agentic runtime', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it('never initializes token B with token A start data during the AppShell clear race', async () => {
+    const staleScenario = 'STALE A SCENARIO MUST NEVER RENDER';
+    const freshScenario = 'Fresh B scenario loaded from the B start API';
+    const staleStartData = {
+      assessment_id: 401,
+      token: 'token-a',
+      time_remaining: 1200,
+      task: {
+        name: 'Stale assessment A',
+        scenario: staleScenario,
+        duration_minutes: 30,
+      },
+    };
+    mockStart.mockResolvedValueOnce({
+      data: {
+        assessment_id: 402,
+        time_remaining: 1200,
+        task: {
+          name: 'Fresh assessment B',
+          scenario: freshScenario,
+          duration_minutes: 30,
+        },
+      },
+    });
+    render(
+      <MemoryRouter initialEntries={['/assessment/live?token=token-a']}>
+        <Routes>
+          <Route
+            path="/assessment/live"
+            element={<AppShellStartDataRaceHarness staleStartData={staleStartData} />}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByText(staleScenario)).length).toBeGreaterThan(0);
+    await waitFor(() => expect(mockRuntimeEvent).toHaveBeenCalledWith(
+      401,
+      'runtime_loaded',
+      'token-a',
+      {},
+      expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    ));
+    mockRuntimeEvent.mockClear();
+    const staleFrames = [];
+    const observer = new MutationObserver(() => {
+      if (document.body.textContent?.includes(staleScenario)) {
+        staleFrames.push(document.body.textContent);
+      }
+    });
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
+    try {
+      fireEvent.click(screen.getByRole('button', { name: 'Switch to assessment B' }));
+      expect((await screen.findAllByText(freshScenario)).length).toBeGreaterThan(0);
+      await waitFor(() => expect(mockRuntimeEvent).toHaveBeenCalledWith(
+        402,
+        'runtime_loaded',
+        'token-b',
+        {},
+        expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+      ));
+    } finally {
+      observer.disconnect();
+    }
+
+    expect(mockStart).toHaveBeenCalledWith('token-b', {
+      candidate_session_key: expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    });
+    expect(staleFrames).toEqual([]);
+    expect(screen.queryByText(staleScenario)).not.toBeInTheDocument();
+    expect(mockRuntimeEvent.mock.calls.some((call) => (
+      call[0] === 401 || call[2] === 'token-a'
+    ))).toBe(false);
+  });
+
+  it('drops start data without an identifying token before loading an explicit route token', async () => {
+    const ambiguousScenario = 'AMBIGUOUS START DATA MUST NEVER RENDER';
+    const freshScenario = 'Explicit token B loaded from its own start API';
+    mockStart.mockResolvedValueOnce({
+      data: {
+        assessment_id: 404,
+        time_remaining: 1200,
+        task: {
+          name: 'Explicit assessment B',
+          scenario: freshScenario,
+          duration_minutes: 30,
+        },
+      },
+    });
+
+    render(
+      <MemoryRouter initialEntries={['/assessment/live?token=token-b']}>
+        <Routes>
+          <Route
+            path="/assessment/live"
+            element={(
+              <AssessmentLiveRoute startData={{
+                assessment_id: 403,
+                time_remaining: 1200,
+                task: {
+                  name: 'Ambiguous prior assessment',
+                  scenario: ambiguousScenario,
+                  duration_minutes: 30,
+                },
+              }} />
+            )}
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect((await screen.findAllByText(freshScenario)).length).toBeGreaterThan(0);
+    expect(mockStart).toHaveBeenCalledWith('token-b', {
+      candidate_session_key: expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    });
+    expect(screen.queryByText(ambiguousScenario)).not.toBeInTheDocument();
+    await waitFor(() => expect(mockRuntimeEvent).toHaveBeenCalledWith(
+      404,
+      'runtime_loaded',
+      'token-b',
+      {},
+      expect.stringMatching(/^[A-Za-z0-9_-]{32,}$/),
+    ));
   });
 
   it('sends submit tab_switch_count metadata', async () => {

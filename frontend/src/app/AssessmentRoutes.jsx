@@ -48,10 +48,21 @@ export function CandidateWelcomeWithIdRoute({ onNavigate, onStarted }) {
 
 export function AssessmentLiveRoute({ startData }) {
   const [searchParams] = useSearchParams();
-  const explicitToken = searchParams.get('token');
-  const recoveredToken = explicitToken ? null : recoverCandidateRuntimeToken();
-  const incomingToken = explicitToken || recoveredToken || startData?.token || null;
-  const incomingAssessmentId = Number(startData?.assessment_id) || null;
+  const explicitToken = String(searchParams.get('token') || '').trim() || null;
+  const recoveredToken = explicitToken
+    ? null
+    : (String(recoverCandidateRuntimeToken() || '').trim() || null);
+  const routeToken = explicitToken || recoveredToken;
+  const startDataToken = String(startData?.token || '').trim() || null;
+  // AppShell clears an earlier run's start payload in a passive effect. Route
+  // navigation renders first, so fail closed here: a token-B runtime must
+  // never receive token-A (or unidentifiable legacy) data for even one frame.
+  const matchedStartData = startDataToken
+    && (!routeToken || startDataToken === routeToken)
+    ? startData
+    : null;
+  const incomingToken = routeToken || startDataToken || null;
+  const incomingAssessmentId = Number(matchedStartData?.assessment_id) || null;
   const demo = searchParams.get('demo') === '1';
   const runtimeRef = useRef(null);
   const priorRuntime = runtimeRef.current;
@@ -73,6 +84,7 @@ export function AssessmentLiveRoute({ startData }) {
       key: createAssessmentRuntimeIdentity(),
       token: incomingToken,
       assessmentId: incomingAssessmentId,
+      startData: matchedStartData,
       demo,
     };
   } else {
@@ -80,9 +92,11 @@ export function AssessmentLiveRoute({ startData }) {
     if (incomingAssessmentId) {
       priorRuntime.assessmentId = incomingAssessmentId;
     }
+    if (matchedStartData) priorRuntime.startData = matchedStartData;
   }
   const runtimeIdentity = runtimeRef.current;
   const token = incomingToken || runtimeIdentity.token;
+  const runtimeStartData = matchedStartData || runtimeIdentity.startData || null;
   const [demoFixtures, setDemoFixtures] = useState(null);
 
   useEffect(() => {
@@ -102,7 +116,7 @@ export function AssessmentLiveRoute({ startData }) {
       <AssessmentPage
         key={runtimeIdentity.key}
         token={demo ? null : token}
-        startData={demo ? demoFixtures.startData : startData}
+        startData={demo ? demoFixtures.startData : runtimeStartData}
         demoMode={demo}
         demoProfile={demo ? {
           ...demoFixtures.runtime,

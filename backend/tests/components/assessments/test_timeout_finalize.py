@@ -98,12 +98,22 @@ def test_finalize_freezes_queues_and_marks_timeout(client, db, monkeypatch):
     a = _make_assessment(client, db, headers, task["id"],
                          status=AssessmentStatus.IN_PROGRESS, started_minutes_ago=40)
 
+    real_commit = db.commit
+    commit_calls: list[None] = []
+
+    def tracked_commit():
+        commit_calls.append(None)
+        real_commit()
+
+    monkeypatch.setattr(db, "commit", tracked_commit)
+
     def fake_submit(
         assessment,
         final_code,
         tab_switch_count,
         _db,
         *,
+        completion_status,
         wake_agent_on_commit=True,
         defer_scoring=False,
         enqueue_rubric_retry_on_commit=True,
@@ -111,7 +121,9 @@ def test_finalize_freezes_queues_and_marks_timeout(client, db, monkeypatch):
         assert wake_agent_on_commit is False
         assert defer_scoring is True
         assert enqueue_rubric_retry_on_commit is False
-        assessment.status = AssessmentStatus.COMPLETED
+        assert completion_status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+        assessment.status = completion_status
+        assessment.completed_due_to_timeout = True
         assessment.completed_at = datetime.now(timezone.utc)
         assessment.scoring_partial = True
         _db.commit()
@@ -137,6 +149,7 @@ def test_finalize_freezes_queues_and_marks_timeout(client, db, monkeypatch):
     assert a.taali_score is None
     assert dispatched == [a.id]
     assert a.completed_at is not None
+    assert len(commit_calls) == 1
 
 
 def test_timed_out_finalization_defers_role_wake_until_grading_completes(
@@ -170,6 +183,7 @@ def test_timed_out_finalization_defers_role_wake_until_grading_completes(
         tab_switch_count,
         _db,
         *,
+        completion_status,
         wake_agent_on_commit=True,
         defer_scoring=False,
         enqueue_rubric_retry_on_commit=True,
@@ -177,7 +191,9 @@ def test_timed_out_finalization_defers_role_wake_until_grading_completes(
         assert wake_agent_on_commit is False
         assert defer_scoring is True
         assert enqueue_rubric_retry_on_commit is False
-        assessment.status = AssessmentStatus.COMPLETED
+        assert completion_status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+        assessment.status = completion_status
+        assessment.completed_due_to_timeout = True
         assessment.completed_at = datetime.now(timezone.utc)
         assessment.scoring_partial = True
         _db.commit()
@@ -369,6 +385,7 @@ def test_sweep_finalizes_timed_out_and_skips_active(client, db, monkeypatch):
         tab_switch_count,
         _db,
         *,
+        completion_status,
         wake_agent_on_commit=True,
         defer_scoring=False,
         enqueue_rubric_retry_on_commit=True,
@@ -376,7 +393,9 @@ def test_sweep_finalizes_timed_out_and_skips_active(client, db, monkeypatch):
         assert wake_agent_on_commit is False
         assert defer_scoring is True
         assert enqueue_rubric_retry_on_commit is False
-        assessment.status = AssessmentStatus.COMPLETED
+        assert completion_status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+        assessment.status = completion_status
+        assessment.completed_due_to_timeout = True
         assessment.completed_at = datetime.now(timezone.utc)
         assessment.scoring_partial = True
         _db.commit()

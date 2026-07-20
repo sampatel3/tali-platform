@@ -475,6 +475,7 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
             final_code,
             int(assessment.tab_switch_count or 0),
             db,
+            completion_status=AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
             wake_agent_on_commit=False,
             defer_scoring=True,
             enqueue_rubric_retry_on_commit=False,
@@ -565,19 +566,12 @@ def finalize_timed_out_assessment(assessment: Assessment, db: Session) -> Dict[s
         scoring_failed = True
         logger.exception("Timed-out finalize: artifact capture crashed assessment_id=%s", assessment.id)
 
-    # Relabel the successfully frozen terminal row as the more honest timeout
-    # completion. Pre-terminal capture failures returned above stay retryable
-    # for the next sweep and retain their live source sandbox.
-    assessment.status = AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
-    assessment.completed_due_to_timeout = True
-    if not assessment.completed_at:
-        assessment.completed_at = utcnow()
+    # The timeout status, marker and immutable artifact were accepted in one
+    # commit. Only a post-acceptance failure needs an additional durable marker;
+    # the normal path must not reopen the old relabel crash window.
     if scoring_failed:
         assessment.scoring_failed = True
-    append_assessment_timeline_event(
-        assessment, "auto_submit_timeout_sweep", {"scoring_failed": scoring_failed}
-    )
-    db.commit()
+        db.commit()
     grading_incomplete = bool(
         getattr(assessment, "scoring_failed", False)
         or getattr(assessment, "scoring_partial", False)
@@ -1331,6 +1325,7 @@ def submit_assessment(
     db: Session,
     *,
     wake_agent_on_commit: bool = True,
+    completion_status: AssessmentStatus = AssessmentStatus.COMPLETED,
     retry_scoring: bool = False,
     defer_scoring: bool = False,
     suppress_completion_side_effects: bool = False,
@@ -1347,6 +1342,7 @@ def submit_assessment(
             workspace_repo_root_fn=_workspace_repo_root,
             collect_git_evidence_fn=_collect_git_evidence_from_sandbox,
             recover_retry_sandbox_fn=None,
+            completion_status=completion_status,
             retry_scoring=retry_scoring,
             defer_scoring=defer_scoring,
             suppress_completion_side_effects=suppress_completion_side_effects,

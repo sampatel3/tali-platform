@@ -267,12 +267,85 @@ def test_deferred_submission_returns_durable_receipt_before_grading(db):
     db.expire_all()
     accepted = db.query(Assessment).filter(Assessment.id == assessment.id).one()
     assert accepted.status == AssessmentStatus.COMPLETED
+    assert accepted.completed_due_to_timeout in (False, None)
     assert accepted.submission_artifact_sha256 == result["artifact_gate"]["artifact_sha256"]
     assert accepted.scoring_partial is True
     assert accepted.scoring_failed is False
     retry = accepted.score_breakdown["rubric_grading"]["retry"]
     assert retry["status"] == "pending"
     assert retry["attempt_count"] == 0
+
+
+def test_timeout_terminal_status_survives_process_death_after_artifact_commit(db):
+    """The immutable artifact and timeout status share one acceptance commit."""
+    assessment = _seed(db)
+    assessment.e2b_session_id = "candidate-session"
+    db.commit()
+    sandbox = SimpleNamespace(
+        run_code=lambda _code: {
+            "stdout": '{"files": {"src/main.py": "candidate work\\n"}, "error": null}'
+        }
+    )
+
+    class _SimulatedProcessDeath(BaseException):
+        pass
+
+    class _CrashAfterAcceptanceE2B:
+        def __init__(self, _api_key):
+            pass
+
+        def connect_sandbox(self, sandbox_id):
+            assert sandbox_id == "candidate-session"
+            return sandbox
+
+        def close_sandbox(self, candidate_sandbox):
+            assert candidate_sandbox is sandbox
+            raise _SimulatedProcessDeath("worker died after the acceptance commit")
+
+    with pytest.raises(_SimulatedProcessDeath, match="acceptance commit"):
+        submit_assessment_impl(
+            assessment,
+            "candidate final browser code",
+            7,
+            db,
+            settings_obj=SimpleNamespace(
+                MVP_DISABLE_PROCTORING=False,
+                E2B_API_KEY="e2b-test",
+            ),
+            e2b_service_cls=_CrashAfterAcceptanceE2B,
+            workspace_repo_root_fn=lambda _task: "/workspace/repo",
+            collect_git_evidence_fn=lambda _sandbox, _root: {
+                "head_sha": "candidate-head"
+            },
+            defer_scoring=True,
+            completion_status=AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+        )
+
+    db.expire_all()
+    accepted = db.query(Assessment).filter(Assessment.id == assessment.id).one()
+    original_digest = accepted.submission_artifact_sha256
+    assert accepted.status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+    assert accepted.status != AssessmentStatus.COMPLETED
+    assert accepted.completed_due_to_timeout is True
+    assert original_digest
+    assert accepted.scoring_partial is True
+    assert any(
+        event.get("event_type") == "auto_submit_timeout_sweep"
+        for event in (accepted.timeline or [])
+    )
+
+    retry = assessment_service.finalize_timed_out_assessment(accepted, db)
+
+    assert retry == {
+        "status": "skipped",
+        "reason": "not_in_progress",
+        "assessment_id": accepted.id,
+    }
+    db.expire_all()
+    retried = db.query(Assessment).filter(Assessment.id == assessment.id).one()
+    assert retried.status == AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+    assert retried.completed_due_to_timeout is True
+    assert retried.submission_artifact_sha256 == original_digest
 
 
 def test_deferred_submission_uses_existing_retry_task_as_best_effort_kick(
