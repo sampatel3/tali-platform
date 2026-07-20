@@ -205,6 +205,59 @@ describe('AuthContext', () => {
     expect(authApi.me).toHaveBeenCalledTimes(1);
   });
 
+  it('does not let an older login response reverse a newer cross-tab session', async () => {
+    const loginExchange = deferred();
+    authApi.login.mockImplementationOnce(() => loginExchange.promise);
+
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>,
+    );
+    fireEvent.click(screen.getByText('first login'));
+
+    localStorage.setItem(SESSION_BOUNDARY_STORAGE_KEY, 'newer-tab-boundary');
+    localStorage.setItem('taali_access_token', 'newer-tab-token');
+    localStorage.setItem('taali_user', JSON.stringify({
+      id: 2,
+      email: 'newer-tab@example.com',
+    }));
+    await act(async () => {
+      loginExchange.resolve({ data: { access_token: 'older-tab-token' } });
+    });
+
+    expect(authApi.me).not.toHaveBeenCalled();
+    expect(localStorage.getItem('taali_access_token')).toBe('newer-tab-token');
+    expect(JSON.parse(localStorage.getItem('taali_user'))).toMatchObject({
+      id: 2,
+      email: 'newer-tab@example.com',
+    });
+  });
+
+  it('does not let an old mount profile overwrite a newer cross-tab profile', async () => {
+    const oldProfile = deferred();
+    const accountA = { id: 1, email: 'a@example.com', organization_id: 10 };
+    const accountB = { id: 2, email: 'b@example.com', organization_id: 20 };
+    authApi.me.mockImplementationOnce(() => oldProfile.promise);
+    localStorage.setItem('taali_access_token', 'account-a-token');
+    localStorage.setItem('taali_user', JSON.stringify(accountA));
+
+    render(
+      <AuthProvider>
+        <TestConsumer />
+      </AuthProvider>,
+    );
+    localStorage.setItem(SESSION_BOUNDARY_STORAGE_KEY, 'account-b-boundary-before-storage-event');
+    localStorage.setItem('taali_access_token', 'account-b-token');
+    localStorage.setItem('taali_user', JSON.stringify(accountB));
+    await act(async () => {
+      oldProfile.resolve({ data: accountA });
+    });
+
+    expect(localStorage.getItem('taali_access_token')).toBe('account-b-token');
+    expect(JSON.parse(localStorage.getItem('taali_user'))).toEqual(accountB);
+  });
+
   it('does not complete an invite token exchange after logout supersedes it', async () => {
     const invite = deferred();
     authApi.acceptInvite.mockImplementationOnce(() => invite.promise);
@@ -306,6 +359,7 @@ describe('AuthContext', () => {
     localStorage.setItem(SESSION_BOUNDARY_STORAGE_KEY, externalBoundary);
     localStorage.setItem('taali_access_token', 'account-b-token');
     localStorage.setItem('taali_user', JSON.stringify(accountB));
+    localStorage.setItem('tali_tracked_batch_roles', '[99]');
     await act(async () => {
       window.dispatchEvent(new StorageEvent('storage', {
         key: SESSION_BOUNDARY_STORAGE_KEY,
@@ -322,5 +376,6 @@ describe('AuthContext', () => {
     // initiating tab by deleting the new account's shared credentials.
     expect(localStorage.getItem('taali_access_token')).toBe('account-b-token');
     expect(JSON.parse(localStorage.getItem('taali_user'))).toEqual(accountB);
+    expect(localStorage.getItem('tali_tracked_batch_roles')).toBe('[99]');
   });
 });

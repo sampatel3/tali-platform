@@ -99,6 +99,22 @@ export const isRequestSessionCurrent = () => {
 };
 
 /**
+ * Authentication endpoints intentionally run without an active recruiter
+ * session. Capture the raw marker when an exchange starts so its response can
+ * still be rejected if another tab logs out or signs in before it completes.
+ */
+export const captureStoredSessionBoundary = () => {
+  if (typeof window === 'undefined') return null;
+  if (!initializedForThisTab) initializeSessionBoundary();
+  return readStoredBoundary();
+};
+
+export const isStoredSessionBoundaryCurrent = (marker) => {
+  if (typeof window === 'undefined') return true;
+  return Boolean(marker) && readStoredBoundary() === marker;
+};
+
+/**
  * Capture the boundary that a protected request belongs to. Callers should
  * verify the captured marker again after reading shared credentials: another
  * tab can replace localStorage between two otherwise synchronous reads.
@@ -118,6 +134,9 @@ if (typeof window !== 'undefined') {
     if (event.key !== SESSION_BOUNDARY_STORAGE_KEY) return;
     if (event.storageArea && event.storageArea !== window.localStorage) return;
     const marker = event.newValue || null;
+    // Storage events are queued. A delayed event from another tab must not
+    // invalidate a newer boundary this tab already published or observed.
+    if (marker !== readStoredBoundary()) return;
     if (marker === lastSeenBoundary) return;
     invalidateForExternalBoundary(marker);
   });

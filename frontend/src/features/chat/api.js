@@ -1,7 +1,7 @@
 // Helpers for the conversation-management endpoints. The streaming /turn
 // endpoint is hit directly with fetch from useChatStream — axios doesn't
 // expose ReadableStream so we bypass it for that one call.
-import api, { getFreshSessionAuthHeaders } from '../../shared/api/httpClient';
+import api, { getFreshSessionAuth } from '../../shared/api/httpClient';
 
 export const conversationsApi = {
   list: () => api.get('/taali-chat/conversations').then((r) => r.data),
@@ -15,4 +15,4 @@ const API_URL = (import.meta.env.VITE_API_URL || '').replace(/[\r\n\s]+/g, '').t
 
 export const turnUrl = () => `${API_URL}/api/v1/taali-chat/turn`;
 
-export const freshAuthHeaders = getFreshSessionAuthHeaders;
+export const freshAuth = getFreshSessionAuth;

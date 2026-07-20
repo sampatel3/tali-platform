@@ -10,7 +10,9 @@ import { auth as authApi } from '../shared/api/authClient';
 import { clearAccessToken, setAccessToken } from '../shared/api/httpClient';
 import {
   announceSessionBoundary,
+  captureStoredSessionBoundary,
   initializeSessionBoundary,
+  isStoredSessionBoundaryCurrent,
   SESSION_BOUNDARY_EVENT,
 } from '../shared/auth/sessionBoundary';
 import { clearJobTrackingStorage } from '../shared/jobs/jobTrackingStorage';
@@ -55,13 +57,23 @@ export function AuthProvider({ children }) {
   const isAuthenticated = !!user;
 
   const beginAuthentication = useCallback(() => {
+    const boundary = captureStoredSessionBoundary();
     authGenerationRef.current += 1;
     setLoading(true);
-    return authGenerationRef.current;
+    return {
+      boundary,
+      generation: authGenerationRef.current,
+    };
   }, []);
 
-  const bootstrapProfile = useCallback(async (accessToken, generation) => {
-    if (authGenerationRef.current !== generation) {
+  const isCurrentAuthentication = useCallback((attempt) => (
+    Boolean(attempt)
+    && authGenerationRef.current === attempt.generation
+    && isStoredSessionBoundaryCurrent(attempt.boundary)
+  ), []);
+
+  const bootstrapProfile = useCallback(async (accessToken, attempt) => {
+    if (!isCurrentAuthentication(attempt)) {
       throw supersededAuthenticationError();
     }
     // A successful credential exchange may replace an already-authenticated
@@ -73,12 +85,12 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('taali_user');
     clearJobTrackingStorage();
     setUser(null);
-    const sessionGeneration = beginAuthentication();
+    const sessionAttempt = beginAuthentication();
     try {
       setAccessToken(accessToken);
       const { data: profile } = await authApi.me();
       if (
-        authGenerationRef.current !== sessionGeneration
+        !isCurrentAuthentication(sessionAttempt)
         || !localStorage.getItem('taali_access_token')
       ) {
         throw supersededAuthenticationError();
@@ -89,31 +101,31 @@ export function AuthProvider({ children }) {
     } catch (error) {
       // Roll back a half-created current session. A stale request must never
       // clear the token/profile belonging to the request that superseded it.
-      if (authGenerationRef.current === sessionGeneration) publishLogout();
+      if (isCurrentAuthentication(sessionAttempt)) publishLogout();
       throw error;
     } finally {
-      if (authGenerationRef.current === sessionGeneration) setLoading(false);
+      if (authGenerationRef.current === sessionAttempt.generation) setLoading(false);
     }
-  }, [beginAuthentication]);
+  }, [beginAuthentication, isCurrentAuthentication]);
 
   const login = useCallback(async (email, password) => {
-    const generation = beginAuthentication();
+    const attempt = beginAuthentication();
     try {
       const { data } = await authApi.login(email, password);
-      return await bootstrapProfile(data.access_token, generation);
+      return await bootstrapProfile(data.access_token, attempt);
     } catch (error) {
-      if (authGenerationRef.current === generation) setLoading(false);
+      if (authGenerationRef.current === attempt.generation) setLoading(false);
       throw error;
     }
   }, [beginAuthentication, bootstrapProfile]);
 
   const acceptInvite = useCallback(async (token, password) => {
-    const generation = beginAuthentication();
+    const attempt = beginAuthentication();
     try {
       const { data } = await authApi.acceptInvite(token, password);
-      return await bootstrapProfile(data.access_token, generation);
+      return await bootstrapProfile(data.access_token, attempt);
     } catch (error) {
-      if (authGenerationRef.current === generation) setLoading(false);
+      if (authGenerationRef.current === attempt.generation) setLoading(false);
       throw error;
     }
   }, [beginAuthentication, bootstrapProfile]);
@@ -134,7 +146,6 @@ export function AuthProvider({ children }) {
       // Do not mutate shared token/profile storage here: for an external
       // boundary, another tab may already be installing the next account.
       authGenerationRef.current += 1;
-      clearJobTrackingStorage();
       setUser(null);
       setLoading(false);
     };
@@ -164,28 +175,28 @@ export function AuthProvider({ children }) {
       setLoading(false);
       return undefined;
     }
-    const generation = beginAuthentication();
+    const attempt = beginAuthentication();
     authApi.me()
       .then(({ data }) => {
         if (
-          authGenerationRef.current !== generation
+          !isCurrentAuthentication(attempt)
           || !localStorage.getItem('taali_access_token')
         ) return;
         setUser(data);
         localStorage.setItem('taali_user', JSON.stringify(data));
       })
       .catch(() => {
-        if (authGenerationRef.current === generation) publishLogout();
+        if (isCurrentAuthentication(attempt)) publishLogout();
       })
       .finally(() => {
-        if (authGenerationRef.current === generation) setLoading(false);
+        if (authGenerationRef.current === attempt.generation) setLoading(false);
       });
     return () => {
-      if (authGenerationRef.current === generation) {
+      if (authGenerationRef.current === attempt.generation) {
         authGenerationRef.current += 1;
       }
     };
-  }, [beginAuthentication]);
+  }, [beginAuthentication, isCurrentAuthentication]);
 
   // If token disappears while state still has a user, force logout state sync.
   useEffect(() => {

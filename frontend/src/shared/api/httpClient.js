@@ -204,7 +204,7 @@ export const ensureFreshAccessToken = () => {
 // Streaming fetch callers cannot use the Axios interceptor. Give them the
 // same refresh + cross-tab boundary guarantees before they construct a bearer
 // header, including a final marker check after reading the shared token.
-export const getFreshSessionAuthHeaders = async () => {
+export const getFreshSessionAuth = async () => {
   if (!isRequestSessionCurrent()) {
     throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
   }
@@ -217,7 +217,10 @@ export const getFreshSessionAuthHeaders = async () => {
   if (!isSessionBoundaryCurrent(requestSessionBoundary)) {
     throw new axios.CanceledError('Session changed in another tab. Please sign in again.');
   }
-  return token ? { Authorization: `Bearer ${token}` } : {};
+  return {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    sessionBoundary: requestSessionBoundary,
+  };
 };
 
 // Heartbeat so a user reading/typing without firing API calls stays signed in.
@@ -339,7 +342,17 @@ api.interceptors.request.use(async (config) => {
 });
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const requestSessionBoundary = response.config?.taaliSessionBoundary;
+    if (requestSessionBoundary && !isSessionBoundaryCurrent(requestSessionBoundary)) {
+      return Promise.reject(new axios.CanceledError(
+        'Session changed in another tab. Please sign in again.',
+        response.config,
+        response.request,
+      ));
+    }
+    return response;
+  },
   (error) => {
     const status = Number(error.response?.status || 0);
     const url = String(error.config?.url || '');

@@ -105,6 +105,7 @@ vi.mock('./RoleScreeningQuestions', () => ({
 }));
 
 import * as apiClient from '../../shared/api';
+import { clearCache, readCache } from '../../shared/api/resourceCache';
 import { requisitionApi } from '../requisitions/api';
 import { JobPipelinePage } from './JobPipelinePage';
 
@@ -201,6 +202,7 @@ const deferred = () => {
 describe('JobPipelinePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearCache();
     apiClient.roles.get.mockResolvedValue({ data: baseRole });
     apiClient.roles.getShell.mockResolvedValue({ data: baseRole });
     apiClient.roles.update.mockResolvedValue({ data: baseRole });
@@ -275,6 +277,21 @@ describe('JobPipelinePage', () => {
       node.textContent?.includes('Loading pipeline summary…')
     ))).toBe(true);
     expect(apiClient.roles.getShell).toHaveBeenCalledWith(101);
+  });
+
+  it('does not refill the private workspace cache after session cleanup', async () => {
+    const shell = deferred();
+    apiClient.roles.getShell.mockReturnValueOnce(shell.promise);
+
+    renderPipeline();
+    await waitFor(() => expect(apiClient.roles.getShell).toHaveBeenCalledWith(101));
+    window.dispatchEvent(new Event('auth:logout'));
+    await act(async () => {
+      shell.resolve({ data: baseRole });
+    });
+    await waitFor(() => expect(apiClient.roles.listApplications).toHaveBeenCalled());
+
+    expect(readCache('role-workspace:101')).toBeNull();
   });
 
   it('does not present the role agent as on before workspace status has loaded', async () => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 import api, {
   isPublicPath,
-  getFreshSessionAuthHeaders,
+  getFreshSessionAuth,
   shouldRefreshToken,
   setAccessToken,
   clearAccessToken,
@@ -153,7 +153,7 @@ describe('httpClient cross-tab session boundary', () => {
       newValue: externalBoundary,
     }));
 
-    await expect(getFreshSessionAuthHeaders()).rejects.toMatchObject({
+    await expect(getFreshSessionAuth()).rejects.toMatchObject({
       code: 'ERR_CANCELED',
     });
   });
@@ -184,6 +184,27 @@ describe('httpClient cross-tab session boundary', () => {
     } finally {
       getItem.mockRestore();
     }
+  });
+
+  it('rejects a successful old-account response after the boundary changes', async () => {
+    let resolveRequest;
+    const adapter = vi.fn((config) => new Promise((resolve) => {
+      resolveRequest = () => resolve({
+        data: { private: 'account-a-data' },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      });
+    }));
+    const request = api.get('/roles', { adapter });
+    await vi.waitFor(() => expect(adapter).toHaveBeenCalledTimes(1));
+
+    localStorage.setItem(SESSION_BOUNDARY_STORAGE_KEY, 'account-b-success-boundary');
+    localStorage.setItem('taali_access_token', 'account-b-token');
+    resolveRequest();
+
+    await expect(request).rejects.toMatchObject({ code: 'ERR_CANCELED' });
   });
 
   it('does not let a stale 401 overwrite a replacement boundary while its token is in transition', async () => {

@@ -17,7 +17,8 @@
 // `toolCallId` between the call and its later result.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { freshAuthHeaders, turnUrl } from './api';
+import { isSessionBoundaryCurrent } from '../../shared/auth/sessionBoundary';
+import { freshAuth, turnUrl } from './api';
 
 const newId = () => `m_${Math.random().toString(36).slice(2, 9)}`;
 
@@ -83,7 +84,15 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
       abortRef.current = controller;
 
       try {
-        const headers = await freshAuthHeaders();
+        const { headers, sessionBoundary } = await freshAuth();
+        const assertCurrentSession = () => {
+          if (isSessionBoundaryCurrent(sessionBoundary)) return;
+          controller.abort();
+          const sessionError = new Error('Session changed in another tab. Please sign in again.');
+          sessionError.name = 'AbortError';
+          throw sessionError;
+        };
+        assertCurrentSession();
         const resp = await fetch(turnUrl(), {
           method: 'POST',
           signal: controller.signal,
@@ -97,6 +106,7 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
             conversation_id: conversationId ?? null,
           }),
         });
+        assertCurrentSession();
         if (!resp.ok) {
           throw new Error(`HTTP ${resp.status}: ${await resp.text().catch(() => '')}`);
         }
@@ -132,6 +142,7 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
         // eslint-disable-next-line no-constant-condition
         while (true) {
           const { value, done } = await reader.read();
+          assertCurrentSession();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
 
