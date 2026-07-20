@@ -41,7 +41,7 @@ export const FUNNEL = [
   {
     n: '05',
     key: 'Hand back',
-    body: 'Decisions, notes and reports written back to your ATS. The audit trail comes free.',
+    body: 'Candidate movements and structured decision summaries written back to your ATS. The audit trail comes free.',
     viz: { kind: 'chips', chips: [{ label: '↻ synced to Workable', variant: 'default' }] },
   },
 ];

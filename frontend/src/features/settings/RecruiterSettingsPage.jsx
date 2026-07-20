@@ -48,7 +48,7 @@ import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 const WORKABLE_SCOPE_OPTIONS = [
   { id: 'r_jobs', label: 'r_jobs', description: 'Read jobs and roles from Workable.' },
   { id: 'r_candidates', label: 'r_candidates', description: 'Read candidate profiles and stages.' },
-  { id: 'w_candidates', label: 'w_candidates', description: 'Write candidate stage activity for invites, disqualify actions, and notes.' },
+  { id: 'w_candidates', label: 'w_candidates', description: 'Write candidate movements and their decision summaries.' },
 ];
 
 const WORKABLE_REQUIRED_SCOPES = ['r_jobs', 'r_candidates'];
@@ -887,7 +887,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       autoRejectEnabled: Boolean(workableConfig.auto_reject_enabled),
       workableActorMemberId: workableConfig.workable_actor_member_id || '',
       workableDisqualifyReasonId: workableConfig.workable_disqualify_reason_id || '',
-      autoRejectNoteTemplate: workableConfig.auto_reject_note_template || '',
+      autoRejectNoteTemplate: String(workableConfig.auto_reject_note_template || '').slice(0, 256),
     });
     setWorkableSelectedScopes(
       grantedScopes.length > 0
@@ -1276,7 +1276,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const hasWriteScope = grantedWorkableScopes.includes('w_candidates');
     const workableActorMemberId = String(workableForm.workableActorMemberId || '').trim();
     const workableDisqualifyReasonId = String(workableForm.workableDisqualifyReasonId || '').trim();
-    const autoRejectNoteTemplate = String(workableForm.autoRejectNoteTemplate || '').trim();
+    const autoRejectNoteTemplate = String(workableForm.autoRejectNoteTemplate || '').trim().slice(0, 256);
 
     if ((workableWriteback || autoRejectEnabled) && !hasWriteScope) {
       showToast('Reconnect Workable with the "Write candidates" (w_candidates) permission to enable invite, advance, reject, and reopen actions.', 'error');
@@ -1774,7 +1774,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <label className={`wk-mode-card ${workableForm.workableWriteback === true ? 'selected' : ''}`}>
                       <div>
                         <h5>Two-way</h5>
-                        <p>Taali writes candidate activity back — invites, stage moves, disqualify, and notes. Requires the <code>w_candidates</code> scope.</p>
+                        <p>Taali writes confirmed candidate stage and outcome movements to Workable, with one concise movement summary. Assessment invitations, progress, results, and reports stay in Taali. Requires the <code>w_candidates</code> scope.</p>
                       </div>
                       <input
                         type="radio"
@@ -1788,7 +1788,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <label className={`wk-mode-card ${workableForm.workableWriteback === false ? 'selected' : ''}`}>
                       <div>
                         <h5>Read-only</h5>
-                        <p>Workable stays read-only. Taali manages invites, review, and decisions locally — no write-backs.</p>
+                        <p>Workable stays read-only. Taali manages candidate review and decisions locally, and assessment activity stays in Taali — no write-backs.</p>
                       </div>
                       <input
                         type="radio"
@@ -1893,10 +1893,14 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <span className="k">Reject note template</span>
                     <textarea
                       rows={4}
+                      maxLength={256}
                       value={workableForm.autoRejectNoteTemplate}
                       onChange={(event) => setWorkableForm((prev) => ({ ...prev, autoRejectNoteTemplate: event.target.value }))}
                       placeholder="Auto-rejected by Taali. Pre-screen {{pre_screen_score}}/100 below threshold {{threshold}}."
                     />
+                    <span className="settings-inline-note">
+                      Used only when an automatic rejection moves the candidate in Workable. Assessment updates stay in Taali. Up to 256 characters.
+                    </span>
                   </label>
 
                   <div className="settings-scope-list settings-top-gap">

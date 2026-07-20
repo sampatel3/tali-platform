@@ -29,10 +29,12 @@ from ...services.pre_screen_decision_emitter import queue_knockout_reject
 from .knockout_automation import try_auto_resolve_knockout
 from .screening_service import evaluate_knockouts, list_role_questions
 
-# The recruiter-facing free-text reason a knockout failure is rejected under. A
-# plain constant — the ATS owns any structured disposition-reason catalog, so
-# Tali no longer resolves a catalog row here.
-_KNOCKOUT_REJECT_REASON = "Missing required skills"
+# The recruiter-facing free-text reason a knockout failure is rejected under.
+# Screening questions can cover non-skill requirements such as work
+# authorization, so keep the reason accurate for every supported question type.
+# The ATS owns any structured disposition-reason catalog; Taali does not resolve
+# a catalog row here.
+_KNOCKOUT_REJECT_REASON = "Did not meet screening requirements"
 
 
 @dataclass

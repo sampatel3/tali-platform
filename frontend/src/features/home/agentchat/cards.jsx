@@ -69,9 +69,10 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
 
   if (card.type === 'operation_preview') {
     const preview = card.preview || {};
+    const standaloneAtsNoteRetired = card.operation === 'post_workable_note';
     const labels = {
       create_application: 'Create application',
-      post_workable_note: 'Post Workable note',
+      post_workable_note: 'Standalone ATS note disabled',
       run_agent_now: 'Run agent now',
     };
     const subject = preview.candidate
@@ -83,12 +84,12 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
     return (
       <ChatArtifact
         data-testid="operation-preview"
-        eyebrow="Confirmation required"
+        eyebrow={standaloneAtsNoteRetired ? 'Internal-only policy' : 'Confirmation required'}
         title={operationLabel}
         summary={subject}
         icon={CircleHelp}
-        status={{ label: 'Not run', tone: 'neutral' }}
-        footer={onPrompt ? (
+        status={{ label: standaloneAtsNoteRetired ? 'Not sent' : 'Not run', tone: 'neutral' }}
+        footer={onPrompt && !standaloneAtsNoteRetired ? (
           <Button variant="primary" size="xs" onClick={() => onPrompt(confirmationPrompt)}>
             Review in composer
           </Button>
@@ -97,7 +98,11 @@ export function ImpactCard({ card, onApply, onPrompt, busy, detailOnly = false }
         {preview.body_preview ? (
           <div className="tk-artifact-rescreen-estimate">“{preview.body_preview}”</div>
         ) : null}
-        <div className="tk-artifact-rescreen-estimate">No action has run. Confirm in a new message.</div>
+        <div className="tk-artifact-rescreen-estimate">
+          {standaloneAtsNoteRetired
+            ? 'Save recruiter context as an internal Taali note. Only candidate movements and structured decision summaries are sent to the ATS.'
+            : 'No action has run. Confirm in a new message.'}
+        </div>
       </ChatArtifact>
     );
   }

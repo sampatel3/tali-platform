@@ -240,7 +240,7 @@ export function useCandidateTriage({
     try {
       const outcomeResponse = await rolesApi.updateApplicationOutcome(application.id, {
         application_outcome: 'rejected',
-        reason: 'Recruiter reject from role view',
+        reason: 'Rejected in Taali following recruiter review.',
         ...(role?.role_kind === 'sister' ? { acting_role_id: role.id } : {}),
       });
       setTriageApplicationId(null);

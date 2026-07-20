@@ -21,7 +21,6 @@ from ..actions import (
     advance_stage,
     ask_recruiter,
     create_application,
-    post_workable_note,
     queue_decision,
     reject_application,
     resend_assessment_invite,
@@ -554,27 +553,6 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 "notes": {"type": "string"},
             },
             "required": ["role_id", "candidate_email"],
-        },
-    },
-    {
-        "name": "post_workable_note",
-        "description": (
-            "Post a free-form note to a candidate's Workable activity feed. "
-            "Use to leave context that doesn't correspond to a stage change "
-            "— e.g. flagging why you queued a rejection, recording a side-"
-            "channel observation, or adding a heads-up the recruiter should "
-            "see in their Workable view. Skipped if the application has no "
-            "linked Workable candidate or the org isn't Workable-connected. "
-            "Body is capped at 8000 chars. Returns {application_id, status, "
-            "detail} where status is 'posted', 'skipped', or 'failed'."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "application_id": {"type": "integer"},
-                "body": {"type": "string", "description": "Note text to post."},
-            },
-            "required": ["application_id", "body"],
         },
     },
     # ------------------------------------------------------------------
@@ -1389,47 +1367,17 @@ def _tool_create_application(
 def _tool_post_workable_note(
     db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
 ) -> Any:
-    actor = Actor.agent(int(agent_run.id))
-    application_id = int(args["application_id"])
+    """Reject stale calls from runs that received the retired tool schema."""
 
-    # Single-role execution boundary — matches the guard on
-    # resend_assessment_invite. An agent running for role A posting a
-    # note to role B's candidate would leak agent-side actions across
-    # role workflows and surface in role B's Workable feed with no
-    # corresponding pipeline event under role B's intent. Refuse.
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == int(role.organization_id),
-        )
-        .first()
+    from ..services.ats_note_policy import (
+        STANDALONE_ATS_NOTES_DISABLED_MESSAGE,
     )
-    if app is None:
-        return {
-            "status": "not_found",
-            "application_id": application_id,
-            "detail": "application not found in this organization",
-        }
-    if app.role_id is None or int(app.role_id) != int(role.id):
-        return {
-            "status": "wrong_role",
-            "application_id": application_id,
-            "detail": (
-                f"application {application_id} belongs to role {app.role_id}, "
-                f"not the running role {int(role.id)}; refusing to post a "
-                "note across roles"
-            ),
-        }
 
-    result = post_workable_note.run(
-        db,
-        actor,
-        organization_id=int(role.organization_id),
-        application_id=application_id,
-        body=str(args["body"]),
-    )
-    return result.as_dict()
+    return {
+        "status": "blocked_by_policy",
+        "tool": "post_workable_note",
+        "detail": STANDALONE_ATS_NOTES_DISABLED_MESSAGE,
+    }
 
 
 def _stamp_policy_revision_in_evidence(
@@ -1467,6 +1415,7 @@ _POLICY_EVIDENCE_KEYS = frozenset(
         "decision_trigger",
         "decision_factors",
         "decision_point",
+        "decision_stage",
         "candidate_summary",
         "engine_verdict",
         "policy_basis",
@@ -1544,6 +1493,11 @@ def _policy_snapshot_for_evaluation(
     pre_screen = output_value("pre_screen", "score")
     if pre_screen is None and app is not None:
         pre_screen = getattr(app, "genuine_pre_screen_score_100", None)
+    assessment_score = output_value("assessment_scoring", "assessment_score")
+    assessment_completed = (
+        output_value("assessment_scoring", "assessment_completed") is True
+        or assessment_score is not None
+    )
     taali_score = output_value("assessment_scoring", "taali_score")
     if taali_score is None and app is not None:
         taali_score = getattr(app, "taali_score_cache_100", None)
@@ -1559,6 +1513,7 @@ def _policy_snapshot_for_evaluation(
         "source": "agent_runtime_policy",
         "engine_verdict": str(getattr(verdict, "decision_type", "") or ""),
         "decision_point": getattr(verdict, "decision_point", None),
+        "decision_stage": "assessment" if assessment_completed else "full_scoring",
         "rule_path": rule_path,
         "decision_trigger": fired,
         "policy_reasoning": getattr(verdict, "reasoning", None),
@@ -1977,6 +1932,7 @@ def _auto_execute_decision(
         "auto_toggle": _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type),
     }
     reason = f"Auto-approved per role.{metadata['auto_toggle']} (decision #{decision.id})"
+    reject_notify = False
 
     if decision_type == "advance_to_interview":
         advance_stage.run(
@@ -1990,7 +1946,20 @@ def _auto_execute_decision(
             metadata=metadata,
         )
     elif decision_type in ("reject", "skip_assessment_reject"):
-        reject_application.run(
+        reject_app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(decision.application_id),
+                CandidateApplication.organization_id == int(role.organization_id),
+            )
+            .one_or_none()
+        )
+        previous_outcome = (
+            getattr(reject_app, "application_outcome", None)
+            if reject_app is not None
+            else None
+        )
+        rejected_app = reject_application.run(
             db,
             actor,
             organization_id=int(role.organization_id),
@@ -1998,6 +1967,11 @@ def _auto_execute_decision(
             reason=reason,
             idempotency_key=f"approve_decision:{decision.id}",
             metadata={**metadata, "decision_type": decision_type},
+            defer_notify=True,
+        )
+        reject_notify = bool(
+            previous_outcome != "rejected"
+            and getattr(rejected_app, "application_outcome", None) == "rejected"
         )
     elif decision_type == "send_assessment":
         ev = decision.evidence or {}
@@ -2079,7 +2053,7 @@ def _auto_execute_decision(
         role=role,
         disposition="approved",
         note=reason,
-        reject_notify=False,
+        reject_notify=reject_notify,
     )
     if app is not None:
         try:
@@ -2818,8 +2792,9 @@ QUEUE_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
 # are always available; everything below can spend money, mutate state, enqueue
 # work, or contact a candidate/recruiter and therefore must pass the role's
 # action allowlist.  The default mirrors the system-prompt allowlist and
-# deliberately excludes the legacy create_application / post_workable_note /
-# refresh_candidate_graph tools until a role opts into them explicitly.
+# deliberately excludes the legacy create_application / refresh_candidate_graph
+# tools until a role opts into them explicitly. Standalone ATS notes are retired
+# entirely and remain only as a blocked stale-call handler below.
 GOVERNED_ACTION_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "nl_search_candidates",
@@ -2830,7 +2805,6 @@ GOVERNED_ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "send_assessment",
         "resend_assessment_invite",
         "create_application",
-        "post_workable_note",
         "refresh_candidate_graph",
         "queue_advance_decision",
         "queue_reject_decision",
@@ -2843,7 +2817,7 @@ GOVERNED_ACTION_TOOL_NAMES: frozenset[str] = frozenset(
 )
 
 EXPLICIT_OPT_IN_ACTION_TOOL_NAMES: frozenset[str] = frozenset(
-    {"create_application", "post_workable_note", "refresh_candidate_graph"}
+    {"create_application", "refresh_candidate_graph"}
 )
 
 DEFAULT_AGENT_ACTION_ALLOWLIST: frozenset[str] = GOVERNED_ACTION_TOOL_NAMES.difference(

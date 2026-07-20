@@ -256,7 +256,6 @@ def test_agent_tools_catalogue_contains_expected_names():
         "send_assessment",
         "resend_assessment_invite",
         "create_application",
-        "post_workable_note",
         # queue
         "queue_advance_decision",
         "queue_reject_decision",
@@ -265,6 +264,7 @@ def test_agent_tools_catalogue_contains_expected_names():
         # terminal
         "agent_run_complete",
     }.issubset(names)
+    assert "post_workable_note" not in names
 
     search_tool = next(
         t for t in tool_registry.AGENT_TOOLS if t["name"] == "search_applications"
@@ -713,26 +713,13 @@ def test_create_application_dispatch_invokes_action(db):
     assert result["status"] == "created"
 
 
-def test_post_workable_note_dispatch_invokes_action(db):
+def test_retired_post_workable_note_dispatch_fails_closed_for_stale_runs(db):
     org = _make_org(db)
     role = _make_role(db, org)
     app = _make_application(db, org=org, role=role, name="X", email="x@x.test")
     run = _make_agent_run(db, role)
 
-    fake_result = type(
-        "_R",
-        (),
-        {
-            "as_dict": lambda self: {
-                "application_id": app.id,
-                "status": "posted",
-                "detail": None,
-            }
-        },
-    )()
-    with patch(
-        "app.actions.post_workable_note.run", return_value=fake_result
-    ) as mock_run:
+    with patch("app.services.workable_op_runner.enqueue_workable_op") as enqueue:
         result = tool_registry.dispatch(
             "post_workable_note",
             {"application_id": app.id, "body": "Agent flagged this candidate."},
@@ -741,102 +728,37 @@ def test_post_workable_note_dispatch_invokes_action(db):
             role=role,
         )
 
-    assert mock_run.called
-    kwargs = mock_run.call_args.kwargs
-    assert kwargs["application_id"] == app.id
-    assert kwargs["body"] == "Agent flagged this candidate."
-    actor = mock_run.call_args.args[1]
-    assert actor.type == "agent"
-    assert result["status"] == "posted"
+    assert result["status"] == "blocked_by_policy"
+    assert result["tool"] == "post_workable_note"
+    assert "internal Taali note" in result["detail"]
+    enqueue.assert_not_called()
 
 
-def test_post_workable_note_dispatch_refuses_cross_role(db):
-    """Regression: an agent running for role A must not post a Workable
-    note on an application that belongs to role B in the same org.
-    (Codex P2 follow-up on #141.)
-    """
-    org = _make_org(db)
-    role_a = _make_role(db, org)
-    role_b = Role(
-        organization_id=org.id,
-        name="Other Role",
-        source="manual",
-        agentic_mode_enabled=True,
-    )
-    db.add(role_b)
-    db.flush()
-    app_for_b = _make_application(db, org=org, role=role_b, name="B", email="b@x.test")
-    run_a = _make_agent_run(db, role_a)
+def test_retired_post_workable_note_action_never_calls_provider(db):
+    from app.actions import post_workable_note
+    from app.actions.types import Actor
 
-    with patch("app.actions.post_workable_note.run") as mock_action:
-        result = tool_registry.dispatch(
-            "post_workable_note",
-            {"application_id": int(app_for_b.id), "body": "leaked note"},
-            db=db,
-            agent_run=run_a,
-            role=role_a,
-        )
-
-    assert result["status"] == "wrong_role"
-    assert result["application_id"] == int(app_for_b.id)
-    assert not mock_action.called
-
-
-def test_post_workable_note_dispatch_returns_not_found_for_unknown_id(db):
-    org = _make_org(db)
-    role = _make_role(db, org)
-    run = _make_agent_run(db, role)
-
-    with patch("app.actions.post_workable_note.run") as mock_action:
-        result = tool_registry.dispatch(
-            "post_workable_note",
-            {"application_id": 999999, "body": "x"},
-            db=db,
-            agent_run=run,
-            role=role,
-        )
-
-    assert result["status"] == "not_found"
-    assert not mock_action.called
-
-
-@pytest.mark.parametrize("authority_change", ("paused", "permission_removed"))
-def test_post_workable_note_action_rechecks_live_agent_authority(
-    db, monkeypatch, authority_change
-):
-    org = _make_org(db)
-    role = _make_role(db, org)
-    app = _make_application(db, org=org, role=role, name="X", email="x@x.test")
-    run = _make_agent_run(db, role)
-    app.workable_candidate_id = "workable-candidate"
-    if authority_change == "paused":
-        role.agent_paused_at = datetime.now(timezone.utc)
-    else:
-        role.agent_action_allowlist = [
-            name
-            for name in role.agent_action_allowlist
-            if name != "post_workable_note"
-        ]
-    monkeypatch.setattr("app.actions.post_workable_note.settings.MVP_DISABLE_WORKABLE", False)
-
-    with patch("app.actions.post_workable_note.build_workable_adapter") as adapter:
+    with patch(
+        "app.domains.integrations_notifications.adapters.build_workable_adapter"
+    ) as adapter:
         result = post_workable_note.run(
             db,
-            Actor.agent(int(run.id)),
-            organization_id=int(org.id),
-            application_id=int(app.id),
-            body="Agent note that must be held.",
+            Actor.agent(1),
+            organization_id=123,
+            application_id=456,
+            body="Do not send this externally.",
         )
 
-    assert result.status == "blocked"
-    assert "held" in str(result.detail).lower()
+    assert result.status == "skipped"
+    assert result.application_id == 456
+    assert "internal Taali note" in str(result.detail)
     adapter.assert_not_called()
 
 
 def test_create_application_dispatch_refuses_cross_role(db):
     """An agent running for role A must not create an application under
-    role B in the same org. Same single-role-execution-boundary that
-    resend_assessment_invite and post_workable_note enforce.
+    role B in the same org. This matches the single-role execution boundary
+    enforced by resend_assessment_invite.
     """
     org = _make_org(db)
     role_a = _make_role(db, org)
@@ -1536,14 +1458,23 @@ def test_auto_execute_allows_deterministic_full_scoring_reject(db):
     )
     db.flush()
 
-    with patch.object(tool_registry.reject_application, "run") as mock_reject, \
-         patch.object(tool_registry, "apply_decision_side_effects"):
+    def _reject(*_args, **_kwargs):
+        app.application_outcome = "rejected"
+        return app
+
+    with patch.object(
+        tool_registry.reject_application, "run", side_effect=_reject
+    ) as mock_reject, patch.object(
+        tool_registry, "apply_decision_side_effects"
+    ) as apply_side_effects:
         executed = tool_registry._auto_execute_decision(
             db, role=role, decision=decision, decision_type="reject"
         )
 
     assert executed is True
     assert mock_reject.called
+    assert mock_reject.call_args.kwargs["defer_notify"] is True
+    assert apply_side_effects.call_args.kwargs["reject_notify"] is True
     assert decision.status == "approved"
 
 
@@ -2181,6 +2112,102 @@ def test_evaluate_policy_then_advance_auto_executes_end_to_end(db):
     assert decision.evidence["candidate_summary"] == (
         "Strong production backend fit. Longer supporting analysis."
     )
+
+
+@pytest.mark.parametrize(
+    ("assessment_output", "expected_stage"),
+    [
+        (
+            {
+                "assessment_completed": True,
+                "assessment_score": None,
+                "taali_score": 81.0,
+            },
+            "assessment",
+        ),
+        (
+            {
+                "assessment_completed": False,
+                "assessment_score": 72.0,
+                "taali_score": 81.0,
+            },
+            "assessment",
+        ),
+        (
+            {
+                "assessment_completed": False,
+                "assessment_score": None,
+                "taali_score": None,
+            },
+            "full_scoring",
+        ),
+    ],
+)
+def test_policy_snapshot_owns_decision_stage_from_assessment_output(
+    db, assessment_output, expected_stage
+):
+    from app.decision_policy.engine import PolicyDecision
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Stage provenance",
+        email=f"stage-{expected_stage}-{id(assessment_output)}@x.test",
+        taali=81.0,
+    )
+    result = MagicMock(ok=True, output=assessment_output)
+    verdict = PolicyDecision(
+        decision_type="queue_advance_decision",
+        confidence=0.9,
+        reasoning="policy result",
+        rule_path=["advance_rule"],
+        decision_point="advance_to_interview",
+    )
+
+    snapshot = tool_registry._policy_snapshot_for_evaluation(
+        db,
+        role=role,
+        application_id=int(app.id),
+        verdict=verdict,
+        sub_outputs={"assessment_scoring": result},
+        persisted_decision_type="advance_to_interview",
+    )
+
+    assert snapshot["decision_stage"] == expected_stage
+
+
+def test_queue_evidence_reserves_decision_stage_from_model_input(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Reserved stage",
+        email="reserved-stage@x.test",
+        taali=81.0,
+    )
+    run = _make_agent_run(db, role)
+    run.__engine_policy_snapshots__ = {
+        int(app.id): {
+            "_persisted_decision_type": "advance_to_interview",
+            "decision_stage": "full_scoring",
+        }
+    }
+
+    evidence = tool_registry._queue_evidence(
+        db,
+        agent_run=run,
+        role=role,
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        supplied={"decision_stage": "assessment", "role_fit_score": 81.0},
+    )
+
+    assert evidence["decision_stage"] == "full_scoring"
 
 
 def test_evaluate_policy_generation_cannot_queue_after_newer_done_score(db):

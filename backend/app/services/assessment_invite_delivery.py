@@ -1,12 +1,12 @@
-"""Durable provider confirmation and post-email Workable handoff.
+"""Durable provider confirmation and post-email ATS stage handoff.
 
 Email delivery and ATS writeback are deliberately two state machines:
 
 * Resend acceptance (with a provider message id) atomically confirms the
   invite and advances the local application to ``invited``.
-* Only after that commit may a generation-scoped Workable handoff move the
-  candidate and post its note.  Its lease/retry state lives on Assessment, so
-  retrying Workable never submits the email again.
+* Only after that commit may a generation-scoped ATS handoff move the
+  candidate. Its lease/retry state lives on Assessment, so retrying ATS stage
+  synchronization never submits the email again.
 """
 
 from __future__ import annotations

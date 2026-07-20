@@ -15,28 +15,31 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=120)
-def post_results_to_workable(self, access_token: str, subdomain: str, candidate_id: str, assessment_data: dict, member_id: str | None = None, request_id: str | None = None):
-    """Post assessment results to Workable candidate profile."""
-    from ..domains.integrations_notifications.adapters import build_workable_adapter
+def post_results_to_workable(
+    self,
+    access_token: str,
+    subdomain: str,
+    candidate_id: str,
+    assessment_data: dict,
+    member_id: str | None = None,
+    request_id: str | None = None,
+):
+    """Consume legacy queued result posts without creating an ATS comment.
 
-    if not (member_id or "").strip():
-        logger.info(
-            "Skipping Workable result post for candidate %s — no actor member configured",
-            candidate_id,
-            extra={"request_id": request_id or self.request.id},
-        )
-        return {"success": False, "skipped": True}
-
-    try:
-        workable_svc = build_workable_adapter(access_token=access_token, subdomain=subdomain)
-        result = workable_svc.post_assessment_result(candidate_id=candidate_id, member_id=member_id, assessment_data=assessment_data)
-        if not result["success"]:
-            raise Exception(result.get("error", "Workable post failed"))
-        logger.info(f"Results posted to Workable for candidate {candidate_id}", extra={"request_id": request_id or self.request.id})
-        return result
-    except Exception as exc:
-        logger.error(f"Failed to post to Workable: {exc}", extra={"request_id": request_id or self.request.id})
-        raise self.retry(exc=exc)
+    Keep the registered task name during rollout so messages queued by an older
+    worker are safely acknowledged after deployment. Assessment lifecycle
+    messaging is Taali-native regardless of Workable write-back configuration.
+    """
+    logger.info(
+        "Skipping legacy Workable assessment result comment for candidate %s",
+        candidate_id,
+        extra={"request_id": request_id or self.request.id},
+    )
+    return {
+        "success": False,
+        "skipped": True,
+        "reason": "assessment_lifecycle_taali_native",
+    }
 
 
 @celery_app.task

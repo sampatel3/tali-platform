@@ -2559,51 +2559,32 @@ def move_application_in_workable(
     )
 
 
-@router.post("/applications/{application_id}/workable/note")
+@router.post("/applications/{application_id}/workable/note", deprecated=True)
 def post_workable_candidate_note(
     application_id: int,
     data: ApplicationWorkableNoteRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Post a free-form note to the candidate's Workable activity feed.
+    """Retired compatibility route for standalone ATS notes.
 
-    Routed through the serialized Workable runner so it shares the per-org
-    rate-limit budget with every other write and retries on a transient 429
-    instead of failing the request. Returns immediately; the note posts in the
-    background (eager Celery in tests finishes inline).
+    Recruiter context stays on the internal application timeline. Structured
+    movement and decision workflows own the limited notes sent to the ATS.
     """
-    app = _require_application_job_permission(
+    _require_application_job_permission(
         db,
         current_user=current_user,
         application_id=application_id,
         permission=JobPermission.EDIT_ROLE,
     )
-    if not app.workable_candidate_id:
-        raise HTTPException(
-            status_code=400, detail="Application is not linked to a Workable candidate"
-        )
-    from ...services.workable_op_runner import OP_POST_NOTE, enqueue_workable_op
+    from ...services.ats_note_policy import (
+        STANDALONE_ATS_NOTES_DISABLED_MESSAGE,
+    )
 
-    try:
-        job_run_id = enqueue_workable_op(
-            organization_id=int(current_user.organization_id),
-            op_type=OP_POST_NOTE,
-            payload={
-                "application_id": int(app.id),
-                "user_id": current_user.id,
-                "body": data.body,
-            },
-        )
-    except AtsJobRunPersistenceError:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "ATS operation was not queued because durable tracking is "
-                "temporarily unavailable. No provider update was sent; try again."
-            ),
-        )
-    return {"status": "queued", "application_id": int(app.id), "job_run_id": job_run_id}
+    raise HTTPException(
+        status_code=410,
+        detail=STANDALONE_ATS_NOTES_DISABLED_MESSAGE,
+    )
 
 
 @router.get("/applications/{application_id}/events", response_model=list[ApplicationEventResponse])
@@ -2631,12 +2612,13 @@ def add_application_note(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Drop a recruiter note on the candidate's timeline.
+    """Drop an internal recruiter note on the candidate's Taali timeline.
 
     Works whether or not an assessment is linked (the legacy
     ``/assessments/{id}/notes`` path dead-ended when none was). When
     ``for_agent`` (the default) the note rides in the agent's
-    ``get_application`` payload as standing per-candidate guidance.
+    ``get_application`` payload as standing per-candidate guidance. It is never
+    sent to Workable, Bullhorn, or the candidate.
     """
     app = _require_application_job_permission(
         db,

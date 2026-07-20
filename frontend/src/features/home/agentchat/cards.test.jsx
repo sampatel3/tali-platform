@@ -105,7 +105,7 @@ describe('Agent Chat operation cards', () => {
     expect(screen.queryByRole('link', { name: /Agent run #5/ })).not.toBeInTheDocument();
   });
 
-  it('renders an application-operation preview as unexecuted', () => {
+  it('renders a historical standalone ATS-note preview as blocked', () => {
     const prompts = [];
     render(
       <ImpactCard
@@ -122,12 +122,12 @@ describe('Agent Chat operation cards', () => {
       />,
     );
 
-    expect(screen.getByTestId('operation-preview')).toHaveTextContent('Confirmation required');
-    expect(screen.getByText('Post Workable note')).toBeInTheDocument();
+    expect(screen.getByTestId('operation-preview')).toHaveTextContent('Internal-only policy');
+    expect(screen.getByText('Standalone ATS note disabled')).toBeInTheDocument();
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
-    expect(screen.getByText(/No action has run/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Review in composer' }));
-    expect(prompts).toEqual(['Confirm post workable note for Ada Lovelace.']);
+    expect(screen.getByText(/Save recruiter context as an internal Taali note/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Review in composer' })).not.toBeInTheDocument();
+    expect(prompts).toEqual([]);
   });
 
   it('renders decision previews and committed operation receipts distinctly', () => {

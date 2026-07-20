@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
-import re
 from typing import Any
 
 from ..components.integrations.workable.service import WorkableService
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
+from .ats_note_policy import (
+    build_workable_reject_note,
+    contains_assessment_lifecycle_content,
+    render_workable_note_template,
+)
 from .document_service import sanitize_text_for_storage
 
 WORKABLE_ALLOWED_SCOPES = ("r_jobs", "r_candidates", "w_candidates")
@@ -51,14 +55,6 @@ def strict_workable_writes():
         yield
     finally:
         _STRICT_WORKABLE_WRITES.reset(token)
-
-_DOUBLE_BRACE_PLACEHOLDER_RE = re.compile(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}")
-
-
-class _SafeFormatDict(dict):
-    def __missing__(self, key: str) -> str:
-        return ""
-
 
 def _dedupe_scopes(values: list[str]) -> list[str]:
     seen: set[str] = set()
@@ -292,8 +288,8 @@ def resolved_workable_action_config(org: Organization | None, role: Role | None 
 def resolve_workable_actor_member_id(org: Organization | None, role: Role | None = None) -> str | None:
     """Member id Workable attributes write-backs to (per-role override → org).
 
-    Comments, assessment-result notes and stage moves all require this; it
-    is None when the org never configured ``workable_actor_member_id``.
+    Structured movement summaries and stage changes require this; it is None
+    when the org never configured ``workable_actor_member_id``.
     """
     return resolved_workable_action_config(org, role=role).get("actor_member_id")
 
@@ -324,70 +320,6 @@ def workable_job_syncable(role: Role | None) -> bool:
     with no linked job, or a published job, is syncable.
     """
     return workable_job_state(role) not in WORKABLE_NON_LIVE_JOB_STATES
-
-
-def render_workable_note_template(template: str | None, **mapping: Any) -> str | None:
-    raw_template = sanitize_text_for_storage(str(template or "").strip())
-    if not raw_template:
-        return None
-    normalized = _DOUBLE_BRACE_PLACEHOLDER_RE.sub(r"{\1}", raw_template)
-    safe_mapping = _SafeFormatDict(
-        {
-            key: sanitize_text_for_storage(str(value).strip()) if value is not None else ""
-            for key, value in mapping.items()
-        }
-    )
-    try:
-        rendered = normalized.format_map(safe_mapping)
-    except Exception:
-        rendered = normalized
-    cleaned = sanitize_text_for_storage(rendered).strip()
-    return cleaned[:256] if cleaned else None
-
-
-def build_workable_reject_note(
-    *,
-    app: CandidateApplication | None,
-    role: Role | None,
-    template: str | None,
-    reason: str | None = None,
-    threshold_100: float | int | None = None,
-) -> str | None:
-    candidate = getattr(app, "candidate", None)
-    candidate_name = sanitize_text_for_storage(
-        str(
-            getattr(candidate, "full_name", None)
-            or getattr(candidate, "email", None)
-            or "Candidate"
-        ).strip()
-    ) or "Candidate"
-    role_name = sanitize_text_for_storage(str(getattr(role, "name", None) or "Role").strip()) or "Role"
-    pre_screen_score = getattr(app, "pre_screen_score_100", None)
-    recommendation = sanitize_text_for_storage(str(getattr(app, "pre_screen_recommendation", None) or "").strip()) or None
-    rendered = render_workable_note_template(
-        template,
-        candidate_name=candidate_name,
-        role_name=role_name,
-        pre_screen_score=f"{float(pre_screen_score):.1f}" if pre_screen_score is not None else "",
-        threshold_100=f"{float(threshold_100):.1f}" if threshold_100 is not None else "",
-        recommendation=recommendation or "",
-        action_reason=sanitize_text_for_storage(str(reason or "").strip()) or "",
-    )
-    if rendered:
-        return rendered
-
-    fallback_reason = sanitize_text_for_storage(str(reason or "").strip()) or None
-    if fallback_reason:
-        return fallback_reason[:256]
-
-    if pre_screen_score is not None and threshold_100 is not None:
-        fallback = (
-            f"Auto-rejected from TAALI sync. {candidate_name} scored {float(pre_screen_score):.1f}/100 "
-            f"for {role_name} against a threshold of {float(threshold_100):.1f}/100."
-        )
-        cleaned = sanitize_text_for_storage(fallback).strip()
-        return cleaned[:256] if cleaned else None
-    return None
 
 
 def _candidate_id_from_app(app: CandidateApplication | None) -> str | None:
@@ -500,6 +432,16 @@ def disqualify_candidate_in_workable(
     if (skip := _readonly_skip(org, "disqualify", role=role)) is not None:
         return skip
     config = resolved_workable_action_config(org, role=role)
+    if bool(getattr(app, "workable_disqualified", False)):
+        return {
+            "success": True,
+            "skipped": True,
+            "action": "disqualify",
+            "code": "already_disqualified",
+            "message": "Candidate is already disqualified in Workable",
+            "config": {**config, "movement_performed": False},
+            "response": {},
+        }
     validation_error = _validate_writeable_org(org, config=config, action="disqualify")
     if validation_error is not None:
         return validation_error
@@ -516,10 +458,21 @@ def disqualify_candidate_in_workable(
     note = build_workable_reject_note(
         app=app,
         role=role,
-        template=note_template if note_template is not None else config.get("auto_reject_note_template"),
+        # The organization template is an automatic pre-screen policy. Only
+        # that caller passes it explicitly; manual and non-score rejections keep
+        # their own reason instead of being silently overwritten here.
+        template=note_template,
         reason=reason,
         threshold_100=threshold_100,
     )
+    trusted_role_name = str(getattr(role, "name", None) or "").strip()
+    if contains_assessment_lifecycle_content(
+        note,
+        trusted_role_values=(trusted_role_name,) if trusted_role_name else None,
+    ):
+        # The rejection movement may still proceed, but assessment lifecycle
+        # details belong in Taali and must not become a Workable disqualify note.
+        note = None
     client = WorkableService(
         access_token=org.workable_access_token,
         subdomain=org.workable_subdomain,

@@ -354,8 +354,8 @@ const PIPELINE_STAGES = [
   {
     n: '05',
     t: 'Hand back',
-    d: 'Decisions, notes and reports written back to your ATS. The audit trail comes free.',
-    meta: 'notes, reports & stage moves synced',
+    d: 'Candidate movements and structured decision summaries written back to your ATS. The audit trail comes free.',
+    meta: 'movement decisions synced',
   },
 ];
 

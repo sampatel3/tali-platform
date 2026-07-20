@@ -4,7 +4,7 @@ Centralizes the three slow, best-effort effects that fire *after* the
 decision's actual state change (advance / reject / send) has committed:
 
 1. Workable stage move (advance) or disqualify (reject).
-2. The Workable activity-feed summary note + 30-day report share link.
+2. The ATS activity-feed movement summary note.
 3. A durable recruiter-action graph intent for later indexing.
 
 These ran inline on the approve / override request and added 20-30s to
@@ -35,6 +35,14 @@ from ._workable_decision_summary import (
 from .types import Actor
 
 logger = logging.getLogger("taali.actions.decision_side_effects")
+
+
+def _discard_checkpointed_optional_work(db: Session) -> None:
+    """Reset optional work without touching the already-durable movement."""
+    try:
+        db.rollback()
+    except Exception:  # pragma: no cover - broken-session defensive fallback
+        logger.warning("could not reset session after optional decision side effect")
 
 
 def _organization_resolution_guard_statement(
@@ -85,10 +93,9 @@ VERDICT_BY_DECISION_TYPE = {
     "advance_to_interview": "advanced",
     "reject": "rejected",
     "skip_assessment_reject": "rejected",
-    # Invite decisions commit a durable *delivery intent*, not a confirmed
-    # candidate contact. Their Workable stage/note is owned exclusively by the
-    # provider-success handoff outbox; posting a decision summary here would
-    # falsely claim a send when Resend later rejects it.
+    # Invite decisions commit a durable *delivery intent*, not an external ATS
+    # hand-back. Their provider-success outbox may synchronize an ATS stage but
+    # assessment lifecycle messaging remains entirely inside Taali.
 }
 VERDICT_BY_OVERRIDE_ACTION = {
     "reject": "rejected",
@@ -127,6 +134,48 @@ def _operational_role(
     return owner
 
 
+def _workable_stage_display_name(role: Optional[Role], value: Optional[str]) -> Optional[str]:
+    target = str(value or "").strip()
+    if not target:
+        return None
+    stages = getattr(role, "workable_stages", None)
+    for stage in stages if isinstance(stages, list) else []:
+        if not isinstance(stage, dict):
+            continue
+        stage_id = str(stage.get("id") or "").strip()
+        slug = str(stage.get("slug") or "").strip()
+        name = str(stage.get("name") or "").strip()
+        if target.casefold() in {
+            stage_id.casefold(),
+            slug.casefold(),
+            name.casefold(),
+        }:
+            return name or target
+    return target.replace("_", " ").replace("-", " ").strip().title()
+
+
+def _confirmed_movement_destination(
+    db: Session,
+    *,
+    app: CandidateApplication,
+    org: Optional[Organization],
+    role: Optional[Role],
+    requested_workable_stage: Optional[str],
+) -> Optional[str]:
+    """Return the human provider destination after a confirmed movement."""
+    from ..components.integrations.bullhorn.provider import BullhornProvider
+    from ..components.integrations.resolver import resolve_application_ats_provider
+
+    provider = resolve_application_ats_provider(org, db, app)
+    if isinstance(provider, BullhornProvider):
+        return str(getattr(app, "bullhorn_status", None) or "").strip() or "Advanced"
+    return _workable_stage_display_name(
+        role,
+        (requested_workable_stage or "").strip()
+        or str(getattr(app, "workable_stage", None) or "").strip(),
+    )
+
+
 def apply_decision_side_effects(
     db: Session,
     actor: Actor,
@@ -140,13 +189,14 @@ def apply_decision_side_effects(
     note: Optional[str] = None,
     workable_target_stage: Optional[str] = None,
     reject_notify: bool = True,
+    commit_after_confirmed_movement: bool = False,
 ) -> None:
     """Run all best-effort side effects for a resolved decision.
 
     Best-effort and never raises EXCEPT under ``strict_workable_writes`` (the
     decision-batch path), where a failed critical Workable writeback (stage
     move / disqualify) raises ``WorkableWritebackError`` so the batch task can
-    abort + re-queue the decision instead of committing a Tali-only change.
+    abort + re-queue the decision instead of committing a Taali-only change.
     The activity note (step 2) and graph episode (step 3) stay best-effort
     regardless.
 
@@ -155,12 +205,21 @@ def apply_decision_side_effects(
     signal — guards against re-disqualifying / re-emailing a candidate who
     was already rejected by another path (mirrors the inline freshness check
     that used to live in ``reject_application.run``).
+
+    ``commit_after_confirmed_movement`` is reserved for the generic acks-late
+    ATS runner. Once the provider confirms a movement, that runner must make
+    the decision and local movement receipt durable before attempting the
+    optional ATS summary or graph intent. Direct and legacy synchronous callers
+    keep the historical caller-owned transaction boundary (the default).
     """
     verdict = verdict_for(
         disposition=disposition,
         decision_type=decision.decision_type,
         override_action=override_action,
     )
+    movement_confirmed = False
+    moved_to: Optional[str] = None
+    writeback_role: Optional[Role] = None
 
     # 1. Workable stage move (advance) or disqualify (reject).
     if app is not None:
@@ -171,7 +230,7 @@ def apply_decision_side_effects(
                 decision_role=role,
             )
             try:
-                try_workable_advance(
+                moved = try_workable_advance(
                     db,
                     actor,
                     app=app,
@@ -181,6 +240,7 @@ def apply_decision_side_effects(
                     reason=(note or "").strip()
                     or "Advanced by recruiter (decision resolution)",
                 )
+                movement_confirmed = moved
             except WorkableWritebackError:
                 # strict (batch) path — propagate so the batch can re-queue.
                 raise
@@ -193,7 +253,14 @@ def apply_decision_side_effects(
             try:
                 from .reject_application import notify_rejection
 
-                notify_rejection(db, app=app, actor=actor, reason=note)
+                # The canonical movement summary below owns the only
+                # human-readable Decision Hub message. Do not also attach the
+                # recruiter note to Workable's disqualify request or the same
+                # text appears twice in its activity feed. Direct/manual
+                # rejection paths still pass their reason to the notifier.
+                movement_confirmed = notify_rejection(
+                    db, app=app, actor=actor, reason=None
+                )
             except WorkableWritebackError:
                 # strict (batch) path — propagate so the batch can re-queue.
                 raise
@@ -203,30 +270,95 @@ def apply_decision_side_effects(
                     getattr(decision, "id", None),
                 )
 
-    # 2. Workable activity-feed summary note (+ 30-day report share link).
-    if app is not None and verdict:
+    movement_checkpointed = bool(
+        movement_confirmed and commit_after_confirmed_movement
+    )
+    if movement_checkpointed:
+        # The provider write has happened and cannot be rolled back. Commit the
+        # decision plus local movement receipt now, before the optional note.
+        # If the acks-late worker dies after this point, redelivery sees the
+        # resolved decision and skips instead of replaying the provider write.
+        db.commit()
+
+    # Destination formatting is optional summary context, not part of the
+    # movement. Resolve it only after the durable checkpoint and never let a
+    # resolver/read failure turn a confirmed provider update into a retry.
+    if app is not None and movement_confirmed and verdict in (
+        "advanced",
+        "skip_advanced",
+    ):
         try:
-            post_decision_summary_to_workable(
-                db,
-                actor,
-                app=app,
-                org=org,
-                decision=decision,
-                verdict=verdict,
-                override_action=override_action,
-                reason=note,
+            if movement_checkpointed:
+                with db.begin_nested():
+                    moved_to = _confirmed_movement_destination(
+                        db,
+                        app=app,
+                        org=org,
+                        role=writeback_role,
+                        requested_workable_stage=workable_target_stage,
+                    )
+            else:
+                moved_to = _confirmed_movement_destination(
+                    db,
+                    app=app,
+                    org=org,
+                    role=writeback_role,
+                    requested_workable_stage=workable_target_stage,
+                )
+        except Exception:  # pragma: no cover - defensive optional context
+            logger.warning(
+                "movement destination resolution raised for decision_id=%s",
+                getattr(decision, "id", None),
             )
+            if movement_checkpointed:
+                _discard_checkpointed_optional_work(db)
+
+    # 2. Provider-neutral ATS movement summary note.
+    if app is not None and verdict and movement_confirmed:
+        try:
+            if movement_checkpointed:
+                # Keep database bookkeeping for the optional provider note in
+                # a savepoint. A post-provider flush failure can then discard
+                # only this optional receipt without poisoning the checkpointed
+                # decision transaction.
+                with db.begin_nested():
+                    post_decision_summary_to_workable(
+                        db,
+                        actor,
+                        app=app,
+                        org=org,
+                        decision=decision,
+                        verdict=verdict,
+                        override_action=override_action,
+                        reason=note,
+                        moved_to=moved_to,
+                    )
+            else:
+                post_decision_summary_to_workable(
+                    db,
+                    actor,
+                    app=app,
+                    org=org,
+                    decision=decision,
+                    verdict=verdict,
+                    override_action=override_action,
+                    reason=note,
+                    moved_to=moved_to,
+                )
         except Exception:  # pragma: no cover — defensive
             logger.warning(
                 "decision-summary post raised for decision_id=%s",
                 getattr(decision, "id", None),
             )
+            if movement_checkpointed:
+                _discard_checkpointed_optional_work(db)
 
     # Flush the decision/Workable state before opening the optional savepoint.
     # SQLAlchemy otherwise performs this flush while entering begin_nested();
     # a core-state failure there could be mistaken for a disposable graph
     # failure and leave the outer transaction unusable.
-    db.flush()
+    if not movement_checkpointed:
+        db.flush()
 
     # 3. Recruiter-action graph episode (Phase 2 §6.7) — persist a durable
     # outbox row in this transaction. Graphiti and its provider metering run
@@ -267,3 +399,5 @@ def apply_decision_side_effects(
             getattr(decision, "id", None),
             exc_info=True,
         )
+        if movement_checkpointed:
+            _discard_checkpointed_optional_work(db)

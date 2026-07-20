@@ -56,4 +56,5 @@ class ATSProvider(Protocol):
         member_id: str,
         body: str,
         role: Role | None = None,
+        trusted_role_values: tuple[str, ...] | list[str] | None = None,
     ) -> dict: ...

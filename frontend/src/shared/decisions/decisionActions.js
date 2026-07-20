@@ -54,7 +54,7 @@ export const DECISION_ACTIONS = {
       mode: 'approve',
       kicker: 'ADVANCE',
       headline: 'Advance {name} to the next stage?',
-      body: 'Pick the Workable stage to move them into. A short summary + 30-day report link is posted to Workable.',
+      body: 'Pick the Workable stage to move them into. A concise movement summary is posted to the connected ATS.',
       confirmLabel: 'Advance',
       confirmClass: 'rq-approve',
       placeholder: 'Optional note for the audit trail',

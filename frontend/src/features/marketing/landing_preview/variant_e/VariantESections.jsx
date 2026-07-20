@@ -147,7 +147,7 @@ const CONTROL_POINTS = [
   },
   {
     h: 'A full audit trail',
-    p: 'Every decision, note and stage move is logged and written back to your ATS for review.',
+    p: 'Candidate movements and structured decision summaries are logged and written back to your ATS for review.',
   },
   {
     h: 'Never on protected characteristics',

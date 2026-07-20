@@ -1,9 +1,9 @@
 """Generic serialized runner for ALL Workable write-backs.
 
 Every recruiter/system action that writes to Workable (decision approve / bulk
-/ override, hand-back stage move, manual outcome change, free-form note) routes
-through here instead of calling Workable inline on the request thread. The
-goals, uniform across all of them:
+/ override, hand-back stage move, and manual outcome change) routes through
+here instead of calling Workable inline on the request thread. Legacy note jobs
+are retained only as fail-closed tombstones. The goals are uniform:
 
 - **Serialized per org** — one Workable conversation per org at a time (shared
   ``_acquire_workable_org_mutex``), so a burst of actions can't breach the rate
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Any, Callable
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -35,6 +35,7 @@ from .workable_actions_service import (
     WorkableWritebackError,
     strict_workable_writes,
 )
+from .workable_stage_matching import same_workable_stage, workable_stage_aliases
 
 logger = logging.getLogger("taali.workable_op_runner")
 
@@ -55,6 +56,14 @@ OP_OVERRIDE_DECISION = "override_decision"
 OP_MOVE_STAGE = "move_stage"
 OP_MANUAL_OUTCOME = "manual_outcome"
 OP_POST_NOTE = "post_note"
+
+# ``post_note`` is retained only as a tombstone for durable jobs queued before
+# standalone ATS notes were retired.  It always fails closed.  Related-role
+# movement notes use a private helper that is called only after a confirmed
+# outbound movement, so a forged queue payload cannot turn this legacy op into
+# a write primitive.
+NOTE_PURPOSE_RELATED_ROLE_MOVEMENT = "related_role_movement"
+
 
 # Override actions whose Workable write is a safely-replayable state change
 # (disqualify / stage move) — gated so a failure re-queues. send_assessment /
@@ -368,6 +377,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                         note=note,
                         workable_target_stage=stage,
                         allow_engine_outdated=decision_id in engine_force_ids,
+                        commit_after_confirmed_movement=True,
                     )
             else:
                 approve_decision_action.run(
@@ -378,6 +388,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
                     note=note,
                     workable_target_stage=stage,
                     allow_engine_outdated=decision_id in engine_force_ids,
+                    commit_after_confirmed_movement=True,
                 )
             db.commit()
             counters["succeeded"] += 1
@@ -450,6 +461,7 @@ def _op_override_decision(db: Session, organization_id: int, payload: dict) -> d
             override_action=override_action,
             note=payload.get("note"),
             workable_target_stage=payload.get("workable_target_stage"),
+            commit_after_confirmed_movement=True,
         )
 
     if gated:
@@ -461,13 +473,190 @@ def _op_override_decision(db: Session, organization_id: int, payload: dict) -> d
     return {"status": "ok", "decision_id": decision_id}
 
 
+def _record_workable_movement_note_failure(
+    db: Session, *, app: CandidateApplication, application_id: int
+) -> None:
+    """Best-effort audit after a confirmed move; never invalidates the move.
+
+    The movement transaction is committed before this helper is called.  Clear
+    any failed note transaction first, then make the audit event its own
+    best-effort transaction.  A broken audit write must not bubble into the op
+    runner and replay an already-confirmed provider movement.
+    """
+    from ..domains.assessments_runtime.pipeline_service import (
+        append_application_event,
+    )
+
+    try:
+        db.rollback()
+    except Exception:
+        logger.exception(
+            "could not reset session after related-role Workable note failure "
+            "application_id=%s",
+            application_id,
+        )
+        return
+    try:
+        append_application_event(
+            db,
+            app=app,
+            event_type="workable_movement_note_failed",
+            actor_type="system",
+            reason=(
+                "The related-role movement was confirmed, but its Workable "
+                "summary was not posted."
+            ),
+            metadata={
+                "ats": "workable",
+                "action": "related_role_movement_note",
+            },
+        )
+        db.commit()
+    except Exception:
+        logger.exception(
+            "could not persist related-role Workable note failure "
+            "application_id=%s",
+            application_id,
+        )
+        try:
+            db.rollback()
+        except Exception:
+            logger.exception(
+                "could not roll back related-role Workable note failure "
+                "application_id=%s",
+                application_id,
+            )
+
+
+def _post_confirmed_related_role_workable_note(
+    db: Session,
+    organization_id: int,
+    *,
+    app: CandidateApplication,
+    owner_role: Any,
+    acting_role: Any,
+    user_id: int | None,
+) -> dict:
+    """Post the fixed related-role summary after a confirmed outbound move.
+
+    This intentionally is not an op-runner handler and accepts no caller-owned
+    body or purpose flag.  Its only call site is ``_op_move_stage`` after the
+    provider movement has succeeded and been committed.
+    """
+    from ..domains.assessments_runtime.pipeline_service import (
+        append_application_event,
+    )
+    from ..domains.integrations_notifications.adapters import (
+        build_workable_adapter,
+    )
+    from .sister_role_service import related_role_advance_note
+    from .workable_actions_service import (
+        resolve_workable_actor_member_id,
+        workable_writeback_enabled,
+    )
+
+    if (
+        acting_role is None
+        or int(getattr(acting_role, "ats_owner_role_id", 0) or 0)
+        != int(app.role_id or 0)
+    ):
+        return {
+            "status": "skipped",
+            "reason": "invalid_related_role",
+            "application_id": int(app.id),
+        }
+    org = app.organization
+    if org is None or int(org.id) != int(organization_id):
+        return {
+            "status": "skipped",
+            "reason": "not_linked",
+            "application_id": int(app.id),
+        }
+    if not app.workable_candidate_id or not workable_writeback_enabled(org):
+        return {
+            "status": "skipped",
+            "reason": "not_linked_or_writeback_disabled",
+            "application_id": int(app.id),
+        }
+    member_id = resolve_workable_actor_member_id(org, role=owner_role)
+    if not member_id or not getattr(org, "workable_access_token", None):
+        return {
+            "status": "skipped",
+            "reason": "not_configured",
+            "application_id": int(app.id),
+        }
+
+    adapter = build_workable_adapter(
+        access_token=org.workable_access_token,
+        subdomain=org.workable_subdomain,
+    )
+    result = adapter.post_candidate_comment(
+        candidate_id=str(app.workable_candidate_id),
+        member_id=member_id,
+        body=related_role_advance_note(acting_role, owner_role),
+        trusted_role_values=tuple(
+            value
+            for value in (
+                str(getattr(acting_role, "name", None) or "").strip(),
+                str(getattr(owner_role, "name", None) or "").strip(),
+            )
+            if value
+        ),
+    )
+    if not result.get("success"):
+        raise WorkableWritebackError(
+            action="note",
+            code="api_error",
+            message=str(result.get("error") or "note post failed"),
+            retriable=True,
+        )
+    append_application_event(
+        db,
+        app=app,
+        event_type="workable_note_posted",
+        actor_type="recruiter",
+        actor_id=user_id,
+        reason="Related-role movement summary posted to Workable",
+        metadata={"workable_candidate_id": app.workable_candidate_id},
+    )
+    db.commit()
+    return {"status": "ok", "application_id": int(app.id)}
+
+
+def _is_workable_outbound_stage(role: Any, value: str | None) -> bool:
+    """Whether a target is a cached/legacy post-Taali hand-off stage."""
+    from ..domains.assessments_runtime.pipeline_service import (
+        is_post_handover_workable_stage,
+        map_legacy_status_to_pipeline,
+    )
+
+    aliases = workable_stage_aliases(role, value)
+    if any(
+        map_legacy_status_to_pipeline(alias)[0] == "advanced"
+        and is_post_handover_workable_stage(alias)
+        for alias in aliases
+    ):
+        return True
+    stages = getattr(role, "workable_stages", None)
+    for stage in stages if isinstance(stages, list) else []:
+        if not isinstance(stage, dict):
+            continue
+        stage_aliases = {
+            str(stage.get(key) or "").strip().casefold()
+            for key in ("id", "slug", "name")
+        }
+        if aliases.intersection(stage_aliases) and str(
+            stage.get("kind") or ""
+        ).strip().casefold() in {"interview", "offer", "hired"}:
+            return True
+    return False
+
+
 def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
     """Hand a candidate back to a Workable stage. Gated: Tali's stage advances
     only after the Workable move confirms."""
     from ..domains.assessments_runtime.pipeline_service import (
         append_application_event,
-        is_post_handover_workable_stage,
-        map_legacy_status_to_pipeline,
         transition_stage,
     )
     from ..models.organization import Organization
@@ -494,14 +683,41 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
         return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
     org = db.query(Organization).filter(Organization.id == organization_id).first()
     role = db.query(Role).filter(Role.id == app.role_id).first() if app.role_id else None
+    if same_workable_stage(role, app.workable_stage, target_stage):
+        if _is_workable_outbound_stage(role, target_stage):
+            transition_stage(
+                db,
+                app=app,
+                to_stage="advanced",
+                source="recruiter",
+                actor_type="recruiter",
+                actor_id=user_id,
+                reason=f"Already at the Workable hand-off stage: {target_stage}",
+                metadata={"workable_target_stage": target_stage},
+                idempotency_key=(
+                    f"workable_handback_reconcile:{app.id}:{target_stage}"
+                ),
+            )
+            db.commit()
+        return {
+            "status": "skipped",
+            "reason": "already_at_target",
+            "application_id": application_id,
+        }
 
     with strict_workable_writes():
-        move_candidate_in_workable(
+        move_result = move_candidate_in_workable(
             org=org,
             candidate_id=str(app.workable_candidate_id),
             target_stage=target_stage,
             role=role,
         )
+    if not move_result.get("success"):
+        return {
+            "status": "skipped",
+            "reason": str(move_result.get("code") or "move_not_confirmed"),
+            "application_id": application_id,
+        }
     app.workable_stage = target_stage
     # Local-write-wins: stamp so the candidate sync won't revert this fresh move.
     app.workable_stage_local_write_at = datetime.now(timezone.utc)
@@ -514,8 +730,8 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
         reason=reason or "Recruiter handed candidate back to Workable",
         metadata={"target_stage": target_stage, "workable_candidate_id": app.workable_candidate_id},
     )
-    mapped_stage, _ = map_legacy_status_to_pipeline(target_stage)
-    if mapped_stage == "advanced" and is_post_handover_workable_stage(target_stage):
+    confirmed_outbound_advance = _is_workable_outbound_stage(role, target_stage)
+    if confirmed_outbound_advance:
         transition_stage(
             db,
             app=app,
@@ -527,27 +743,45 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
             metadata={"workable_target_stage": target_stage},
             idempotency_key=f"workable_handback:{app.id}:{target_stage}",
         )
+    # The confirmed provider movement is the critical operation. Persist it
+    # before attempting the optional related-role attribution so a note error
+    # can never replay or roll back an already-completed ATS stage move.
+    db.commit()
     acting_role_id = payload.get("acting_role_id")
-    if acting_role_id is not None:
-        from .sister_role_service import related_role_advance_note
-
+    if confirmed_outbound_advance and acting_role_id is not None:
         acting_role = db.get(Role, int(acting_role_id))
         if (
             acting_role is not None
             and int(acting_role.ats_owner_role_id or 0) == int(app.role_id)
         ):
-            # Post the same related-role attribution beside the shared ATS
-            # move. The serialized operation retries both writes together.
-            _op_post_note(
-                db,
-                organization_id,
-                {
-                    "application_id": int(app.id),
-                    "user_id": user_id,
-                    "body": related_role_advance_note(acting_role, role),
-                },
-            )
-    db.commit()
+            try:
+                note_result = _post_confirmed_related_role_workable_note(
+                    db,
+                    organization_id,
+                    app=app,
+                    owner_role=role,
+                    acting_role=acting_role,
+                    user_id=user_id,
+                )
+                if note_result.get("status") != "ok":
+                    raise WorkableWritebackError(
+                        action="note",
+                        code=str(note_result.get("reason") or "note_skipped"),
+                        message="Related-role movement note was not posted",
+                        retriable=False,
+                    )
+            except Exception as exc:
+                # This message is deliberately best-effort. Record the miss for
+                # operators, but return success for the confirmed stage move.
+                logger.warning(
+                    "related-role Workable movement note failed after confirmed move "
+                    "application_id=%s error_type=%s",
+                    application_id,
+                    type(exc).__name__,
+                )
+                _record_workable_movement_note_failure(
+                    db, app=app, application_id=application_id
+                )
     return {"status": "ok", "application_id": application_id}
 
 
@@ -605,61 +839,18 @@ def _op_manual_outcome(db: Session, organization_id: int, payload: dict) -> dict
 
 
 def _op_post_note(db: Session, organization_id: int, payload: dict) -> dict:
-    """Post a free-form note to the candidate's Workable activity feed."""
-    from ..models.organization import Organization
-    from .workable_actions_service import (
-        resolve_workable_actor_member_id,
-        workable_writeback_enabled,
-    )
-    from ..domains.integrations_notifications.adapters import build_workable_adapter
-    from ..domains.assessments_runtime.pipeline_service import append_application_event
+    """Fail closed for every standalone/legacy ATS-note payload.
 
-    routed = _route_bullhorn_op(db, organization_id, payload, handler_name="run_post_note")
-    if routed is not None:
-        return routed
-
+    Even a payload forged with the old related-role purpose cannot write.  The
+    real movement summary is composed and posted only inside the confirmed move
+    handler via ``_post_confirmed_related_role_workable_note``.
+    """
     application_id = int(payload["application_id"])
-    body = str(payload.get("body") or "").strip()
-    user_id = payload.get("user_id")
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == organization_id,
-        )
-        .first()
-    )
-    if app is None or not app.workable_candidate_id or not body:
-        return {"status": "skipped", "reason": "not_linked_or_empty", "application_id": application_id}
-    org = db.query(Organization).filter(Organization.id == organization_id).first()
-    if not workable_writeback_enabled(org):
-        return {"status": "skipped", "reason": "writeback_disabled", "application_id": application_id}
-    member_id = resolve_workable_actor_member_id(org, role=getattr(app, "role", None))
-    if not member_id or not (org and getattr(org, "workable_access_token", None)):
-        return {"status": "skipped", "reason": "not_configured", "application_id": application_id}
-
-    adapter = build_workable_adapter(
-        access_token=org.workable_access_token, subdomain=org.workable_subdomain
-    )
-    result = adapter.post_candidate_comment(
-        candidate_id=str(app.workable_candidate_id), member_id=member_id, body=body
-    )
-    if not result.get("success"):
-        # Surface as a retriable Workable failure so the shell retries.
-        raise WorkableWritebackError(
-            action="note", code="api_error", message=str(result.get("error") or "note post failed"), retriable=True
-        )
-    append_application_event(
-        db,
-        app=app,
-        event_type="workable_note_posted",
-        actor_type="recruiter",
-        actor_id=user_id,
-        reason="Recruiter note posted to Workable",
-        metadata={"workable_candidate_id": app.workable_candidate_id},
-    )
-    db.commit()
-    return {"status": "ok", "application_id": application_id}
+    return {
+        "status": "skipped",
+        "reason": "standalone_ats_notes_disabled",
+        "application_id": application_id,
+    }
 
 
 _HANDLERS: dict[str, Callable[[Session, int, dict], dict]] = {

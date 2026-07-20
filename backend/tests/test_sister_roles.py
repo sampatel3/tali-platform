@@ -26,14 +26,20 @@ from app.services.sister_role_service import related_role_advance_note
 from tests.conftest import TestingSessionLocal, auth_headers
 
 
-def test_related_role_advance_note_names_both_role_references():
+def test_related_role_advance_note_uses_canonical_movement_copy_without_ids():
     owner = SimpleNamespace(id=31, name="Data Platform Lead")
     related = SimpleNamespace(id=47, name="AI Engineer")
 
     note = related_role_advance_note(related, owner)
 
-    assert "AI Engineer #47" in note
-    assert "Data Platform Lead #31" in note
+    assert note == (
+        "TAALI · Candidate advanced for a related role\n"
+        "Role: AI Engineer\n"
+        "Original ATS role: Data Platform Lead\n"
+        "Reason: The candidate met the advance criteria for the related role."
+    )
+    assert "#47" not in note
+    assert "#31" not in note
 
 
 def _source_role_with_candidates(db, *, organization_id: int) -> tuple[Role, list[CandidateApplication]]:

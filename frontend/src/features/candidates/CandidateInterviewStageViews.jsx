@@ -694,7 +694,7 @@ export const CandidateTeamNotesTab = ({
           Shared recruiter context
         </div>
         <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-          Comments, questionnaire answers, and activity synced from Workable sit alongside Tali notes here. Feedback you add below stays in Tali for the hiring team and TAALI agents — it is not posted back to Workable.
+          Comments, questionnaire answers, and activity synced from Workable sit alongside Taali notes here. Feedback you add below stays in Taali for the hiring team and Taali agents — it is not posted back to Workable or Bullhorn.
         </p>
       </Panel>
 

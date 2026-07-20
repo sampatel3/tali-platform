@@ -195,16 +195,15 @@ def transition_related_role_stage(
 
 
 def related_role_advance_note(role: Role, owner_role: Role | None) -> str:
+    related_label = " ".join(str(role.name or "").split()) or "Related role"
     owner_label = (
-        f"{owner_role.name} #{owner_role.id}"
-        if owner_role is not None
-        else "the original linked role"
-    )
-    related_label = f"{role.name} #{role.id}"
+        " ".join(str(owner_role.name or "").split()) if owner_role is not None else ""
+    ) or "Original linked role"
     return (
-        f"Advanced for related role: {related_label}. Taali assessed this candidate "
-        f"in the independent {related_label} funnel. The ATS application is shared "
-        f"with {owner_label}."
+        "TAALI · Candidate advanced for a related role\n"
+        f"Role: {related_label}\n"
+        f"Original ATS role: {owner_label}\n"
+        "Reason: The candidate met the advance criteria for the related role."
     )
 
 

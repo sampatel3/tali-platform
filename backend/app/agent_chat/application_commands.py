@@ -11,8 +11,7 @@ The mutation paths stay canonical:
 * application creation delegates to :mod:`app.actions.create_application`
   with a recruiter actor;
 * internal notes delegate to :mod:`app.services.application_notes`;
-* Workable notes are only enqueued through the serialized ``OP_POST_NOTE``
-  runner (there is no inline provider request here); and
+* retired standalone ATS-note calls return the shared internal-only policy; and
 * manual cycles are handed to the existing ``agent_manual_run`` task.
 
 None of the functions commit the caller's SQLAlchemy transaction.  Agent Chat
@@ -33,7 +32,6 @@ from ..actions import Actor, create_application as _create_application_action
 from ..domains.assessments_runtime.role_support import role_has_job_spec
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
-from ..models.organization import Organization
 from ..models.role import Role
 from ..models.user import User
 from ..schemas.role import ApplicationCreate, ApplicationNoteCreate
@@ -392,38 +390,6 @@ def add_internal_note(
     }
 
 
-def _workable_delivery_checks(
-    db: Session,
-    *,
-    role: Role,
-    organization_id: int,
-    app: CandidateApplication,
-) -> dict[str, bool]:
-    """Return boolean readiness only; never expose integration credentials."""
-
-    from ..services.workable_actions_service import (
-        resolve_workable_actor_member_id,
-        workable_writeback_enabled,
-    )
-
-    org = (
-        db.query(Organization)
-        .filter(Organization.id == int(organization_id))
-        .one_or_none()
-    )
-    return {
-        "application_linked": bool(app.workable_candidate_id),
-        "organization_connected": bool(
-            org
-            and org.workable_connected
-            and org.workable_access_token
-            and org.workable_subdomain
-        ),
-        "writeback_enabled": bool(workable_writeback_enabled(org)),
-        "actor_configured": bool(resolve_workable_actor_member_id(org, role=role)),
-    }
-
-
 def preview_workable_note(
     db: Session,
     role: Role,
@@ -432,17 +398,17 @@ def preview_workable_note(
     application_id: int,
     body: str,
 ) -> dict[str, Any]:
-    """Preview a Workable activity note without making or queueing a write."""
+    """Return the retired standalone-note policy without queueing a write."""
 
-    org_id = _ensure_context(role, user)
+    _ensure_context(role, user)
     app = _scoped_application(db, role, user, application_id)
     cleaned = _note_body(
         body, maximum=MAX_WORKABLE_NOTE_LENGTH, field="Workable note body"
     )
-    checks = _workable_delivery_checks(
-        db, role=role, organization_id=org_id, app=app
+    from ..services.ats_note_policy import (
+        STANDALONE_ATS_NOTES_DISABLED_MESSAGE,
     )
-    expected_to_post = all(checks.values())
+
     return {
         "type": "workable_note_preview",
         "role_id": int(role.id),
@@ -450,11 +416,9 @@ def preview_workable_note(
         "candidate": _candidate_label(app),
         "body_preview": cleaned[:240],
         "body_length": len(cleaned),
-        # A linked application can enter the serialized runner.  The runner is
-        # still authoritative for live integration state and may report skip.
-        "can_queue": bool(checks["application_linked"]),
-        "expected_to_post": expected_to_post,
-        "delivery_checks": checks,
+        "can_queue": False,
+        "expected_to_post": False,
+        "blocked_reason": STANDALONE_ATS_NOTES_DISABLED_MESSAGE,
     }
 
 
@@ -466,40 +430,21 @@ def queue_workable_note(
     application_id: int,
     body: str,
 ) -> dict[str, Any]:
-    """Queue a Workable note through the per-organization serialized runner."""
+    """Block a retired standalone ATS-note execution request."""
 
-    org_id = _ensure_context(role, user)
-    app = _scoped_application(db, role, user, application_id)
-    cleaned = _note_body(
+    _ensure_context(role, user)
+    _scoped_application(db, role, user, application_id)
+    _note_body(
         body, maximum=MAX_WORKABLE_NOTE_LENGTH, field="Workable note body"
     )
-    if not app.workable_candidate_id:
-        raise ApplicationCommandError(
-            "workable_not_linked",
-            "This application is not linked to a Workable candidate.",
-        )
-
-    # Lazy import is intentional.  This must remain a queue boundary; importing
-    # or calling actions.post_workable_note.run here would perform external HTTP
-    # on the Agent Chat worker and bypass serialization/retry bookkeeping.
-    from ..services.workable_op_runner import OP_POST_NOTE, enqueue_workable_op
-
-    job_run_id = enqueue_workable_op(
-        organization_id=org_id,
-        op_type=OP_POST_NOTE,
-        payload={
-            "application_id": int(app.id),
-            "user_id": int(user.id),
-            "body": cleaned,
-        },
+    from ..services.ats_note_policy import (
+        STANDALONE_ATS_NOTES_DISABLED_MESSAGE,
     )
-    return {
-        "type": "workable_note_queued",
-        "status": "queued",
-        "role_id": int(role.id),
-        "application_id": int(app.id),
-        "job_run_id": int(job_run_id) if job_run_id is not None else None,
-    }
+
+    raise ApplicationCommandError(
+        "standalone_ats_notes_disabled",
+        STANDALONE_ATS_NOTES_DISABLED_MESSAGE,
+    )
 
 
 def preview_manual_run(

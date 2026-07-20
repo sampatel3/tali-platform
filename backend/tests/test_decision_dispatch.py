@@ -884,6 +884,75 @@ def test_approve_worker_refreshes_preloaded_processing_row_after_terminal_race(d
     reject.assert_not_called()
 
 
+def test_approve_checkpoint_makes_optional_failures_non_replayable(db, monkeypatch):
+    """A redelivered acks-late batch skips after the movement checkpoint."""
+    from app.candidate_graph import episode_outbox
+    from app.platform.config import settings
+    from app.services import workable_op_runner
+
+    org, role, user = _seed(db, workable_connected=True)
+    app, decision = _add_decision(
+        db,
+        org,
+        role,
+        status="processing",
+        decision_type="advance_to_interview",
+        workable_linked=True,
+    )
+    db.commit()
+    monkeypatch.setattr(settings, "MVP_DISABLE_WORKABLE", False)
+
+    def advance_locally(*_args, **_kwargs):
+        db.get(CandidateApplication, int(app.id)).pipeline_stage = "advanced"
+
+    with patch.object(
+        approve_decision_action.advance_stage,
+        "run",
+        side_effect=advance_locally,
+    ), patch(
+        "app.services.workable_actions_service.move_candidate_in_workable",
+        return_value={
+            "success": True,
+            "action": "move",
+            "code": "ok",
+            "config": {"actor_member_id": "m1"},
+        },
+    ) as provider_move, patch(
+        "app.actions._decision_side_effects.post_decision_summary_to_workable",
+        side_effect=RuntimeError("optional note failure"),
+    ) as post_summary, patch.object(
+        episode_outbox,
+        "enqueue_recruiter_action",
+        side_effect=RuntimeError("optional graph failure"),
+    ):
+        first = workable_op_runner._op_approve_decisions(
+            db,
+            int(org.id),
+            {
+                "decision_ids": [int(decision.id)],
+                "user_id": int(user.id),
+                "workable_target_stage": "Phone screen",
+            },
+        )
+        second = workable_op_runner._op_approve_decisions(
+            db,
+            int(org.id),
+            {
+                "decision_ids": [int(decision.id)],
+                "user_id": int(user.id),
+                "workable_target_stage": "Phone screen",
+            },
+        )
+
+    assert first["succeeded"] == 1
+    assert first["failed"] == 0
+    assert second["skipped"] == 1
+    assert provider_move.call_count == 1
+    assert post_summary.call_count == 1
+    db.expire_all()
+    assert db.get(AgentDecision, int(decision.id)).status == "approved"
+
+
 def test_approve_worker_blocks_processing_card_for_resolved_application(db):
     from fastapi import HTTPException
 
@@ -1098,6 +1167,31 @@ def test_override_op_requeues_on_workable_failure(db):
     assert db.get(AgentDecision, decision.id).status == "pending"
 
 
+def test_override_runner_requests_confirmed_movement_checkpoint(db):
+    from app.services import workable_op_runner
+
+    org, role, user = _seed(db)
+    _app, decision = _add_decision(
+        db, org, role, status="processing", decision_type="reject"
+    )
+    db.commit()
+
+    with patch("app.actions.override_decision.run") as run_override:
+        result = workable_op_runner._op_override_decision(
+            db,
+            int(org.id),
+            {
+                "decision_id": int(decision.id),
+                "user_id": int(user.id),
+                "override_action": "advance",
+                "workable_target_stage": "Phone screen",
+            },
+        )
+
+    assert result == {"status": "ok", "decision_id": int(decision.id)}
+    assert run_override.call_args.kwargs["commit_after_confirmed_movement"] is True
+
+
 def test_move_stage_op_success_sets_stage(db):
     org, role, user = _seed(db, workable_connected=True)
     app, decision = _add_decision(db, org, role, workable_linked=True)
@@ -1117,22 +1211,91 @@ def test_move_stage_op_success_sets_stage(db):
     assert db.get(CandidateApplication, app.id).workable_stage == "Technical Interview"
 
 
-def test_post_note_op_raises_retriable_on_failure(db):
-    """A failed note post raises a retriable WorkableWritebackError so the shell
-    retries (tested at the handler level to avoid eager-retry recursion)."""
+def test_queued_standalone_post_note_fails_closed_without_provider_call(db):
+    org, role, user = _seed(db, workable_connected=True)
+    app, decision = _add_decision(db, org, role, workable_linked=True)
+    db.commit()
+    with patch("app.domains.integrations_notifications.adapters.build_workable_adapter") as mk:
+        result = run_workable_op_task.run(
+            job_run_id=_tracked_run_id(int(org.id), "post_note"),
+            organization_id=int(org.id),
+            op_type="post_note",
+            payload={
+                "application_id": int(app.id),
+                "user_id": int(user.id),
+                "body": "hi",
+            },
+        )
+    assert result["status"] == "completed"
+    assert result["op_type"] == "post_note"
+    assert result["reason"] == "standalone_ats_notes_disabled"
+    assert result["application_id"] == int(app.id)
+    mk.assert_not_called()
+
+
+def test_queued_legacy_assessment_invite_note_fails_closed_for_both_providers(db):
     from app.services import workable_op_runner as runner
 
     org, role, user = _seed(db, workable_connected=True)
     app, decision = _add_decision(db, org, role, workable_linked=True)
     db.commit()
-    with patch("app.domains.integrations_notifications.adapters.build_workable_adapter") as mk:
-        mk.return_value.post_candidate_comment.return_value = {"success": False, "error": "429"}
-        with pytest.raises(WorkableWritebackError) as ei:
-            runner.execute_op(
-                db, organization_id=int(org.id), op_type="post_note",
-                payload={"application_id": int(app.id), "user_id": int(user.id), "body": "hi"},
-            )
-    assert ei.value.retriable is True
+    legacy_body = (
+        "Taali assessment invite sent.\n\n"
+        "Candidate: Example Candidate <candidate@example.test>\n"
+        "Assessment link: https://app.taali.ai/assessment/123?token=secret\n"
+        "Delivery reference: assessment-invite/123\n"
+    )
+    with patch.object(runner, "_route_bullhorn_op") as route_bullhorn, patch(
+        "app.domains.integrations_notifications.adapters.build_workable_adapter"
+    ) as workable_adapter:
+        result = run_workable_op_task.run(
+            job_run_id=_tracked_run_id(int(org.id), "post_note"),
+            organization_id=int(org.id),
+            op_type="post_note",
+            payload={
+                "application_id": int(app.id),
+                "body": legacy_body,
+                "actor_type": "system",
+                "actor_id": None,
+                "source": "system",
+            },
+        )
+
+    assert result["status"] == "completed"
+    assert result["reason"] == "standalone_ats_notes_disabled"
+    route_bullhorn.assert_not_called()
+    workable_adapter.assert_not_called()
+
+
+def test_forged_related_role_note_purpose_still_fails_closed(db):
+    """A purpose string cannot turn the retired note op into a write primitive."""
+    from app.services import workable_op_runner as runner
+
+    org, role, user = _seed(db, workable_connected=True)
+    app, decision = _add_decision(db, org, role, workable_linked=True)
+    db.commit()
+    with patch.object(runner, "_route_bullhorn_op") as route_bullhorn, patch(
+        "app.domains.integrations_notifications.adapters.build_workable_adapter"
+    ) as workable_adapter:
+        result = runner.execute_op(
+            db,
+            organization_id=int(org.id),
+            op_type="post_note",
+            payload={
+                "application_id": int(app.id),
+                "user_id": int(user.id),
+                "body": "Related-role movement attribution",
+                "note_purpose": runner.NOTE_PURPOSE_RELATED_ROLE_MOVEMENT,
+            },
+        )
+
+    assert result == {
+        "status": "skipped",
+        "reason": "standalone_ats_notes_disabled",
+        "application_id": int(app.id),
+    }
+    route_bullhorn.assert_not_called()
+    workable_adapter.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

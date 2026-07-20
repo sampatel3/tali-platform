@@ -244,7 +244,7 @@ def test_knockout_failure_queues_decision_on_hub(client, db):
     # Deterministic-reject pattern: outcome stays open; a pending decision surfaces.
     assert app.application_outcome == "open"
     assert app.auto_reject_state == "awaiting_recruiter_approval"
-    assert app.auto_reject_reason == "Missing required skills"
+    assert app.auto_reject_reason == "Did not meet screening requirements"
 
     decision = (
         db.query(AgentDecision)

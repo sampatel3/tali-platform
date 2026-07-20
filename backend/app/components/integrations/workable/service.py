@@ -505,10 +505,26 @@ class WorkableService:
             logger.exception("Failed fetching candidate ratings")
             return {}
 
-    def post_candidate_comment(self, candidate_id: str, member_id: str, body: str) -> dict:
+    def post_candidate_comment(
+        self, candidate_id: str, member_id: str, body: str, *,
+        trusted_role_values: tuple[str, ...] | list[str] | None = None,
+    ) -> dict:
         # Workable's only candidate write-back for free-text notes is
         # POST /candidates/{id}/comments — it requires a member_id to
         # attribute the comment. (/activities is read-only and 404s on POST.)
+        from ....services.ats_note_policy import (
+            contains_assessment_lifecycle_content,
+        )
+
+        if contains_assessment_lifecycle_content(
+            body, trusted_role_values=trusted_role_values
+        ):
+            return {
+                "success": False,
+                "error": "assessment_lifecycle_content_blocked",
+                "status_code": None,
+                "response": {"error": "assessment_lifecycle_content_blocked"},
+            }
         mid = str(member_id or "").strip()
         if not mid:
             return {
@@ -527,22 +543,6 @@ class WorkableService:
         except Exception as exc:
             logger.exception("Failed posting candidate comment")
             return self._failure_result(exc)
-
-    def post_assessment_result(self, candidate_id: str, member_id: str, assessment_data: dict) -> dict:
-        score = assessment_data.get("score", 0)
-        tests_passed = assessment_data.get("tests_passed", 0)
-        tests_total = assessment_data.get("tests_total", 0)
-        time_taken = assessment_data.get("time_taken", "N/A")
-        results_url = assessment_data.get("results_url", "")
-        body = (
-            "Taali assessment complete\n\n"
-            f"Overall score: {score}/10\n"
-            f"Tests passed: {tests_passed}/{tests_total}\n"
-            f"Time taken: {time_taken} minutes\n"
-            f"Full recruiter report: {results_url}\n\n"
-            "Posted automatically by Taali."
-        )
-        return self.post_candidate_comment(candidate_id, member_id, body)
 
     def move_candidate(
         self,

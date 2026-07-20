@@ -34,6 +34,8 @@ def try_bullhorn_reject(
     actor_id: int | None,
     reason: str | None,
     trigger: str,
+    note_template: str | None = None,
+    threshold_100: float | int | None = None,
 ) -> bool:
     """Reject via the Bullhorn provider when the org routes to Bullhorn.
 
@@ -59,7 +61,13 @@ def try_bullhorn_reject(
         # upstream; the local reject stands. Handled.
         return True
     try:
-        result = provider.reject_application(app=app, role=role, reason=reason)
+        result = provider.reject_application(
+            app=app,
+            role=role,
+            reason=reason,
+            note_template=note_template,
+            threshold_100=threshold_100,
+        )
     except WorkableWritebackError:
         raise  # strict (batch) path — propagate so the batch re-queues.
     except Exception as exc:  # pragma: no cover — defensive
@@ -92,6 +100,24 @@ def try_bullhorn_reject(
                 type(record_exc).__name__,
             )
         return False
+    if result.get("skipped") or result.get("code") == "already_at_target":
+        # Bullhorn already has the rejection status. Treat the provider state
+        # as handled so the local outcome can reconcile, but do not claim or
+        # message a new movement.
+        append_application_event(
+            db,
+            app=app,
+            event_type="bullhorn_writeback_skipped",
+            actor_type=actor_type,
+            actor_id=actor_id,
+            reason="Bullhorn already had the target rejection status",
+            metadata={
+                "code": str(result.get("code") or "already_at_target"),
+                "bullhorn_job_submission_id": app.bullhorn_job_submission_id,
+                "trigger": trigger,
+            },
+        )
+        return True
     if result.get("success"):
         append_application_event(
             db,
@@ -156,6 +182,7 @@ def finalize_pre_screen_bullhorn_reject(
     from .pre_screening_service import mark_auto_reject_state
 
     reason = decision.get("reason")
+    config = decision.get("config") if isinstance(decision.get("config"), dict) else {}
     if not try_bullhorn_reject(
         db,
         app=app,
@@ -165,6 +192,8 @@ def finalize_pre_screen_bullhorn_reject(
         actor_id=actor_id,
         reason=reason,
         trigger="auto_reject_pre_screen",
+        note_template=config.get("auto_reject_note_template"),
+        threshold_100=config.get("threshold_100"),
     ):
         return None
     ensure_pipeline_fields(app)
