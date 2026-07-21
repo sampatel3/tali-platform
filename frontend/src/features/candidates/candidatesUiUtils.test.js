@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { renderPrimaryScoreCell } from './candidatesUiUtils';
+import {
+  renderJobPipelineScoreCell,
+  renderPrimaryScoreCell,
+} from './candidatesUiUtils';
 
 const baseApp = (overrides = {}) => ({
   cv_filename: 'cv.pdf',
@@ -42,6 +45,19 @@ describe('renderPrimaryScoreCell', () => {
     expect(
       renderPrimaryScoreCell(baseApp({ cv_match_score: null, score_status: 'stale' })),
     ).toBe('Out of date');
+  });
+
+  it('treats a held related-role score as out of date', () => {
+    const application = baseApp({
+      cv_match_score: 75,
+      cv_match_details: { score_scale: '0-100' },
+      score_status: 'stale_held',
+    });
+
+    expect(renderPrimaryScoreCell(application)).toMatch(/out of date/);
+    const pipelineCell = renderJobPipelineScoreCell(75, 'hi', 'stale_held');
+    expect(pipelineCell.props.className).toContain('stale');
+    expect(pipelineCell.props.children).toContain(' · stale');
   });
 
   it('shows "Score error" when the latest job errored', () => {

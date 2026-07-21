@@ -157,7 +157,7 @@ import React from 'react';
 export const renderJobPipelineScoreCell = (score, scoreClass, status) => {
   const isInFlight = status === 'pending' || status === 'running';
   const isWaiting = status === 'retry_wait';
-  const isStale = status === 'stale';
+  const isStale = status === 'stale' || status === 'stale_held';
   if (score == null) {
     if (isInFlight) {
       return React.createElement(
@@ -211,13 +211,13 @@ export const renderPrimaryScoreCell = (application) => {
     return 'Scoring…';
   }
   if (typeof payload.score === 'number') {
-    if (status === 'stale') {
+    if (status === 'stale' || status === 'stale_held') {
       return `${formatCvScore100(payload.score, payload.details)} · out of date`;
     }
     return formatCvScore100(payload.score, payload.details);
   }
   if (status === 'error') return 'Score error';
-  if (status === 'stale') return 'Out of date';
+  if (status === 'stale' || status === 'stale_held') return 'Out of date';
   if (!application?.cv_filename) return '—';
   return 'Pending';
 };

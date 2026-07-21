@@ -432,8 +432,10 @@ class ApplicationResponse(BaseModel):
     cv_match_scored_at: Optional[datetime] = None
     # "cancelled" covers legacy CvScoreJob rows written before the score-
     # invalidation rework. "retry_wait" is the durable related-role state
-    # while scoring waits for authority or a transient retry. Rejecting either
-    # valid persisted state here 500s every /applications listing that touches it.
+    # while scoring waits for authority or a transient retry. "stale_held"
+    # preserves an invalidated related-role score until authority resumes.
+    # Rejecting any valid persisted state here 500s every /applications listing
+    # that touches it.
     score_status: Optional[Literal[
         "pending",
         "running",
@@ -441,6 +443,7 @@ class ApplicationResponse(BaseModel):
         "done",
         "error",
         "stale",
+        "stale_held",
         "cancelled",
         "unscorable",
         "excluded",
