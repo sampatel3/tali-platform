@@ -29,7 +29,7 @@ def apply_searchable_candidate_scope(base_query, *, organization_id: int):
         Candidate.id == CandidateApplication.candidate_id,
         Candidate.organization_id == int(organization_id),
         Candidate.deleted_at.is_(None),
-    )
+    ).correlate(CandidateApplication)
     return base_query.filter(searchable_candidate)
 
 

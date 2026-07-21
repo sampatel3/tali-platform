@@ -12,6 +12,7 @@ from app.candidate_search.population import (
     estimate_graph_coverage,
     population_filter,
 )
+from app.candidate_search.query_builder_sql import apply_parsed_filter
 from app.candidate_search.schemas import ParsedFilter
 from app.models.candidate_application import CandidateApplication
 
@@ -31,6 +32,32 @@ def test_searchable_scope_requires_live_candidate_in_same_organization(db):
 
     assert "exists" in sql
     assert "candidates.id = candidate_applications.candidate_id" in sql
+    assert "candidates.organization_id = 17" in sql
+    assert "candidates.deleted_at is null" in sql
+
+
+def test_searchable_scope_composes_with_candidate_joining_skill_filter(db):
+    scoped_query = apply_searchable_candidate_scope(
+        db.query(CandidateApplication),
+        organization_id=17,
+    )
+    filtered_query = apply_parsed_filter(
+        scoped_query,
+        ParsedFilter(
+            skills_all=["PySpark"],
+            free_text="candidates with PySpark experience",
+        ),
+    )
+
+    sql = str(
+        filtered_query.with_entities(CandidateApplication.id).statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+
+    assert "join candidates" in sql
+    assert "exists" in sql
     assert "candidates.organization_id = 17" in sql
     assert "candidates.deleted_at is null" in sql
 
