@@ -34,6 +34,7 @@ from app.services.metered_async_anthropic_client import (
     graph_metering_ctx,
 )
 from app.services.provider_usage_admission import (
+    AutomaticProviderAuthorityError,
     PROVIDER_SUCCEEDED_PENDING_STATE,
 )
 from app.services.usage_credit_reservations import InsufficientRoleBudgetError
@@ -75,6 +76,10 @@ def _run(coro):
     # asyncio.get_event_loop() is deprecated when no loop exists; build
     # a fresh one per call so tests don't share state across functions.
     return asyncio.new_event_loop().run_until_complete(coro)
+
+
+def test_graph_provider_admission_is_an_automatic_authority_error():
+    assert issubclass(GraphProviderAdmissionError, AutomaticProviderAuthorityError)
 
 
 def _enable_live_holds(monkeypatch) -> None:
@@ -154,7 +159,8 @@ def test_create_with_metering_ctx_links_usage_event(db):
     This is what makes the spend show up against the org's role budget.
     """
     org = Organization(name="O", slug=f"o-{id(db)}-ctx")
-    db.add(org); db.commit()
+    db.add(org)
+    db.commit()
 
     inner = _FakeAsyncAnthropic(
         usage=_FakeUsage(input_tokens=5_000, output_tokens=500)

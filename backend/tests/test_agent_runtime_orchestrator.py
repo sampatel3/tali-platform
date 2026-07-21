@@ -36,6 +36,7 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.platform.database import SessionLocal
 from app.services.role_intent_fingerprint import role_intent_fingerprint
+from app.services.provider_usage_admission import AutomaticProviderAuthorityError
 from app.services.usage_credit_reservations import InsufficientRoleBudgetError
 from app.services.usage_metering_service import InsufficientCreditsError
 
@@ -786,6 +787,157 @@ def test_pause_after_search_lock_release_blocks_provider_admission(db):
     assert dispatch_transaction_states == [False]
     assert client.messages.create.call_count == 1
     parser_provider.messages.create.assert_not_called()
+
+
+def test_evaluate_policy_releases_authority_lock_before_provider_capable_dispatch(db):
+    """Sub-agent admission must never wait on this worker's own Role lock."""
+    assert orchestrator._tool_may_call_provider("refresh_candidate_graph") is True
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    client = _scripted_client(
+        [
+            _response(
+                blocks=[
+                    _block_tool_use(
+                        tool_use_id="tu_eval",
+                        name="evaluate_policy",
+                        input_={"application_id": int(app.id)},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            _response(
+                blocks=[
+                    _block_tool_use(
+                        tool_use_id="tu_done",
+                        name="agent_run_complete",
+                        input_={"summary": "Policy checked."},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+        ]
+    )
+    original_dispatch = orchestrator.dispatch
+    transaction_states: dict[str, bool] = {}
+
+    def dispatch(name, args, *, db, agent_run, role):
+        transaction_states[name] = db.in_transaction()
+        if name == "evaluate_policy":
+            return {
+                "decision_type": "no_action",
+                "reasoning": "No action required.",
+                "sub_agent_outputs": {},
+            }
+        return original_dispatch(
+            name,
+            args,
+            db=db,
+            agent_run=agent_run,
+            role=role,
+        )
+
+    with (
+        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch("app.agent_runtime.orchestrator.dispatch", side_effect=dispatch),
+    ):
+        run = orchestrator.run_cycle(
+            db,
+            role=role,
+            trigger="manual",
+            application_id=app.id,
+        )
+
+    assert run.status == "succeeded"
+    assert transaction_states["evaluate_policy"] is False
+
+
+def test_pause_after_policy_lock_release_aborts_before_subagent_provider(db):
+    """Authority denial is terminal, never empty graph/scoring evidence."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    role_id = int(role.id)
+    client = _scripted_client(
+        [
+            _response(
+                blocks=[
+                    _block_tool_use(
+                        tool_use_id="tu_eval",
+                        name="evaluate_policy",
+                        input_={"application_id": int(app.id)},
+                    )
+                ],
+                stop_reason="tool_use",
+            )
+        ]
+    )
+
+    def pause_then_deny(name, args, *, db, agent_run, role):
+        assert name == "evaluate_policy"
+        assert db.in_transaction() is False
+        with SessionLocal() as concurrent:
+            current = concurrent.get(Role, role_id)
+            assert current is not None
+            current.agent_paused_at = datetime.now(timezone.utc)
+            current.agent_paused_reason = "paused before sub-agent admission"
+            concurrent.commit()
+        raise AutomaticProviderAuthorityError("role agent is paused")
+
+    with (
+        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch("app.agent_runtime.orchestrator.dispatch", side_effect=pause_then_deny),
+    ):
+        run = orchestrator.run_cycle(
+            db,
+            role=role,
+            trigger="manual",
+            application_id=app.id,
+        )
+
+    assert run.status == "aborted"
+    assert (run.error or "").startswith("provider_authority_revoked:")
+    assert client.messages.create.call_count == 1
+
+
+def test_main_round_reservation_requires_current_role_authority(db):
+    """Pause-before-admission must produce no autonomous model attempt."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    role_id = int(role.id)
+    client = MagicMock()
+    captured: dict = {}
+
+    def pause_then_deny(**kwargs):
+        captured.update(kwargs)
+        with SessionLocal() as concurrent:
+            current = concurrent.get(Role, role_id)
+            assert current is not None
+            current.agent_paused_at = datetime.now(timezone.utc)
+            current.agent_paused_reason = "paused before model admission"
+            concurrent.commit()
+        raise AutomaticProviderAuthorityError("role agent is paused")
+
+    with (
+        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch(
+            "app.agent_runtime.orchestrator.reserve_provider_usage",
+            side_effect=pause_then_deny,
+        ),
+    ):
+        run = orchestrator.run_cycle(
+            db,
+            role=role,
+            trigger="manual",
+            application_id=app.id,
+        )
+
+    assert captured["require_role_authority"] is True
+    assert run.status == "aborted"
+    assert (run.error or "").startswith("provider_authority_revoked:")
+    client.messages.create.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

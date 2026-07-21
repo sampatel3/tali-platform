@@ -397,6 +397,9 @@ class _MeteredMessages:
                     **dict(metering.get("metadata") or {}),
                     "admission_source": "metered_anthropic_fallback",
                 },
+                require_role_authority=bool(
+                    metering.get("require_role_authority", False)
+                ),
             )
             reservation_payload = reservation.as_metering_payload()
             metering["credit_reservation"] = reservation_payload

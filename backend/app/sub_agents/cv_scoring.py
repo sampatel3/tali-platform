@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..llm import ProviderAuthorityError
 from ..components.scoring.role_intent_inputs import (
     append_role_intent_scoring_overlay,
 )
@@ -64,6 +65,8 @@ class CvScoringSubAgent:
         owns = db is None
         try:
             return self._run(req, session)
+        except ProviderAuthorityError:
+            raise
         except Exception as exc:  # pragma: no cover — defensive
             logger.exception("cv_scoring sub-agent crashed")
             return SubAgentResult(

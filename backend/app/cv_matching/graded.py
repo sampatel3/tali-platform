@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import MODEL_VERSION
 from .prompts import render_archetype_block
-from ..llm import MeteringContext, generate_structured
+from ..llm import MeteringContext, ProviderAuthorityError, generate_structured
 
 logger = logging.getLogger("taali.cv_match.graded")
 
@@ -118,6 +118,9 @@ def _metering(metering_context, trace_id) -> MeteringContext:
             entity_id=metering_context.get("entity_id"),
             user_id=metering_context.get("user_id"),
             trace_id=trace_id,
+            require_role_authority=bool(
+                metering_context.get("require_role_authority", False)
+            ),
         )
     return MeteringContext.skipped(metered_by="graded_no_context", trace_id=trace_id)
 
@@ -180,6 +183,8 @@ def grade_requirements(
                 authorize if before_provider_call is not None else None
             ),
         )
+    except ProviderAuthorityError:
+        raise
     except Exception as exc:  # pragma: no cover — defensive
         if exc is authority_failure:
             raise

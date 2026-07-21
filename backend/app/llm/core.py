@@ -19,8 +19,17 @@ feature pipelines import the gateway *down* instead of reaching *up* into
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Optional
+
+
+class ProviderAuthorityError(RuntimeError):
+    """A live autonomous-control decision revoked provider-call authority.
+
+    Provider wrappers subclass this dependency-free marker so shared LLM
+    gateways preserve control-flow denials while normalizing ordinary SDK
+    failures into typed results.
+    """
 
 
 @dataclass
@@ -73,6 +82,7 @@ class MeteringContext:
     trace_id: Optional[str] = None
     metadata: Optional[dict[str, Any]] = None
     credit_reservation: Optional[dict[str, Any]] = None
+    require_role_authority: bool = False
     skip: bool = False
     metered_by: Optional[str] = None
 
@@ -110,6 +120,7 @@ class MeteringContext:
             trace_id=meter.get("trace_id"),
             metadata=meter.get("metadata"),
             credit_reservation=meter.get("credit_reservation"),
+            require_role_authority=bool(meter.get("require_role_authority", False)),
         )
 
     def as_dict(self, *, retry_attempt: int = 0) -> dict[str, Any]:
@@ -131,6 +142,8 @@ class MeteringContext:
                 out["metadata"] = dict(self.metadata)
             if self.credit_reservation:
                 out["credit_reservation"] = dict(self.credit_reservation)
+            if self.require_role_authority:
+                out["require_role_authority"] = True
         if self.trace_id:
             out["trace_id"] = str(self.trace_id)
         if retry_attempt:

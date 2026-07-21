@@ -22,10 +22,12 @@ from __future__ import annotations
 
 import logging
 import re
-import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterable, Literal
+from typing import TYPE_CHECKING, Any, Iterable, Literal
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 from . import client as graph_client
 from ..candidate_search.schemas import (
@@ -133,6 +135,30 @@ def _attribute_search(
         yield
     finally:
         graph_metering_ctx.reset(token)
+
+
+@contextmanager
+def graph_provider_context(
+    organization_id: int,
+    label: str,
+    *,
+    role_id: int | None = None,
+    require_role_authority: bool = False,
+):
+    """Public metering/authority boundary for graph-backed provider work.
+
+    Graph consumers outside this module use this wrapper rather than reaching
+    into the Graphiti ContextVar directly. Role-owned autonomous callers opt in
+    to live role authority for every provider edge.
+    """
+
+    with _attribute_search(
+        organization_id,
+        label,
+        role_id=role_id,
+        require_role_authority=require_role_authority,
+    ):
+        yield
 
 
 def _query_for_predicate(predicate: GraphPredicate) -> str:
@@ -312,6 +338,7 @@ def candidate_ids_for_predicate(
     organization_id: int,
     predicate: GraphPredicate,
     role_id: int | None = None,
+    require_role_authority: bool = False,
 ) -> set[int]:
     """Return the set of Postgres candidate ids matching one predicate.
 
@@ -328,10 +355,13 @@ def candidate_ids_for_predicate(
             organization_id,
             "predicate",
             role_id=role_id,
+            require_role_authority=bool(require_role_authority),
         ):
             results = graph_client.run_async(
                 graphiti.search(query=query, group_ids=[group_id], num_results=DEFAULT_SEARCH_LIMIT)
             )
+    except GraphProviderAdmissionError:
+        raise
     except Exception as exc:
         logger.warning("Graphiti search failed for predicate=%s: %s", predicate, exc)
         return set()
@@ -343,6 +373,7 @@ def candidate_ids_matching_all(
     organization_id: int,
     predicates: list[GraphPredicate],
     role_id: int | None = None,
+    require_role_authority: bool = False,
 ) -> list[int]:
     """Intersection of candidate-id sets across all predicates.
 
@@ -357,6 +388,7 @@ def candidate_ids_matching_all(
             organization_id=organization_id,
             predicate=predicate,
             role_id=role_id,
+            require_role_authority=bool(require_role_authority),
         )
         if not ids:
             return []
@@ -370,7 +402,7 @@ def subgraph_for_candidates(
     *,
     organization_id: int,
     candidate_ids: Iterable[int],
-    db: "Session | None" = None,  # type: ignore[name-defined]
+    db: "Session | None" = None,
 ) -> GraphPayload:
     """Return a graph payload for specific candidates via direct Cypher.
 
@@ -413,7 +445,7 @@ def subgraph_for_candidates(
 
 
 def _episode_prefixes_for_candidates(
-    db: "Session | None",  # type: ignore[name-defined]
+    db: "Session | None",
     candidate_ids: list[int],
 ) -> list[str]:
     """Build the full set of Graphiti episode-name selectors for these

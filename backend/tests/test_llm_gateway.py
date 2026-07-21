@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from app.llm import (
     CallUsage,
     MeteringContext,
+    ProviderAuthorityError,
     StructuredResult,
     ValidationFailure,
     generate_structured,
@@ -118,6 +119,21 @@ def test_one_call_builds_metering_dict_and_accumulates_usage():
     assert sink.output_tokens == 200
     assert sink.cache_read_tokens == 10
     assert sink.cache_creation_tokens == 5
+
+
+def test_metering_context_threads_autonomous_authority_requirement():
+    context = MeteringContext(
+        feature="score",
+        organization_id=7,
+        role_id=9,
+        require_role_authority=True,
+    )
+
+    payload = context.as_dict()
+    rebuilt = MeteringContext.from_dict(payload)
+
+    assert payload["require_role_authority"] is True
+    assert rebuilt.require_role_authority is True
 
 
 def test_one_call_skip_metering_shape():
@@ -254,6 +270,29 @@ def test_generate_structured_rechecks_authority_before_validation_retry():
     assert attempts == [0, 1]
     # Attempt 1 completed and failed validation; Pause prevented attempt 2.
     assert len(client.messages.calls) == 1
+
+
+def test_generate_structured_propagates_provider_authority_denial():
+    class _DeniedMessages:
+        def create(self, **_kwargs):
+            raise ProviderAuthorityError("role agent is paused")
+
+    client = _StubClient(messages=_DeniedMessages())  # type: ignore[arg-type]
+
+    with pytest.raises(ProviderAuthorityError, match="paused"):
+        generate_structured(
+            client,
+            model="m",
+            messages=[{"role": "user", "content": "x"}],
+            output_model=_Model,
+            metering=MeteringContext(
+                feature="score",
+                organization_id=7,
+                role_id=9,
+                require_role_authority=True,
+            ),
+            max_tokens=64,
+        )
 
 
 def test_generate_structured_invalid_json_both_attempts_fails():

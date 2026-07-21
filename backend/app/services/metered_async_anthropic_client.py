@@ -32,7 +32,6 @@ from typing import Any, Optional
 from anthropic import AsyncAnthropic
 
 from ..models.claude_call_log import ClaudeCallLog
-from ..models.usage_event import UsageEvent
 from ..platform.database import SessionLocal
 from .metered_anthropic_client import _extract_cache_creation_1h
 from .pricing_service import Feature, raw_cost_usd_micro
@@ -76,7 +75,7 @@ class GraphMeteringContext:
     require_role_admission: bool = False
 
 
-class GraphProviderAdmissionError(RuntimeError):
+class GraphProviderAdmissionError(AutomaticProviderAuthorityError):
     """A billed graph call is missing the role needed for hard admission."""
 
 

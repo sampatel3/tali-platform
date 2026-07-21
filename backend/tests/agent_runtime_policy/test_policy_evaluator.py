@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -12,6 +13,7 @@ from app.agent_runtime.contracts import StructuredIntent
 from app.agent_runtime.policy_evaluator import evaluate_for_application
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.cv_score_job import CvScoreJob
+from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
 
@@ -127,7 +129,7 @@ def test_policy_refuses_persisted_scores_until_latest_job_is_done(
     assert outputs == {}
 
 
-def test_sister_role_policy_uses_its_own_evaluation_not_owner_score_job(
+def test_sister_role_policy_defers_to_role_local_runtime_before_owner_cache(
     db, monkeypatch
 ):
     org, owner, _, app = make_world(db)
@@ -150,15 +152,88 @@ def test_sister_role_policy_uses_its_own_evaluation_not_owner_score_job(
         )
     )
     db.flush()
-    gather = MagicMock(return_value={})
+    gather = MagicMock(side_effect=AssertionError("must not read owner caches"))
     monkeypatch.setattr(policy_evaluator, "_gather_sub_agent_outputs", gather)
 
     verdict, _outputs = evaluate_for_application(
         db, role=sister, application_id=int(app.id)
     )
 
-    gather.assert_called_once()
-    assert verdict.rule_path != ["score_refresh_required"]
+    gather.assert_not_called()
+    assert verdict.rule_path == ["related_role_runtime_required"]
+
+
+def test_sister_role_without_owner_stops_before_subagents(db, monkeypatch):
+    org, _owner, _candidate, app = make_world(db)
+    sister = Role(
+        organization_id=int(org.id),
+        name="Broken related role",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=None,
+        job_spec_text="Related role",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=0,
+    )
+    db.add(sister)
+    db.flush()
+    gather = MagicMock(side_effect=AssertionError("must not run sub-agents"))
+    monkeypatch.setattr(policy_evaluator, "_gather_sub_agent_outputs", gather)
+
+    verdict, outputs = evaluate_for_application(
+        db, role=sister, application_id=int(app.id)
+    )
+
+    assert verdict.rule_path == ["sister_role_owner_unavailable"]
+    assert outputs == {}
+    gather.assert_not_called()
+
+
+@pytest.mark.parametrize("owner_state", ["deleted", "cross_org"])
+def test_sister_role_invalid_owner_stops_before_subagents(
+    db, monkeypatch, owner_state
+):
+    org, owner, _candidate, app = make_world(db)
+    owner_id = int(owner.id)
+    if owner_state == "deleted":
+        owner.deleted_at = datetime.now(timezone.utc)
+    else:
+        other_org = Organization(
+            name="Other policy org",
+            slug=f"other-policy-org-{id(app)}",
+        )
+        db.add(other_org)
+        db.flush()
+        other_owner = Role(
+            organization_id=int(other_org.id),
+            name="Foreign ATS owner",
+            source="manual",
+        )
+        db.add(other_owner)
+        db.flush()
+        owner_id = int(other_owner.id)
+    sister = Role(
+        organization_id=int(org.id),
+        name="Invalid related role",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=owner_id,
+        job_spec_text="Related role",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=0,
+    )
+    db.add(sister)
+    db.flush()
+    gather = MagicMock(side_effect=AssertionError("must not run sub-agents"))
+    monkeypatch.setattr(policy_evaluator, "_gather_sub_agent_outputs", gather)
+
+    verdict, outputs = evaluate_for_application(
+        db, role=sister, application_id=int(app.id)
+    )
+
+    assert verdict.rule_path == ["sister_role_owner_unavailable"]
+    assert outputs == {}
+    gather.assert_not_called()
 
 
 def test_recent_recruiter_send_skips_send_assessment(db):
@@ -207,6 +282,34 @@ def test_missing_application_returns_no_action(db):
     )
     assert verdict.decision_type == "no_action"
     assert outputs == {}
+
+
+def test_application_from_another_role_stops_before_subagents(db, monkeypatch):
+    org, _owner_role, _candidate, app = make_world(db)
+    other_role = Role(
+        organization_id=int(org.id),
+        name="Different role",
+        source="manual",
+        description="Different requirements",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=0,
+    )
+    db.add(other_role)
+    db.flush()
+
+    gather = MagicMock(side_effect=AssertionError("must not run sub-agents"))
+    monkeypatch.setattr(policy_evaluator, "_gather_sub_agent_outputs", gather)
+
+    verdict, outputs = evaluate_for_application(
+        db,
+        role=other_role,
+        application_id=int(app.id),
+    )
+
+    assert verdict.decision_type == "no_action"
+    assert verdict.rule_path == ["application_role_mismatch"]
+    assert outputs == {}
+    gather.assert_not_called()
 
 
 def test_incomplete_assessment_grading_short_circuits_before_subagents(db):

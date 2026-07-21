@@ -7,10 +7,10 @@ from typing import Any, Callable
 
 from ..platform.database import SessionLocal
 from .pricing_service import Feature
+from .provider_usage_admission import reserve_provider_usage
 from .usage_credit_reservations import (
     CreditReservation,
     release_credit_reservation,
-    reserve_credits,
 )
 
 
@@ -25,24 +25,22 @@ def reserve_pre_screen_usage(
     role_id = context.get("role_id")
     if organization_id is None or role_id is None:
         return None
-    with SessionLocal() as meter_db:
-        reservation = reserve_credits(
-            meter_db,
-            organization_id=int(organization_id),
-            feature=Feature.PRESCREEN,
-            external_ref=(
-                f"usage-hold:{trace_id}:prescreen:{uuid.uuid4().hex}"
-            ),
-            metadata={
-                "sub_feature": "pre_screen",
-                "entity_id": context.get("entity_id"),
-                "trace_id": str(trace_id),
-            },
-            role_id=int(role_id),
-            enforce_role_budget=True,
-        )
-        meter_db.commit()
-        return reservation
+    return reserve_provider_usage(
+        organization_id=int(organization_id),
+        role_id=int(role_id),
+        feature=Feature.PRESCREEN,
+        trace_id=str(trace_id or uuid.uuid4().hex),
+        entity_id=(
+            str(context["entity_id"])
+            if context.get("entity_id") is not None
+            else None
+        ),
+        sub_feature="pre_screen",
+        metadata={"admission_source": "pre_screen"},
+        require_role_authority=bool(
+            context.get("require_role_authority", False)
+        ),
+    )
 
 
 def release_pre_screen_usage(

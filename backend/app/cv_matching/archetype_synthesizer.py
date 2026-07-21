@@ -30,6 +30,8 @@ from typing import Callable, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from ..llm import ProviderAuthorityError
+
 logger = logging.getLogger("taali.cv_match.archetype_synthesizer")
 
 _GENERATOR_MODEL = "claude-sonnet-4-6"
@@ -347,6 +349,8 @@ def _synthesize_via_sonnet(
             messages=[{"role": "user", "content": prompt}],
             metering=metering or {"feature": "archetype_synthesis"},
         )
+    except ProviderAuthorityError:
+        raise
     except Exception as exc:
         logger.warning("Sonnet archetype synthesis failed: %s", exc)
         return None

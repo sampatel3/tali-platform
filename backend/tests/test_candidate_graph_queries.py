@@ -22,6 +22,7 @@ import pytest
 
 from app.candidate_graph import search as graph_search
 from app.candidate_search.schemas import GraphPredicate
+from app.services.metered_async_anthropic_client import GraphProviderAdmissionError
 
 
 def _fact(
@@ -73,8 +74,15 @@ def test_candidate_ids_matching_all_intersects():
     pred1 = GraphPredicate(type="worked_at", value="Acme")
     pred2 = GraphPredicate(type="worked_at", value="Globex")
 
-    def fake_for_predicate(*, organization_id, predicate, role_id=None):
+    def fake_for_predicate(
+        *,
+        organization_id,
+        predicate,
+        role_id=None,
+        require_role_authority=False,
+    ):
         assert role_id is None
+        assert require_role_authority is False
         if predicate.value == "Acme":
             return {1, 2, 3}
         return {2, 3, 4}
@@ -91,8 +99,15 @@ def test_candidate_ids_matching_all_short_circuits_on_empty():
     pred2 = GraphPredicate(type="worked_at", value="B")
     calls = []
 
-    def fake(*, organization_id, predicate, role_id=None):
+    def fake(
+        *,
+        organization_id,
+        predicate,
+        role_id=None,
+        require_role_authority=False,
+    ):
         assert role_id is None
+        assert require_role_authority is False
         calls.append(predicate.value)
         return set() if predicate.value == "A" else {1, 2}
 
@@ -278,11 +293,18 @@ def test_colleague_neighbourhood_threads_role_to_metering():
     captured = {}
 
     @contextmanager
-    def _attribute(organization_id, label, *, role_id=None):
+    def _attribute(
+        organization_id,
+        label,
+        *,
+        role_id=None,
+        require_role_authority=False,
+    ):
         captured.update(
             organization_id=organization_id,
             label=label,
             role_id=role_id,
+            require_role_authority=require_role_authority,
         )
         yield
 
@@ -294,13 +316,104 @@ def test_colleague_neighbourhood_threads_role_to_metering():
             organization_id=1,
             candidate_id=99,
             role_id=77,
+            require_role_authority=True,
         )
 
     assert captured == {
         "organization_id": 1,
         "label": "neighbourhood",
         "role_id": 77,
+        "require_role_authority": True,
     }
+
+
+def test_candidate_predicate_threads_role_authority_to_metering():
+    captured = {}
+
+    @contextmanager
+    def _attribute(
+        organization_id,
+        label,
+        *,
+        role_id=None,
+        require_role_authority=False,
+    ):
+        captured.update(
+            organization_id=organization_id,
+            label=label,
+            role_id=role_id,
+            require_role_authority=require_role_authority,
+        )
+        yield
+
+    with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
+         patch.object(graph_search.graph_client, "run_async", return_value=[]), \
+         patch.object(graph_search, "_attribute_search", _attribute), \
+         patch.object(graph_search.graph_client, "get_graphiti", return_value=SimpleNamespace(search=lambda **kw: None)):
+        graph_search.candidate_ids_for_predicate(
+            organization_id=1,
+            predicate=GraphPredicate(type="worked_at", value="Acme"),
+            role_id=77,
+            require_role_authority=True,
+        )
+
+    assert captured == {
+        "organization_id": 1,
+        "label": "predicate",
+        "role_id": 77,
+        "require_role_authority": True,
+    }
+
+
+def test_candidate_ids_matching_all_propagates_role_authority():
+    captured = []
+
+    def fake(
+        *,
+        organization_id,
+        predicate,
+        role_id=None,
+        require_role_authority=False,
+    ):
+        captured.append(
+            (organization_id, predicate.value, role_id, require_role_authority)
+        )
+        return {1, 2}
+
+    predicates = [
+        GraphPredicate(type="worked_at", value="Acme"),
+        GraphPredicate(type="worked_at", value="Globex"),
+    ]
+    with patch.object(graph_search, "candidate_ids_for_predicate", side_effect=fake):
+        result = graph_search.candidate_ids_matching_all(
+            organization_id=1,
+            predicates=predicates,
+            role_id=77,
+            require_role_authority=True,
+        )
+
+    assert result == [1, 2]
+    assert captured == [
+        (1, "Acme", 77, True),
+        (1, "Globex", 77, True),
+    ]
+
+
+def test_candidate_predicate_reraises_provider_authority_error():
+    with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
+         patch.object(
+             graph_search.graph_client,
+             "run_async",
+             side_effect=GraphProviderAdmissionError("role agent is paused"),
+         ), \
+         patch.object(graph_search.graph_client, "get_graphiti", return_value=SimpleNamespace(search=lambda **kw: None)):
+        with pytest.raises(GraphProviderAdmissionError, match="paused"):
+            graph_search.candidate_ids_for_predicate(
+                organization_id=1,
+                predicate=GraphPredicate(type="worked_at", value="Acme"),
+                role_id=77,
+                require_role_authority=True,
+            )
 
 
 def test_label_for_classifies_job_titles_as_skill_not_company():

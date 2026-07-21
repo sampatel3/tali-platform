@@ -148,7 +148,11 @@ jobs:
             tests/test_agent_chat_*.py \
             tests/test_agent_runtime_orchestrator.py \
             tests/test_agent_runtime_tools.py \
+            tests/agent_runtime_policy/test_policy_evaluator.py \
+            tests/sub_agents/test_pre_screen_sub_agent.py \
             tests/test_api_nl_search.py \
+            tests/sub_agents/test_graph_priors_sub_agent.py \
+            tests/test_candidate_graph_queries.py \
             tests/test_candidate_graph_evidence_search.py \
             tests/test_candidate_search_evidence_matching.py \
             tests/test_candidate_search_graph_cache.py \
@@ -159,7 +163,11 @@ jobs:
             tests/test_candidate_search_runner_hybrid.py \
             tests/test_candidate_search_tool_failure_contract.py \
             tests/test_grounded_top_candidates.py \
+            tests/test_llm_gateway.py \
+            tests/test_metered_async_anthropic.py \
+            tests/test_metered_provider_admission.py \
             tests/test_mcp_catalog.py \
+            tests/test_pre_screen_usage_admission.py \
             tests/test_taali_chat_handlers.py \
             tests/test_taali_chat_routes.py \
             tests/test_taali_chat_role_scoped.py \

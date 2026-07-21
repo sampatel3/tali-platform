@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from app.sub_agents.base import SubAgentRequest
 from app.sub_agents.pre_screen import PRE_SCREEN_SUB_AGENT
 from app.models.role_criterion import RoleCriterion
+from app.services.provider_usage_admission import AutomaticProviderAuthorityError
 
 from .conftest import make_full_application
 
@@ -152,6 +155,40 @@ def test_metering_context_is_forwarded_to_runner(db):
         "pre_screen sub-agent dropped metering_context — agent pre-screens "
         "will leak as unmetered 'skip' calls"
     )
+
+
+def test_live_provider_authority_denial_escapes_real_sub_agent_path(db):
+    org, role, _, app = make_full_application(db)
+    role.agentic_mode_enabled = True
+    db.flush()
+    client = MagicMock()
+    req = SubAgentRequest(
+        organization_id=int(org.id),
+        application_id=int(app.id),
+        role_id=int(role.id),
+        skip_cache=True,
+        metering_context={
+            "organization_id": int(org.id),
+            "role_id": int(role.id),
+            "entity_id": f"application:{app.id}",
+            "require_role_authority": True,
+        },
+    )
+
+    with (
+        patch(
+            "app.cv_matching.runner_pre_screen._resolve_anthropic_client",
+            return_value=client,
+        ),
+        patch(
+            "app.services.pre_screen_usage_admission.reserve_provider_usage",
+            side_effect=AutomaticProviderAuthorityError("role agent is paused"),
+        ),
+        pytest.raises(AutomaticProviderAuthorityError, match="paused"),
+    ):
+        PRE_SCREEN_SUB_AGENT.run(req, db=db)
+
+    client.messages.create.assert_not_called()
 
 
 def test_unknown_application_returns_error(db):

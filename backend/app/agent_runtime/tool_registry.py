@@ -37,7 +37,7 @@ from ..models.agent_run import AgentRun
 from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
 from ..services import cohort_signals_service
 from ..services.assessment_autosend_guard import check_auto_send
 from ..services.agent_policy_settings import (
@@ -932,11 +932,37 @@ def _tool_refresh_candidate_graph(
             "application_id": application_id,
             "episodes_sent": 0,
         }
+    expected_application_role_id = int(role.id)
+    if str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER:
+        if getattr(role, "ats_owner_role_id", None) is None:
+            return {
+                "status": "not_found",
+                "application_id": application_id,
+                "episodes_sent": 0,
+            }
+        expected_application_role_id = int(role.ats_owner_role_id)
+        owner_exists = (
+            db.query(Role.id)
+            .filter(
+                Role.id == expected_application_role_id,
+                Role.organization_id == int(role.organization_id),
+                Role.deleted_at.is_(None),
+            )
+            .one_or_none()
+        )
+        if owner_exists is None:
+            return {
+                "status": "not_found",
+                "application_id": application_id,
+                "episodes_sent": 0,
+            }
     app = (
         db.query(CandidateApplication)
         .filter(
             CandidateApplication.id == application_id,
             CandidateApplication.organization_id == int(role.organization_id),
+            CandidateApplication.role_id == expected_application_role_id,
+            CandidateApplication.deleted_at.is_(None),
         )
         .first()
     )
@@ -948,7 +974,11 @@ def _tool_refresh_candidate_graph(
         }
     candidate = (
         db.query(Candidate)
-        .filter(Candidate.id == int(app.candidate_id))
+        .filter(
+            Candidate.id == int(app.candidate_id),
+            Candidate.organization_id == int(role.organization_id),
+            Candidate.deleted_at.is_(None),
+        )
         .first()
     )
     if candidate is None:
@@ -964,6 +994,7 @@ def _tool_refresh_candidate_graph(
         bill_organization_id=int(role.organization_id),
         bill_role_id=int(role.id),
         require_role_admission=True,
+        raise_on_error=True,
     )
     return {
         "status": "ok" if sent > 0 else "no_episodes",
@@ -2427,7 +2458,11 @@ def _queue_forced_policy_score_refresh(
         mark_application_scores_stale,
         supersede_pending_decisions_for_app,
     )
-    from ..services.role_execution_guard import lock_live_role
+    from ..services.provider_usage_admission import AutomaticProviderAuthorityError
+    from ..services.role_execution_guard import (
+        automatic_role_action_block_reason,
+        lock_live_role,
+    )
 
     live_role = lock_live_role(
         db,
@@ -2443,6 +2478,13 @@ def _queue_forced_policy_score_refresh(
             "reasoning": "Role is unavailable for a durable score refresh.",
         }
     role = live_role
+    authority_block = automatic_role_action_block_reason(role, db=db)
+    if authority_block is not None:
+        # The orchestrator releases its outer authority fence before dispatching
+        # evaluate_policy because the normal path can call providers. Re-check
+        # under this helper's fresh Organization -> Role locks before changing
+        # any durable score state on the skip-cache path.
+        raise AutomaticProviderAuthorityError(authority_block)
     app = (
         db.query(CandidateApplication)
         .filter(
@@ -2598,6 +2640,10 @@ def _tool_evaluate_policy(
         "organization_id": getattr(role, "organization_id", None),
         "role_id": int(role.id),
         "entity_id": f"application:{application_id}",
+        # evaluate_policy runs inside autonomous authority. Every cold
+        # sub-agent provider edge must re-admit against the current workspace
+        # and role controls after the orchestrator releases its outer lock.
+        "require_role_authority": True,
     }
     verdict, sub_outputs = policy_evaluator.evaluate_for_application(
         db,
