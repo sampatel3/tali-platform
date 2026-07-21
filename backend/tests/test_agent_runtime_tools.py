@@ -999,6 +999,7 @@ def test_nl_search_candidates_dispatch_pins_agent_role_id(db):
     assert mock_runner.called
     assert mock_runner.call_args.kwargs["role_id"] == role.id
     assert mock_runner.call_args.kwargs["rerank_enabled"] is False
+    assert mock_runner.call_args.kwargs["require_role_authority"] is True
     assert result["total_matched"] == 1
     assert result["applications"][0]["application_id"] == a1.id
 
@@ -1032,6 +1033,7 @@ def test_find_top_candidates_dispatch_pins_agent_role_id(db):
         )
 
     assert result == payload
+    assert mock_find.call_args.args[1].require_role_authority is True
     assert mock_find.call_args.kwargs == {
         "query": "banking experience",
         "limit": 7,
@@ -1076,6 +1078,7 @@ def test_graph_search_candidates_dispatch_pins_agent_role_id(db):
         )
 
     assert result == payload
+    assert mock_graph_search.call_args.args[1].require_role_authority is True
     assert mock_graph_search.call_args.kwargs == {
         "query": "stripe",
         "limit": 7,

@@ -465,6 +465,9 @@ def nl_search_candidates(
         base = base.filter(CandidateApplication.role_id == int(role_id))
 
     verify = bool(deep_verify if rerank is None else rerank)
+    search_kwargs: dict[str, Any] = {}
+    if getattr(user, "require_role_authority", False) is True:
+        search_kwargs["require_role_authority"] = True
     result = run_search(
         db=db,
         organization_id=int(user.organization_id),
@@ -478,6 +481,7 @@ def nl_search_candidates(
         # Pagination slices a fixed bounded person window. Retrieval totals must
         # not change merely because the caller asks for a later page.
         retrieval_limit=MAX_RETRIEVAL_LIMIT,
+        **search_kwargs,
     )
 
     safe_limit = max(1, min(int(limit), 100))
@@ -633,6 +637,8 @@ def find_top_candidates(
                 ),
             }
         )
+    if getattr(user, "require_role_authority", False) is True:
+        engine_args["require_role_authority"] = True
     result = _engine(**engine_args)
 
     if scoped_role is not None:
@@ -732,6 +738,8 @@ def screen_pool_against_requirement(
         engine_kwargs["deep_verify"] = True
     if offset:
         engine_kwargs["offset"] = max(0, int(offset))
+    if getattr(user, "require_role_authority", False) is True:
+        engine_kwargs["require_role_authority"] = True
     result = _engine(**engine_kwargs)
     if scoped_role is not None:
         result["role_name"] = scoped_role.name

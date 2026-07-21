@@ -17,12 +17,13 @@ same event shapes as the live SDK.
 from __future__ import annotations
 
 import json
-from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-
+from app.candidate_search.tool_failure_contract import (
+    CANDIDATE_SEARCH_UNAVAILABLE_CODE,
+    CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE,
+)
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -299,6 +300,48 @@ def _tool_use_plan(*, tool_id: str, tool_name: str, args: dict):
     return {"events": events, "final": final}
 
 
+def _multi_tool_use_plan(calls: list[tuple[str, str, dict]]):
+    events = []
+    blocks = []
+    for index, (tool_id, tool_name, args) in enumerate(calls):
+        events.extend(
+            [
+                SimpleNamespace(
+                    type="content_block_start",
+                    index=index,
+                    content_block=SimpleNamespace(
+                        type="tool_use", id=tool_id, name=tool_name
+                    ),
+                ),
+                SimpleNamespace(
+                    type="content_block_delta",
+                    index=index,
+                    delta=SimpleNamespace(
+                        type="input_json_delta",
+                        partial_json=json.dumps(args),
+                    ),
+                ),
+                SimpleNamespace(type="content_block_stop", index=index),
+            ]
+        )
+        blocks.append(
+            SimpleNamespace(type="tool_use", id=tool_id, name=tool_name, input=args)
+        )
+    return {
+        "events": events,
+        "final": SimpleNamespace(
+            content=blocks,
+            stop_reason="tool_use",
+            usage=SimpleNamespace(
+                input_tokens=12,
+                output_tokens=8,
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=0,
+            ),
+        ),
+    }
+
+
 def _drain(generator) -> list[str]:
     return [frame.body for frame in generator]
 
@@ -520,6 +563,128 @@ def test_tool_error_emits_is_error_frame(db):
         and "error" in json.loads(f[2:])["result"]
     ]
     assert len(error_results) == 1
+
+
+def test_candidate_search_failure_recovers_and_ends_without_model_synthesis(db):
+    user, org = _seed_user(db)
+    fake_client = _FakeClient(
+        [
+            _tool_use_plan(
+                tool_id="toolu_search_failure",
+                tool_name="find_top_candidates",
+                args={"query": "PySpark experience"},
+            )
+        ]
+    )
+    raw_marker = str(org.slug)
+
+    def fail_search(*_args, **_kwargs):
+        tool_db = _kwargs["db"]
+        tool_db.add(Organization(name="Duplicate", slug=raw_marker))
+        tool_db.flush()  # real IntegrityError leaves the Session rollback-only
+        raise AssertionError("duplicate organization flush should fail")
+
+    with (
+        patch("app.taali_chat.service.get_client_for_org", return_value=fake_client),
+        patch("app.taali_chat.service.record_event"),
+        patch("app.taali_chat.tool_execution.dispatch_tool", side_effect=fail_search),
+        patch.object(db, "rollback", wraps=db.rollback) as rollback,
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message="find PySpark candidates",
+                    conversation_id=None,
+                ),
+            )
+        )
+    db.commit()  # proves the safe transcript survives failed-transaction recovery
+
+    assert len(fake_client.messages.calls) == 1
+    rollback.assert_called_once()
+    serialized_frames = "".join(frames)
+    assert CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE in serialized_frames
+    assert CANDIDATE_SEARCH_UNAVAILABLE_CODE in serialized_frames
+    assert raw_marker not in serialized_frames
+    assert not any(frame.startswith("3:") for frame in frames)
+
+    messages = db.query(TaaliChatMessage).order_by(TaaliChatMessage.id).all()
+    assert [message.role for message in messages] == [
+        "user",
+        "assistant",
+        "user",
+        "assistant",
+    ]
+    serialized_messages = json.dumps([message.content for message in messages])
+    assert CANDIDATE_SEARCH_UNAVAILABLE_CODE in serialized_messages
+    assert CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE in serialized_messages
+    assert raw_marker not in serialized_messages
+
+
+def test_verified_search_result_is_durable_before_later_tool_failure(db):
+    user, org = _seed_user(db)
+    raw_marker = str(org.slug)
+    report_slug = f"durable-search-report-{id(db)}"
+    report_url = "https://reports.example.test/durable-search"
+    fake_client = _FakeClient(
+        [
+            _multi_tool_use_plan(
+                [
+                    ("toolu_read_first", "get_role", {"role_id": 1}),
+                    (
+                        "toolu_search_second",
+                        "find_top_candidates",
+                        {"query": "PySpark experience"},
+                    ),
+                ]
+            ),
+            _text_only_plan("The verified search completed; the other read failed."),
+        ]
+    )
+    dispatched: list[str] = []
+
+    def dispatch(name, *_args, **kwargs):
+        dispatched.append(name)
+        tool_db = kwargs["db"]
+        if name == "find_top_candidates":
+            tool_db.add(Organization(name="Durable search report", slug=report_slug))
+            tool_db.flush()
+            return {
+                "is_exact_empty": True,
+                "candidates": [],
+                "report_url": report_url,
+            }
+        tool_db.add(Organization(name="Duplicate", slug=raw_marker))
+        tool_db.flush()  # real IntegrityError rolls back only this tool phase
+        raise AssertionError("duplicate organization flush should fail")
+
+    with (
+        patch("app.taali_chat.service.get_client_for_org", return_value=fake_client),
+        patch("app.taali_chat.service.record_event"),
+        patch("app.taali_chat.tool_execution.dispatch_tool", side_effect=dispatch),
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message="Search, then read the role",
+                    conversation_id=None,
+                ),
+            )
+        )
+    db.commit()
+
+    assert dispatched == ["find_top_candidates", "get_role"]
+    assert len(fake_client.messages.calls) == 2
+    assert raw_marker not in "".join(frames)
+    second_round_messages = json.dumps(fake_client.messages.calls[1]["messages"])
+    assert report_url in second_round_messages
+    assert db.query(Organization).filter(Organization.slug == report_slug).count() == 1
 
 
 def test_max_tool_rounds_guard(db):

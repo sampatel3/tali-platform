@@ -90,6 +90,7 @@ def run_search(
     inherited_titles_all: list[str] | None = None,
     inherited_titles_any: list[str] | None = None,
     retrieval_limit: int = DEFAULT_RETRIEVAL_LIMIT,
+    require_role_authority: bool = False,
 ) -> SearchOutput:
     """Execute one NL search pass.
 
@@ -122,6 +123,7 @@ def run_search(
                     "organization_id": organization_id,
                     **({"role_id": int(role_id)} if role_id is not None else {}),
                 },
+                require_role_authority=bool(require_role_authority),
             )
         except Exception as exc:  # pragma: no cover — parser already swallows
             logger.warning("Parser raised: %s", exc)
@@ -131,7 +133,10 @@ def run_search(
                 parse_degraded=True,
             )
             warnings.append(
-                SearchWarning(code="parser_failed", message=f"NL parser failed: {exc}")
+                SearchWarning(
+                    code="parser_failed",
+                    message="The search request could not be parsed reliably.",
+                )
             )
         if parsed and parsed.parse_degraded and not any(
             warning.code == "parser_failed" for warning in warnings
@@ -286,7 +291,7 @@ def run_search(
                 exhaustive=True,
             )
         else:
-            graph_backend = retrieve_graph_backend(
+            graph_kwargs = dict(
                 query=nl_query,
                 organization_id=organization_id,
                 role_id=role_id,
@@ -295,6 +300,9 @@ def run_search(
                 graph_requirements=graph_evidence_requirements(parsed, plan),
                 graph_limit=min(safe_limit, 50),
             )
+            if require_role_authority:
+                graph_kwargs["require_role_authority"] = True
+            graph_backend = retrieve_graph_backend(**graph_kwargs)
         candidate_ids = {
             *(
                 int(row[1])
@@ -404,6 +412,7 @@ def run_search(
                 application_ids=checked_ids,
                 soft_criteria=rerank_criteria,
                 client=rerank_client,
+                require_role_authority=bool(require_role_authority),
             )
             # Deep verification is an explicit qualified subset. Candidates
             # outside the checked window are not silently called failures and
@@ -458,7 +467,7 @@ def run_search(
             warnings.append(
                 SearchWarning(
                     code="rerank_skipped",
-                    message=f"Rerank skipped due to error: {exc}",
+                    message="Evidence reranking was unavailable for this search.",
                 )
             )
 
@@ -493,7 +502,7 @@ def run_search(
             warnings.append(
                 SearchWarning(
                     code="neo4j_unavailable",
-                    message=f"Graph view unavailable: {exc}",
+                    message="Graph context was unavailable for this search.",
                 )
             )
 

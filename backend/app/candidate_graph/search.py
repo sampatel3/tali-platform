@@ -34,6 +34,7 @@ from ..candidate_search.schemas import (
     GraphPayload,
     GraphPredicate,
 )
+from ..services.metered_async_anthropic_client import GraphProviderAdmissionError
 
 logger = logging.getLogger("taali.candidate_graph.search")
 
@@ -91,6 +92,7 @@ def _attribute_search(
     label: str,
     *,
     role_id: int | None = None,
+    require_role_authority: bool = False,
 ):
     """Set ``graph_metering_ctx`` around a ``graphiti.search`` call so the
     Voyage query-embed (and any Anthropic call) it makes inside the Graphiti
@@ -124,7 +126,7 @@ def _attribute_search(
             # is budget-attributed to the role without requiring the role's
             # autonomous agent to be enabled.
             require_hard_admission=True,
-            require_role_admission=False,
+            require_role_admission=bool(require_role_authority),
         )
     )
     try:
@@ -153,6 +155,7 @@ def search_candidate_evidence(
     queries: Iterable[str],
     role_id: int | None = None,
     limit_per_query: int = DEFAULT_SEARCH_LIMIT,
+    require_role_authority: bool = False,
 ) -> GraphEvidenceSearchResult:
     """Semantic Graphiti retrieval with candidate and citation provenance.
 
@@ -195,6 +198,7 @@ def search_candidate_evidence(
                 organization_id,
                 "candidate_evidence",
                 role_id=role_id,
+                require_role_authority=bool(require_role_authority),
             ):
                 raw_results = graph_client.run_async(
                     graphiti.search(
@@ -203,6 +207,11 @@ def search_candidate_evidence(
                         num_results=limit,
                     )
                 )
+        except GraphProviderAdmissionError:
+            # Authority denials are live control-state decisions, not search
+            # results. Let the outer retrieval boundary fail closed without
+            # caching a transient pause as a reusable graph response.
+            raise
         except Exception as exc:
             logger.warning(
                 "Graphiti candidate evidence query %s failed: %s",
@@ -721,6 +730,7 @@ def colleague_neighbourhood(
     organization_id: int,
     candidate_id: int,
     role_id: int | None = None,
+    require_role_authority: bool = False,
     max_companies: int = 10,
     max_colleagues_per_company: int = 5,
 ) -> dict:
@@ -740,6 +750,7 @@ def colleague_neighbourhood(
             organization_id,
             "neighbourhood",
             role_id=role_id,
+            require_role_authority=bool(require_role_authority),
         ):
             results = graph_client.run_async(
                 graphiti.search(
@@ -748,6 +759,8 @@ def colleague_neighbourhood(
                     num_results=NEIGHBOURHOOD_LIMIT,
                 )
             )
+    except GraphProviderAdmissionError:
+        raise
     except Exception as exc:
         logger.warning("colleague_neighbourhood failed: %s", exc)
         return {"companies": [], "schools": [], "skills": []}

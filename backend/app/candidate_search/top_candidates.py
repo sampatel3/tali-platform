@@ -148,6 +148,7 @@ def _ground(
     organization_id: int,
     role_id: int | None,
     application_id: int,
+    require_role_authority: bool = False,
 ) -> list[CriterionVerdict]:
     """Pure (no DB / no ORM access) — safe to run in a worker thread. Grounds
     every criterion through the cached Citations pass (no stored-assessment
@@ -164,6 +165,7 @@ def _ground(
         organization_id=organization_id,
         role_id=role_id,
         application_id=int(application_id),
+        require_role_authority=bool(require_role_authority),
     )
     for v in verdicts:
         # Salary/currency caps: trust the cited figure, not the model's verdict word.
@@ -178,6 +180,7 @@ def _ground_window(
     client,
     organization_id: int,
     role_id: int | None = None,
+    require_role_authority: bool = False,
 ) -> list[tuple[CandidateApplication, list[CriterionVerdict]]]:
     """Ground each app in ``apps`` concurrently (I/O-bound Haiku calls).
 
@@ -200,6 +203,7 @@ def _ground_window(
                 organization_id=organization_id,
                 role_id=role_id,
                 application_id=int(app.id),
+                require_role_authority=bool(require_role_authority),
             )
         except Exception as exc:  # noqa: BLE001 — degrade this candidate, not the query
             logger.warning("ground app=%s failed: %s", getattr(app, "id", "?"), exc)
@@ -516,6 +520,7 @@ def find_top_candidates(
     evidence_client=None,
     inherited_titles_all: list[str] | None = None,
     inherited_titles_any: list[str] | None = None,
+    require_role_authority: bool = False,
 ) -> dict[str, Any]:
     """Run the grounded top-N procedure.
 
@@ -543,6 +548,7 @@ def find_top_candidates(
         defer_qualitative=True,
         inherited_titles_all=inherited_titles_all,
         inherited_titles_any=inherited_titles_any,
+        require_role_authority=bool(require_role_authority),
     )
     parsed = result.parsed_filter
     requested_criteria, criteria, unchecked_criteria = _criteria_coverage(parsed)
@@ -894,6 +900,7 @@ def find_top_candidates(
         client=client,
         organization_id=organization_id,
         role_id=role_id,
+        require_role_authority=bool(require_role_authority),
     )
 
     survivors, excluded = _partition_required_matches(grounded, checked_required)
@@ -1044,6 +1051,7 @@ def screen_pool_against_requirement(
     evidence_client=None,
     deep_verify: bool = False,
     offset: int = 0,
+    require_role_authority: bool = False,
 ) -> dict[str, Any]:
     """Screen the already-scored pool (``base_query``) against a NEW free-text
     requirement.
@@ -1080,6 +1088,7 @@ def screen_pool_against_requirement(
         include_subgraph=False,
         parser_client=parser_client,
         defer_qualitative=deep_verify,
+        require_role_authority=bool(require_role_authority),
     )
     parsed = result.parsed_filter
     requested_criteria, criteria, unchecked_criteria = _criteria_coverage(parsed)
@@ -1288,6 +1297,7 @@ def screen_pool_against_requirement(
         client=client,
         organization_id=organization_id,
         role_id=role_id,
+        require_role_authority=bool(require_role_authority),
     )
 
     # 4. Keep only grounded matches for required qualitative criteria; explicit

@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.candidate_search import rerank as rerank_module
+from app.services.metered_async_anthropic_client import GraphProviderAdmissionError
 
 
 class _FakeClient:
@@ -212,15 +213,45 @@ def test_role_id_is_threaded_into_rerank_admission_and_metering(monkeypatch):
         application_ids=[10],
         soft_criteria=["large enterprise"],
         client=fake,
+        require_role_authority=True,
     )
 
     assert out.application_ids == [10]
     assert out.outcomes[0].status == "qualified"
     assert captured["organization_id"] == 1
     assert captured["role_id"] == 77
+    assert captured["require_role_authority"] is True
     assert graph_context_args["role_id"] == 77
+    assert graph_context_args["require_role_authority"] is True
     assert fake.requests[0]["metering"]["role_id"] == 77
     assert fake.requests[0]["metering"]["credit_reservation"]["amount"] == 5_000
+
+
+def test_graph_authority_denial_stops_before_rerank_provider(monkeypatch):
+    app = _make_app_row(10, 100)
+    db = _make_db([app])
+    fake = _FakeClient([True])
+    admitted = MagicMock()
+    monkeypatch.setattr(
+        rerank_module,
+        "_build_graph_context",
+        MagicMock(side_effect=GraphProviderAdmissionError("role agent is paused")),
+    )
+    monkeypatch.setattr(rerank_module, "admitted_search_metering", admitted)
+
+    out = rerank_module.rerank_application_ids(
+        db=db,
+        organization_id=1,
+        role_id=77,
+        application_ids=[10],
+        soft_criteria=["large enterprise"],
+        client=fake,
+        require_role_authority=True,
+    )
+
+    assert out.outcomes[0].status == "error"
+    assert fake.calls == 0
+    admitted.assert_not_called()
 
 
 def test_no_api_key_reports_verification_unavailable(monkeypatch):

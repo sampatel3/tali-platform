@@ -67,6 +67,7 @@ class _AgentReadCtx:
 
     organization_id: int
     id: Optional[int] = None
+    require_role_authority: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -825,7 +826,10 @@ _RUN_COMPLETE_SENTINEL = "__AGENT_RUN_COMPLETE__"
 
 
 def _read_ctx(role: Role) -> _AgentReadCtx:
-    return _AgentReadCtx(organization_id=role.organization_id)
+    return _AgentReadCtx(
+        organization_id=role.organization_id,
+        require_role_authority=True,
+    )
 
 
 def _tool_get_application(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:

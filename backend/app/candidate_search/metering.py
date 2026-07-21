@@ -29,6 +29,7 @@ def admitted_search_metering(
     trace_id: str | None = None,
     metadata: dict[str, Any] | None = None,
     base_metering: dict[str, Any] | None = None,
+    require_role_authority: bool = False,
 ) -> dict[str, Any]:
     """Reserve one bounded provider attempt and return its metering payload.
 
@@ -50,6 +51,7 @@ def admitted_search_metering(
             **dict(metadata or {}),
             "admission_scope": "role" if role_id is not None else "organization",
         },
+        require_role_authority=bool(require_role_authority),
     )
     meter = {
         **dict(base_metering or {}),

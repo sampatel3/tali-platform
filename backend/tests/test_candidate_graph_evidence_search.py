@@ -11,8 +11,13 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from app.candidate_graph import search as graph_search
-from app.services.metered_async_anthropic_client import graph_metering_ctx
+from app.services.metered_async_anthropic_client import (
+    GraphProviderAdmissionError,
+    graph_metering_ctx,
+)
 
 
 @dataclass
@@ -375,6 +380,43 @@ def test_unconfigured_backend_is_unavailable_not_an_empty_success():
     assert result.capped is False
     assert result.exhaustive is False
     get_graphiti.assert_not_called()
+
+
+def test_autonomous_search_marks_graph_provider_context_as_role_authorized():
+    graphiti = _FakeGraphiti(searches={"payments": []}, driver=_FakeDriver(records=[]))
+
+    result = _search(
+        graphiti,
+        organization_id=2,
+        role_id=7,
+        queries=["payments"],
+        require_role_authority=True,
+    )
+
+    assert result.status == "ok"
+    assert len(graphiti.metering_contexts) == 1
+    context = graphiti.metering_contexts[0]
+    assert context is not None
+    assert context.role_id == 7
+    assert context.require_hard_admission is True
+    assert context.require_role_admission is True
+
+
+def test_graph_authority_denial_is_not_converted_to_a_cacheable_result():
+    graphiti = _FakeGraphiti(searches={}, driver=_FakeDriver(records=[]))
+
+    async def denied(**_kwargs):
+        raise GraphProviderAdmissionError("role agent is paused")
+
+    graphiti.search = denied
+    with pytest.raises(GraphProviderAdmissionError, match="paused"):
+        _search(
+            graphiti,
+            organization_id=2,
+            role_id=7,
+            queries=["payments"],
+            require_role_authority=True,
+        )
 
 
 def test_zero_results_is_an_ok_exhaustive_search_and_skips_hydration():

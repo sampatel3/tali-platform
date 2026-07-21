@@ -490,6 +490,7 @@ def _grounding_request(
     organization_id,
     role_id: int | None,
     application_id,
+    require_role_authority: bool = False,
 ):
     """One Citations call, retried with exponential backoff on TRANSIENT errors
     (timeout / 429 / 5xx / overloaded). Non-transient errors (e.g. a 400 from a
@@ -509,6 +510,7 @@ def _grounding_request(
                     f"attempt:{attempt}"
                 ),
                 metadata={"retry_attempt": int(attempt)},
+                require_role_authority=bool(require_role_authority),
             )
             return client.messages.create(
                 model=GROUNDING_MODEL,
@@ -551,6 +553,7 @@ def extract_cv_evidence(
     role_id: int | None = None,
     application_id: int,
     notes_text: str | None = None,
+    require_role_authority: bool = False,
 ) -> list[CriterionVerdict]:
     """Per-criterion grounded verdicts over the candidate's evidence (CV +
     recruiter notes / stated details), backed by a persistent cache.
@@ -630,6 +633,7 @@ def extract_cv_evidence(
                     organization_id=organization_id,
                     role_id=role_id,
                     application_id=application_id,
+                    require_role_authority=bool(require_role_authority),
                 )
             except Exception as exc:  # noqa: BLE001 — surface as error, don't crash
                 logger.warning(

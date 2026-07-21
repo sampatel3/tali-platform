@@ -161,6 +161,48 @@ describe('useChatStream session isolation', () => {
     ]);
   });
 
+  it('renders a typed candidate-search failure as an error tool result', async () => {
+    const encoder = new TextEncoder();
+    const failure = {
+      code: 'candidate_search_unavailable',
+      error: 'The verified search did not complete.',
+      tool: 'find_top_candidates',
+      retryable: true,
+      search_completed: false,
+      is_exact_empty: null,
+      incident_id: 'incident-123',
+    };
+    const frames = [
+      'b:{"toolCallId":"tool-search","toolName":"find_top_candidates"}',
+      '9:{"toolCallId":"tool-search","toolName":"find_top_candidates","args":{"query":"PySpark"}}',
+      `a:${JSON.stringify({ toolCallId: 'tool-search', result: failure })}`,
+      '0:"I could not complete a verified candidate search."',
+      '',
+    ].join('\n');
+    const read = vi.fn()
+      .mockResolvedValueOnce({ done: false, value: encoder.encode(frames) })
+      .mockResolvedValueOnce({ done: true });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      body: { getReader: () => ({ read }) },
+    }));
+    const { result } = renderHook(() => useChatStream());
+
+    await act(async () => {
+      await result.current.send('Find PySpark candidates');
+    });
+
+    expect(result.current.messages[1]?.parts).toEqual([
+      expect.objectContaining({
+        type: 'tool_call',
+        toolCallId: 'tool-search',
+        result: failure,
+        status: 'error',
+      }),
+      { type: 'text', text: 'I could not complete a verified candidate search.' },
+    ]);
+  });
+
   it('does not let an old send clear a newer session stream controller', async () => {
     const accountAResponse = deferred();
     const accountBResponse = deferred();

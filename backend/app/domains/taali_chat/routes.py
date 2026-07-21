@@ -12,6 +12,7 @@ are scoped to the caller's organization.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -30,6 +31,7 @@ from ...platform.database import SessionLocal, get_db
 from ...taali_chat.service import ChatTurnInput, run_chat_turn
 
 router = APIRouter(prefix="/taali-chat", tags=["taali-chat"])
+logger = logging.getLogger("taali.taali_chat.routes")
 
 
 # ---------------------------------------------------------------------------
@@ -117,10 +119,10 @@ def chat_turn(
                 ):
                     yield frame.body
                 db.commit()
-            except Exception as exc:
+            except Exception:
+                logger.exception("Taali Chat stream failed")
                 db.rollback()
-                err = str(exc).replace('"', '\\"')
-                yield f'3:"{err}"\n'
+                yield '3:"Sorry — the chat could not complete. Please try again."\n'
                 yield 'd:{"finishReason":"stop","usage":{"promptTokens":0,"completionTokens":0}}\n'
         finally:
             db.close()

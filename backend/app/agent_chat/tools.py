@@ -2250,16 +2250,13 @@ def dispatch_tool(
         return result
     if name == "search_candidates":
         # Reuse the Search page's candidate search (Graphiti/GraphRAG via the MCP
-        # handlers). Lazy import keeps the graph deps out of the module load path;
-        # graceful fallback when the vector layer isn't configured.
-        try:
-            from ..mcp import handlers as _mcp_handlers
+        # handlers). The engine owns the typed failure contract and transaction
+        # recovery; do not swallow a database error inside this dispatch layer.
+        from ..mcp import handlers as _mcp_handlers
 
-            return _mcp_handlers.nl_search_candidates(
-                db, user, query=str(args.get("query") or ""), role_id=int(role.id)
-            )
-        except Exception as exc:  # noqa: BLE001 — surface, don't crash the turn
-            return {"available": False, "error": f"search unavailable: {type(exc).__name__}"}
+        return _mcp_handlers.nl_search_candidates(
+            db, user, query=str(args.get("query") or ""), role_id=int(role.id)
+        )
     if name == "find_top_candidates":
         # Evidence-aware bounded ranking for this role. Tagged as a card so
         # the engine lifts it into message.actions for the evidence-card UI;

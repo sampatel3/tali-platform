@@ -14,12 +14,16 @@ the loop precisely.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from sqlalchemy import event
 
 from app.agent_runtime import orchestrator
+from app.candidate_search.tool_failure_contract import (
+    CANDIDATE_SEARCH_UNAVAILABLE_CODE,
+)
 from app.decision_policy.engine import PolicyDecision
 from app.models.agent_conversation import AgentConversationMessage, MESSAGE_KIND_EVENT
 from app.models.agent_decision import AgentDecision
@@ -30,6 +34,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
 from app.models.role import Role
+from app.platform.database import SessionLocal
 from app.services.role_intent_fingerprint import role_intent_fingerprint
 from app.services.usage_credit_reservations import InsufficientRoleBudgetError
 from app.services.usage_metering_service import InsufficientCreditsError
@@ -599,6 +604,188 @@ def test_run_cycle_rechecks_power_between_tools_in_one_response(db):
     assert run.error == "agent_disabled_during_cycle"
     assert dispatched_names == ["get_application"]
     assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
+
+
+def test_candidate_search_failure_recovers_fails_run_and_blocks_later_tools(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_mutation_first",
+                name="queue_advance_decision",
+                input_={"application_id": int(app.id)},
+            ),
+            _block_tool_use(
+                tool_use_id="tu_search_second",
+                name="find_top_candidates",
+                input_={"query": "PySpark experience"},
+            ),
+        ],
+        stop_reason="tool_use",
+    )
+    client = _scripted_client([response])
+    raw_marker = str(org.slug)
+    dispatched: list[str] = []
+    dispatch_transaction_states: list[bool] = []
+
+    def fail_search(name, *_args, **_kwargs):
+        dispatched.append(name)
+        tool_db = _kwargs["db"]
+        dispatch_transaction_states.append(tool_db.in_transaction())
+        tool_db.add(Organization(name="Duplicate", slug=raw_marker))
+        tool_db.flush()  # real IntegrityError leaves the Session rollback-only
+        raise AssertionError("duplicate organization flush should fail")
+
+    with (
+        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch("app.agent_runtime.orchestrator.dispatch", side_effect=fail_search),
+        patch.object(db, "rollback", wraps=db.rollback) as rollback,
+    ):
+        run = orchestrator.run_cycle(
+            db,
+            role=role,
+            trigger="manual",
+            application_id=app.id,
+        )
+    db.commit()  # proves the failed run survives failed-transaction recovery
+
+    assert run.status == "failed"
+    assert (run.error or "").startswith(f"{CANDIDATE_SEARCH_UNAVAILABLE_CODE}:")
+    assert raw_marker not in (run.error or "")
+    assert client.messages.create.call_count == 1
+    assert dispatched == ["find_top_candidates"]
+    assert dispatch_transaction_states == [False]
+    rollback.assert_called_once()
+    assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
+
+
+def test_successful_candidate_search_releases_authority_lock_and_continues(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    client = _scripted_client(
+        [
+            _response(
+                blocks=[
+                    _block_tool_use(
+                        tool_use_id="tu_search",
+                        name="find_top_candidates",
+                        input_={"query": "PySpark experience"},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            _response(
+                blocks=[
+                    _block_tool_use(
+                        tool_use_id="tu_done",
+                        name="agent_run_complete",
+                        input_={"summary": "Search completed."},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+        ]
+    )
+    original_dispatch = orchestrator.dispatch
+    transaction_states: dict[str, bool] = {}
+
+    def dispatch(name, args, *, db, agent_run, role):
+        transaction_states[name] = db.in_transaction()
+        if name == "find_top_candidates":
+            return {
+                "search_status": "matches_found",
+                "candidates": [{"application_id": int(app.id)}],
+            }
+        return original_dispatch(
+            name,
+            args,
+            db=db,
+            agent_run=agent_run,
+            role=role,
+        )
+
+    with patch(
+        "app.agent_runtime.orchestrator.get_client_for_org",
+        return_value=client,
+    ), patch("app.agent_runtime.orchestrator.dispatch", side_effect=dispatch):
+        run = orchestrator.run_cycle(
+            db,
+            role=role,
+            trigger="manual",
+            application_id=app.id,
+        )
+    db.commit()
+
+    assert run.status == "succeeded"
+    assert transaction_states["find_top_candidates"] is False
+    assert client.messages.create.call_count == 2
+    assert {item["name"]: item["count"] for item in run.tools_called} == {
+        "find_top_candidates": 1,
+        "agent_run_complete": 1,
+    }
+
+
+def test_pause_after_search_lock_release_blocks_provider_admission(db):
+    """A recruiter pause in the former race window must stop paid search."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    role_id = int(role.id)
+    response = _response(
+        blocks=[
+            _block_tool_use(
+                tool_use_id="tu_search",
+                name="nl_search_candidates",
+                input_={"query": "worked at Google or Meta"},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    client = _scripted_client([response])
+    parser_provider = SimpleNamespace(messages=MagicMock())
+    original_dispatch = orchestrator.dispatch
+    dispatch_transaction_states: list[bool] = []
+
+    def pause_then_dispatch(name, args, *, db, agent_run, role):
+        dispatch_transaction_states.append(db.in_transaction())
+        with SessionLocal() as concurrent:
+            current = concurrent.get(Role, role_id)
+            assert current is not None
+            current.agent_paused_at = datetime.now(timezone.utc)
+            current.agent_paused_reason = "paused before search admission"
+            concurrent.commit()
+        return original_dispatch(
+            name,
+            args,
+            db=db,
+            agent_run=agent_run,
+            role=role,
+        )
+
+    with (
+        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch("app.agent_runtime.orchestrator.dispatch", side_effect=pause_then_dispatch),
+        patch(
+            "app.candidate_search.parser._resolve_anthropic_client",
+            return_value=parser_provider,
+        ),
+    ):
+        run = orchestrator.run_cycle(
+            db,
+            role=role,
+            trigger="manual",
+            application_id=app.id,
+        )
+    db.commit()
+
+    assert run.status == "failed"
+    assert (run.error or "").startswith(f"{CANDIDATE_SEARCH_UNAVAILABLE_CODE}:")
+    assert dispatch_transaction_states == [False]
+    assert client.messages.create.call_count == 1
+    parser_provider.messages.create.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

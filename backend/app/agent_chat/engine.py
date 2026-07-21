@@ -29,6 +29,17 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from ..candidate_search.tool_failure_contract import (
+    CANDIDATE_SEARCH_UNAVAILABLE_CODE,
+    CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE,
+    candidate_search_failure_result,
+    candidate_search_result_failed,
+    candidate_search_tools_first,
+    is_candidate_search_tool,
+    new_candidate_search_incident_id,
+    skipped_after_search_failure_result,
+    unexpected_tool_failure_result,
+)
 from ..llm import CallUsage, MeteringContext, one_call
 from ..models.agent_conversation import (
     AUTHOR_ROLE_ASSISTANT,
@@ -316,7 +327,9 @@ def run_agent_response(
             stop_reason=stop_reason,
         )
 
-        tool_results: list[dict[str, Any]] = []
+        tool_blocks = [
+            block for block in blocks if block.get("type") == "tool_use"
+        ]
         signature = json.dumps(
             [
                 {"name": b.get("name"), "input": b.get("input") or {}}
@@ -337,9 +350,12 @@ def run_agent_response(
             final_stop = "circuit_breaker"
             break
 
-        tool_count = 0
+        tool_count = len(tool_blocks)
         error_count = 0
         terminal_receipt_message: str | None = None
+        round_cards: list[dict[str, Any]] = []
+        search_failure_incident: str | None = None
+        tool_results_by_id: dict[str, dict[str, Any]] = {}
         requested_mutations = [
             str(block.get("name") or "")
             for block in blocks
@@ -347,80 +363,161 @@ def run_agent_response(
             and str(block.get("name") or "") in MUTATING_TOOL_NAMES
         ]
         mutation_batch_blocked = len(requested_mutations) > 1
-        for block in blocks:
-            if block.get("type") != "tool_use":
-                continue
+        for block in candidate_search_tools_first(blocks):
             tool_use_id = str(block.get("id") or "")
             name = str(block.get("name") or "")
             args = block.get("input") or {}
-            tool_count += 1
-            try:
-                if mutation_batch_blocked and name in MUTATING_TOOL_NAMES:
-                    result = {
-                        "error": (
-                            "Only one state-changing command is allowed per model "
-                            "round. Re-read live state and run these one at a time."
-                        ),
-                        "tool": name,
-                        "requested_mutations": requested_mutations,
-                    }
-                    is_error = True
-                else:
-                    # A tool may itself call a metered provider (candidate
-                    # search/grounding). Release hidden-message or previous-tool
-                    # locks before dispatch for the same reason as ``one_call``.
-                    db.commit()
-                    result = dispatch_tool(
-                        name,
-                        args,
-                        db=db,
-                        role=role,
-                        user=user,
-                        conversation=conversation,
-                        expected_role_version=expected_role_version,
-                    )
-                    is_error = False
-                    if name in MUTATION_TOOL_NAMES:
-                        # A successful role mutation may have advanced the
-                        # revision. Carry that turn-owned revision into a
-                        # deliberate follow-up mutation in a later round.
-                        expected_role_version = int(
-                            role.version or expected_role_version
-                        )
-                    if isinstance(result, dict) and result.get("type") in CARD_TYPES:
-                        collected_cards.append(result)
-                    if isinstance(result, dict) and result.get("_terminal_message"):
-                        terminal_receipt_message = str(result["_terminal_message"])
-            except HTTPException as exc:
-                # Preserve the same structured 409 contract used by direct UI
-                # writes so the model can truthfully tell the recruiter to
-                # review the newer job instead of retrying a stale mutation.
-                logger.info(
-                    "agent_chat tool %s rejected with HTTP %s",
-                    name,
-                    exc.status_code,
+            if search_failure_incident is not None:
+                result = skipped_after_search_failure_result(
+                    tool=name,
+                    incident_id=search_failure_incident,
                 )
-                result = {
-                    "error": exc.detail,
-                    "status_code": int(exc.status_code),
-                    "tool": name,
-                }
                 is_error = True
-            except Exception as exc:
-                logger.exception("agent_chat tool %s failed: %s", name, exc)
-                result = {"error": str(exc), "tool": name}
-                is_error = True
+            else:
+                try:
+                    if mutation_batch_blocked and name in MUTATING_TOOL_NAMES:
+                        result = {
+                            "error": (
+                                "Only one state-changing command is allowed per model "
+                                "round. Re-read live state and run these one at a time."
+                            ),
+                            "tool": name,
+                            "requested_mutations": requested_mutations,
+                        }
+                        is_error = True
+                    else:
+                        # A tool may itself call a metered provider (candidate
+                        # search/grounding). Release hidden-message or previous-tool
+                        # locks before dispatch for the same reason as ``one_call``.
+                        db.commit()
+                        result = dispatch_tool(
+                            name,
+                            args,
+                            db=db,
+                            role=role,
+                            user=user,
+                            conversation=conversation,
+                            expected_role_version=expected_role_version,
+                        )
+                        is_error = False
+                        if candidate_search_result_failed(name, result):
+                            search_failure_incident = new_candidate_search_incident_id()
+                            logger.warning(
+                                "agent_chat candidate search returned an unavailable "
+                                "result tool=%s incident_id=%s",
+                                name,
+                                search_failure_incident,
+                            )
+                            db.rollback()
+                            result = candidate_search_failure_result(
+                                tool=name,
+                                incident_id=search_failure_incident,
+                            )
+                            is_error = True
+                        elif name in MUTATION_TOOL_NAMES:
+                            # A successful role mutation may have advanced the
+                            # revision. Carry that turn-owned revision into a
+                            # deliberate follow-up mutation in a later round.
+                            expected_role_version = int(
+                                role.version or expected_role_version
+                            )
+                        if not is_error and isinstance(result, dict):
+                            if result.get("type") in CARD_TYPES:
+                                round_cards.append(result)
+                            if result.get("_terminal_message"):
+                                terminal_receipt_message = str(
+                                    result["_terminal_message"]
+                                )
+                except HTTPException as exc:
+                    # Preserve the same structured 409 contract used by direct UI
+                    # writes so the model can truthfully tell the recruiter to
+                    # review the newer job instead of retrying a stale mutation.
+                    logger.info(
+                        "agent_chat tool %s rejected with HTTP %s",
+                        name,
+                        exc.status_code,
+                    )
+                    if is_candidate_search_tool(name):
+                        search_failure_incident = new_candidate_search_incident_id()
+                        db.rollback()
+                        result = candidate_search_failure_result(
+                            tool=name,
+                            incident_id=search_failure_incident,
+                        )
+                    else:
+                        result = {
+                            "error": exc.detail,
+                            "status_code": int(exc.status_code),
+                            "tool": name,
+                        }
+                    is_error = True
+                except Exception as exc:
+                    incident_id = new_candidate_search_incident_id()
+                    logger.exception(
+                        "agent_chat tool %s failed incident_id=%s: %s",
+                        name,
+                        incident_id,
+                        exc,
+                    )
+                    db.rollback()
+                    if is_candidate_search_tool(name):
+                        search_failure_incident = incident_id
+                        result = candidate_search_failure_result(
+                            tool=name,
+                            incident_id=incident_id,
+                        )
+                    else:
+                        result = unexpected_tool_failure_result(
+                            tool=name,
+                            incident_id=incident_id,
+                        )
+                    is_error = True
             if is_error:
                 error_count += 1
 
-            tool_results.append(
-                {
+            tool_results_by_id[tool_use_id] = {
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": json.dumps(result, default=str),
+                "is_error": is_error,
+            }
+
+        if search_failure_incident is not None:
+            # Discard partial search output and keep every tool_use paired. This
+            # prevents a later conversation replay from treating a partial round
+            # as grounded evidence or executing a mutation requested beside it.
+            tool_results_by_id = {
+                str(block.get("id") or ""): {
                     "type": "tool_result",
-                    "tool_use_id": tool_use_id,
-                    "content": json.dumps(result, default=str),
-                    "is_error": is_error,
+                    "tool_use_id": str(block.get("id") or ""),
+                    "content": json.dumps(
+                        (
+                            candidate_search_failure_result(
+                                tool=str(block.get("name") or ""),
+                                incident_id=search_failure_incident,
+                            )
+                            if is_candidate_search_tool(
+                                str(block.get("name") or "")
+                            )
+                            else skipped_after_search_failure_result(
+                                tool=str(block.get("name") or ""),
+                                incident_id=search_failure_incident,
+                            )
+                        ),
+                        default=str,
+                    ),
+                    "is_error": True,
                 }
-            )
+                for block in tool_blocks
+            }
+            error_count = tool_count
+        else:
+            collected_cards.extend(round_cards)
+
+        tool_results = [
+            tool_results_by_id[str(block.get("id") or "")]
+            for block in tool_blocks
+        ]
 
         _persist(
             db,
@@ -430,6 +527,10 @@ def run_agent_response(
             kind=MESSAGE_KIND_TOOL,
         )
         messages.append({"role": "user", "content": tool_results})
+        if search_failure_incident is not None:
+            final_text = CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE
+            final_stop = CANDIDATE_SEARCH_UNAVAILABLE_CODE
+            break
         if terminal_receipt_message:
             # The state change has a committed/queued domain receipt. Do not make
             # another model call that could fail after success and leave the

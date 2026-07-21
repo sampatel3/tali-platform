@@ -26,6 +26,7 @@ from . import MODEL_VERSION
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..services.pricing_service import Feature
+from ..services.metered_async_anthropic_client import GraphProviderAdmissionError
 from .metering import admitted_search_metering
 
 logger = logging.getLogger("taali.candidate_search.rerank")
@@ -114,7 +115,11 @@ def _build_candidate_summary(candidate: Candidate, application: CandidateApplica
 
 
 def _build_graph_context(
-    *, organization_id: int, candidate_id: int, role_id: int | None = None
+    *,
+    organization_id: int,
+    candidate_id: int,
+    role_id: int | None = None,
+    require_role_authority: bool = False,
 ) -> dict | None:
     """Pull a compact graph neighbourhood from Neo4j (or None when unavailable)."""
     try:
@@ -128,7 +133,10 @@ def _build_graph_context(
             organization_id=organization_id,
             candidate_id=candidate_id,
             role_id=role_id,
+            require_role_authority=bool(require_role_authority),
         )
+    except GraphProviderAdmissionError:
+        raise
     except Exception as exc:
         logger.debug("Graph context unavailable for candidate=%s: %s", candidate_id, exc)
         return None
@@ -272,6 +280,7 @@ def rerank_application_ids(
     application_ids: list[int],
     soft_criteria: list[str],
     client=None,
+    require_role_authority: bool = False,
 ) -> RerankBatchResult:
     """Tri-state verification for ``application_ids``.
 
@@ -326,6 +335,7 @@ def rerank_application_ids(
                 organization_id=organization_id,
                 candidate_id=int(candidate.id),
                 role_id=role_id,
+                require_role_authority=bool(require_role_authority),
             )
             call_metering = admitted_search_metering(
                 organization_id=organization_id,
@@ -335,6 +345,7 @@ def rerank_application_ids(
                 sub_feature="candidate_search_rerank",
                 trace_id=f"candidate-search:rerank:application:{app_id}",
                 base_metering={"db": db},
+                require_role_authority=bool(require_role_authority),
             )
             evaluation = _evaluate_one(
                 soft_criteria=soft_criteria,
