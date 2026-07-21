@@ -16,6 +16,7 @@ from app.models.usage_event import UsageEvent
 from app.platform.config import settings
 from app.services.metered_anthropic_client import MeteredAnthropicClient
 from app.services.provider_usage_admission import (
+    AutomaticProviderAuthorityError,
     PROVIDER_ATTEMPT_STARTED_STATE,
     PROVIDER_SUCCEEDED_PENDING_STATE,
     PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE,
@@ -71,7 +72,7 @@ def _live(monkeypatch) -> None:
     monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
 
 
-def _call(client, org, role, *, trace: str):
+def _call(client, org, role, *, trace: str, require_role_authority: bool = False):
     return client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=100,
@@ -82,6 +83,7 @@ def _call(client, org, role, *, trace: str):
             "role_id": int(role.id),
             "entity_id": "application:42",
             "trace_id": trace,
+            "require_role_authority": require_role_authority,
         },
     )
 
@@ -98,6 +100,30 @@ def test_role_attributed_call_is_blocked_before_sdk_with_zero_credits(
 
     with pytest.raises(InsufficientCreditsError):
         _call(client, org, role, trace="zero-credit")
+
+    assert inner.calls == 0
+    assert db.query(BillingCreditLedger).count() == 0
+
+
+def test_autonomous_fallback_rechecks_pause_before_sdk(db, monkeypatch):
+    _live(monkeypatch)
+    org, role = _seed(db, balance=1_000_000)
+    role.agentic_mode_enabled = True
+    role.agent_paused_at = datetime.now(timezone.utc)
+    db.commit()
+    inner = _Messages()
+    client = MeteredAnthropicClient(
+        inner=SimpleNamespace(messages=inner), organization_id=int(org.id)
+    )
+
+    with pytest.raises(AutomaticProviderAuthorityError, match="paused"):
+        _call(
+            client,
+            org,
+            role,
+            trace="paused-autonomous-fallback",
+            require_role_authority=True,
+        )
 
     assert inner.calls == 0
     assert db.query(BillingCreditLedger).count() == 0

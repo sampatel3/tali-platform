@@ -15,6 +15,7 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ..llm.core import ProviderAuthorityError
 from ..models.billing_credit_ledger import BillingCreditLedger
 from ..models.organization import Organization
 from ..models.role import Role
@@ -34,7 +35,7 @@ PROVIDER_SUCCEEDED_PENDING_STATE = "provider_succeeded_metering_pending"
 PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE = "provider_succeeded_usage_unknown"
 
 
-class AutomaticProviderAuthorityError(RuntimeError):
+class AutomaticProviderAuthorityError(ProviderAuthorityError):
     """A live role/workspace control no longer authorizes provider spend."""
 
 

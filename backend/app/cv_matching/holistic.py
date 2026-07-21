@@ -366,6 +366,7 @@ def derive_requirements(
     organization_id: int | None = None,
     role_id: int | None = None,
     trace_id: str | None = None,
+    require_role_authority: bool = False,
     before_provider_call: Callable[[str], None] | None = None,
 ) -> _Derivation:
     """Sonnet atomic-requirements derivation, cached per job-spec hash."""
@@ -389,6 +390,7 @@ def derive_requirements(
         role_id=role_id,
         entity_id=f"role:{role_id}" if role_id else None,
         trace_id=trace_id or uuid.uuid4().hex,
+        require_role_authority=bool(require_role_authority),
     )
     res = generate_structured(
         client,
@@ -446,6 +448,7 @@ def run_holistic_match(
     org_id = mc.get("organization_id")
     role_id = mc.get("role_id")
     entity_id = mc.get("entity_id")
+    require_role_authority = bool(mc.get("require_role_authority", False))
 
     cv = (cv_text or "").strip()
     jd = (job_spec_text or "").strip()
@@ -498,6 +501,7 @@ def run_holistic_match(
         organization_id=org_id,
         role_id=role_id,
         trace_id=trace_id,
+        require_role_authority=require_role_authority,
         before_provider_call=before_provider_call,
     )
     core = deriv.core_capability or "(infer from the job spec and requirements)"
@@ -514,7 +518,8 @@ def run_holistic_match(
     def _meter():
         return (
             MeteringContext(feature="score", organization_id=org_id, role_id=role_id,
-                            entity_id=entity_id, trace_id=trace_id)
+                            entity_id=entity_id, trace_id=trace_id,
+                            require_role_authority=require_role_authority)
             if metering_context
             else MeteringContext.skipped(metered_by="holistic_direct", trace_id=trace_id)
         )

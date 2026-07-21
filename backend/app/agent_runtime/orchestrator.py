@@ -35,6 +35,7 @@ from ..llm import CallUsage, MeteringContext, one_call
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature, raw_cost_usd_micro
 from ..services.provider_usage_admission import (
+    AutomaticProviderAuthorityError,
     release_provider_usage,
     reserve_provider_usage,
 )
@@ -64,6 +65,22 @@ MAX_TOOL_ROUNDS = 18
 MAX_TOKENS_PER_ROUND = 2048
 MAX_IDENTICAL_TOOL_ROUNDS = 2
 MAX_CONSECUTIVE_ERROR_ROUNDS = 2
+
+# These tools may cross into an independently admitted provider call. The
+# orchestrator must not retain its Organization/Role authority fence while
+# dispatching them: provider admission locks those same rows in its own
+# transaction. Candidate-search tools are detected by the shared contract;
+# policy evaluation fans out to scoring and graph-prior providers.
+_PROVIDER_CAPABLE_TOOL_NAMES = frozenset(
+    {
+        "evaluate_policy",
+        "refresh_candidate_graph",
+    }
+)
+
+
+def _tool_may_call_provider(name: str) -> bool:
+    return is_candidate_search_tool(name) or name in _PROVIDER_CAPABLE_TOOL_NAMES
 
 
 def _cycle_tokens(run: AgentRun) -> int:
@@ -637,7 +654,15 @@ def run_cycle(
                     "agent_run_id": int(run.id),
                     "round": int(round_idx),
                 },
+                require_role_authority=True,
             )
+        except AutomaticProviderAuthorityError as exc:
+            # Pause/disable that linearized before admission is an intentional
+            # authority stop, not a provider failure. No SDK attempt or paid
+            # hold has started.
+            run.status = "aborted"
+            run.error = f"provider_authority_revoked:{exc}"
+            break
         except InsufficientCreditsError as exc:
             credit_reason = (
                 "usage credits exhausted: "
@@ -795,12 +820,13 @@ def run_cycle(
             args = block.get("input") or {}
             round_tool_count += 1
             tools_called_summary[name] = tools_called_summary.get(name, 0) + 1
-            provider_capable_search = is_candidate_search_tool(name)
-            if provider_capable_search:
+            provider_capable_tool = _tool_may_call_provider(name)
+            if provider_capable_tool:
                 # The authority fence above uses FOR UPDATE. Paid search
-                # admission owns the same Organization/Role locks in an
-                # independent session, so release our fence before dispatch or
-                # the worker deadlocks itself waiting in both directions.
+                # and policy sub-agent admission own the same Organization/Role
+                # locks in independent sessions, so release our fence before
+                # dispatch or the worker deadlocks itself waiting in both
+                # directions.
                 db.commit()
 
             try:
@@ -830,11 +856,11 @@ def run_cycle(
                         f"{search_failure_incident}"
                     )
                     break
-                if provider_capable_search:
-                    # Make the verified report durable, then re-acquire the
-                    # authority fence. A recruiter may have paused/changed the
-                    # role while the paid read was in flight; never continue to
-                    # a later mutation from stale authority.
+                if provider_capable_tool:
+                    # Make the provider-backed result durable, then re-acquire
+                    # the authority fence. A recruiter may have paused/changed
+                    # the role while the paid read was in flight; never continue
+                    # to a later mutation from stale authority.
                     db.commit()
                     control_abort = _control_state_abort_reason(lock=True)
                     if control_abort is not None:
@@ -843,6 +869,17 @@ def run_cycle(
                         control_aborted_during_tools = True
                         db.commit()
                         break
+            except AutomaticProviderAuthorityError as exc:
+                # A provider edge inside evaluate_policy/search observed a
+                # newer pause after the outer fence was released. Abort the
+                # cycle without turning authority denial into tool evidence.
+                db.rollback()
+                db.refresh(run)
+                db.refresh(role)
+                run.status = "aborted"
+                run.error = f"provider_authority_revoked:{exc}"
+                control_aborted_during_tools = True
+                break
             except Exception:
                 incident_id = new_candidate_search_incident_id()
                 logger.exception(

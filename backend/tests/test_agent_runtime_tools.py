@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import event
+from sqlalchemy.orm import sessionmaker
 
 from app.actions import approve_decision, post_workable_note, queue_decision
 from app.actions.types import Actor
@@ -37,6 +38,8 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.task import Task
 from app.models.user import User
+from app.services.provider_usage_admission import AutomaticProviderAuthorityError
+from app.services.metered_async_anthropic_client import GraphProviderAdmissionError
 
 
 # SQLite doesn't autoincrement BigInteger PKs (only INTEGER PKs are special-cased).
@@ -1130,9 +1133,73 @@ def test_refresh_candidate_graph_calls_sync_when_configured(db):
     assert kwargs["bill_organization_id"] == int(role.organization_id)
     assert kwargs["bill_role_id"] == int(role.id)
     assert kwargs["include_cv_text"] is True
+    assert kwargs["require_role_admission"] is True
+    assert kwargs["raise_on_error"] is True
     assert result["status"] == "ok"
     assert result["episodes_sent"] == 4
     assert result["application_id"] == int(app.id)
+
+
+def test_refresh_candidate_graph_refuses_application_from_another_role(db):
+    org = _make_org(db)
+    running_role = _make_role(db, org)
+    other_role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=other_role,
+        name="Other role candidate",
+        email="other-role-graph@x.test",
+        taali=70.0,
+    )
+    run = _make_agent_run(db, running_role)
+
+    with patch("app.candidate_graph.client.is_configured", return_value=True), patch(
+        "app.candidate_graph.sync.sync_candidate"
+    ) as sync_mock:
+        result = tool_registry.dispatch(
+            "refresh_candidate_graph",
+            {"application_id": int(app.id)},
+            db=db,
+            agent_run=run,
+            role=running_role,
+        )
+
+    assert result["status"] == "not_found"
+    sync_mock.assert_not_called()
+
+
+def test_refresh_candidate_graph_propagates_provider_authority_denial(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Paused graph candidate",
+        email="paused-graph@x.test",
+        taali=70.0,
+    )
+    run = _make_agent_run(db, role)
+    denied = GraphProviderAdmissionError("role agent is paused")
+
+    with (
+        patch("app.candidate_graph.client.is_configured", return_value=True),
+        patch(
+            "app.candidate_graph.sync.sync_candidate",
+            side_effect=denied,
+        ) as sync_mock,
+        pytest.raises(AutomaticProviderAuthorityError, match="paused"),
+    ):
+        tool_registry.dispatch(
+            "refresh_candidate_graph",
+            {"application_id": int(app.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert sync_mock.call_args.kwargs["raise_on_error"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -1223,7 +1290,7 @@ def test_evaluate_policy_then_queue_escalation_creates_pending_human_decision(db
         tool_registry.policy_evaluator,
         "evaluate_for_application",
         return_value=(verdict, {}),
-    ):
+    ) as evaluate:
         evaluated = tool_registry.dispatch(
             "evaluate_policy",
             {"application_id": app.id},
@@ -1233,6 +1300,10 @@ def test_evaluate_policy_then_queue_escalation_creates_pending_human_decision(db
         )
 
     assert evaluated["decision_type"] == "escalate_low_confidence"
+    assert (
+        evaluate.call_args.kwargs["metering_context"]["require_role_authority"]
+        is True
+    )
     assert run.__engine_verdicts__[int(app.id)] == "escalate_low_confidence"
 
     result = tool_registry.dispatch(
@@ -2472,6 +2543,64 @@ def test_evaluate_policy_forced_refresh_queues_durable_score_without_subagents(
         == 1
     )
     dispatch_score.assert_called_once()
+
+
+def test_evaluate_policy_forced_refresh_pause_preserves_existing_scores(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db,
+        org=org,
+        role=role,
+        name="Paused refresh",
+        email="paused-refresh@x.test",
+        taali=88.0,
+    )
+    app.genuine_pre_screen_score_100 = 80.0
+    app.pre_screen_score_100 = 80.0
+    app.pre_screen_run_at = datetime.now(timezone.utc)
+    run = _make_agent_run(db, role)
+    db.commit()
+
+    ConcurrentSession = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=db.get_bind(),
+    )
+    with ConcurrentSession() as concurrent_db:
+        concurrent_role = concurrent_db.get(Role, int(role.id))
+        assert concurrent_role is not None
+        concurrent_role.agent_paused_at = datetime.now(timezone.utc)
+        concurrent_db.commit()
+
+    db.expire_all()
+    with (
+        patch("app.tasks.scoring_tasks.score_application_job.delay") as dispatch_score,
+        pytest.raises(AutomaticProviderAuthorityError, match="paused"),
+    ):
+        tool_registry.dispatch(
+            "evaluate_policy",
+            {"application_id": int(app.id), "skip_cache": True},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    db.rollback()
+    preserved = db.get(CandidateApplication, int(app.id))
+    assert preserved is not None
+    assert preserved.pre_screen_score_100 == 80.0
+    assert preserved.genuine_pre_screen_score_100 == 80.0
+    assert (
+        db.query(CvScoreJob)
+        .filter(
+            CvScoreJob.application_id == int(app.id),
+            CvScoreJob.status.in_(("pending", "running")),
+        )
+        .count()
+        == 0
+    )
+    dispatch_score.assert_not_called()
 
 
 def test_standard_queue_tool_refuses_missing_server_generation_snapshot(db):

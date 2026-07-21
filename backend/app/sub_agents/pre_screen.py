@@ -15,6 +15,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from ..llm import ProviderAuthorityError
 from ..components.scoring.role_intent_inputs import (
     append_role_intent_scoring_overlay,
 )
@@ -78,6 +79,8 @@ class PreScreenSubAgent:
         session, owns = _build_db(db)
         try:
             return self._run(req, session)
+        except ProviderAuthorityError:
+            raise
         except Exception as exc:  # pragma: no cover — defensive
             logger.exception("pre_screen sub-agent crashed")
             return SubAgentResult(

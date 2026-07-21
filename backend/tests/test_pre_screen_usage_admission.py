@@ -206,3 +206,42 @@ def test_direct_runner_threads_hold_into_gateway_metering():
     metering = client.messages.create.call_args.kwargs["metering"]
     assert metering["role_id"] == 17
     assert metering["credit_reservation"] == reservation.as_metering_payload()
+
+
+def test_direct_runner_threads_autonomous_authority_into_admission():
+    reservation = _reservation(42)
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(text='{"score": 75, "reason": "match"}')],
+        usage=SimpleNamespace(
+            input_tokens=100,
+            output_tokens=20,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        ),
+    )
+    with patch(
+        "app.services.pre_screen_usage_admission.reserve_provider_usage",
+        return_value=reservation,
+    ) as reserve:
+        result = run_pre_screen(
+            "Python engineer",
+            "Backend role",
+            client=client,
+            skip_cache=True,
+            metering_context={
+                "organization_id": 42,
+                "role_id": 17,
+                "entity_id": "application:99",
+                "require_role_authority": True,
+            },
+        )
+
+    assert result.decision == "yes"
+    assert reserve.call_args.kwargs["require_role_authority"] is True
+    assert (
+        client.messages.create.call_args.kwargs["metering"][
+            "require_role_authority"
+        ]
+        is True
+    )

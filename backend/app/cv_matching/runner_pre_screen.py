@@ -18,11 +18,16 @@ import uuid
 from dataclasses import dataclass
 from typing import Literal
 
-from ..llm import CallUsage, MeteringContext, one_call, strip_json_fences
+from ..llm import (
+    CallUsage,
+    MeteringContext,
+    ProviderAuthorityError,
+    one_call,
+    strip_json_fences,
+)
 from . import MODEL_VERSION
 from .prompts_pre_screen import (
     PRE_SCREEN_PROMPT_VERSION,
-    build_pre_screen_prompt,
     build_pre_screen_system,
     build_pre_screen_user_messages,
 )
@@ -277,6 +282,8 @@ def run_pre_screen(
                     metering_context["credit_reservation"] = (
                         reservation.as_metering_payload()
                     )
+            except ProviderAuthorityError:
+                raise
             except Exception as exc:
                 logger.info("Pre-screen budget admission blocked: %s", exc)
                 return PreScreenResult(
@@ -294,6 +301,9 @@ def run_pre_screen(
             entity_id=metering_context.get("entity_id"),
             user_id=metering_context.get("user_id"),
             credit_reservation=metering_context.get("credit_reservation"),
+            require_role_authority=bool(
+                metering_context.get("require_role_authority", False)
+            ),
         )
     else:
         pre_metering = MeteringContext.skipped(metered_by="direct_call_no_context")
@@ -309,6 +319,8 @@ def run_pre_screen(
             metering=pre_metering,
             usage_sink=usage,
         )
+    except ProviderAuthorityError:
+        raise
     except Exception as exc:
         logger.warning("Pre-screen Claude call failed: %s", exc)
         return PreScreenResult(

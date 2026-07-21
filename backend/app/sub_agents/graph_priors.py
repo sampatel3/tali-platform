@@ -25,15 +25,14 @@ Algorithm:
      heuristic is also empty, return ``confidence=0`` so the policy
      engine collapses the prior's weight to 0 cleanly.
 
-Per-cycle in-memory cache prevents re-running graph queries when the
-orchestrator calls ``evaluate_policy`` more than once for the same
-application within a cycle.
+The orchestrator owns same-cycle deduplication. This sub-agent deliberately
+does not retain process-global results because graph evidence and execution
+authority can change between calls.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
 from datetime import datetime, timezone
 from typing import Any
 
@@ -47,8 +46,9 @@ from ..decision_policy.engine import load_active_policy
 from ..decision_policy.schema import GraphPriorConfig, PolicyJson
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
 from ..platform.database import SessionLocal
+from ..services.metered_async_anthropic_client import GraphProviderAdmissionError
 from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import register_sub_agent
 
@@ -56,20 +56,8 @@ from .registry import register_sub_agent
 logger = logging.getLogger("taali.sub_agents.graph_priors")
 
 
-# Cycle-scoped cache: keyed by (application_id, role_id). The
-# orchestrator clears it via ``clear_cycle_cache`` between agent cycles
-# (see Phase 5 retune integration); within a cycle it short-circuits
-# repeat calls.
-_CYCLE_CACHE: dict[tuple[int, int], SubAgentResult] = {}
-_CACHE_LOCK = threading.Lock()
-
-
 def clear_cycle_cache() -> None:
-    """Reset the per-cycle in-memory cache. Called by the orchestrator
-    at cycle entry so a long-running worker doesn't carry stale priors.
-    """
-    with _CACHE_LOCK:
-        _CYCLE_CACHE.clear()
+    """Compatibility no-op; GraphPriors no longer keeps global results."""
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +156,8 @@ class GraphPriorsSubAgent:
     def _try_graphrag(
         self,
         req: SubAgentRequest,
-        db: Session,
         *,
+        app: CandidateApplication,
         config: GraphPriorConfig,
     ) -> SubAgentResult | None:
         """Multi-hop GraphRAG path. Returns None when it can't run; a
@@ -178,17 +166,8 @@ class GraphPriorsSubAgent:
         heuristic); a populated result when it produced a calibrated
         prior.
         """
-        # Resolve the candidate + role IDs we need to anchor the queries.
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == req.application_id,
-                CandidateApplication.organization_id == req.organization_id,
-            )
-            .one_or_none()
-        )
-        if app is None:
-            return None
+        # ``_run`` has already bound this application to the exact live
+        # organization/role authority (including sister-role ownership).
         candidate_taali_id = int(app.candidate_id)
         role_taali_id = int(req.role_id)
 
@@ -223,13 +202,21 @@ class GraphPriorsSubAgent:
         # still probe the app for the referrer id (tali-specific column
         # knowledge) and pass it in; everything else the backend derives.
         try:
-            priors = self._graph_backend().get_priors(
-                brand_id=int(req.organization_id),
-                case_id=candidate_taali_id,
+            with graph_search.graph_provider_context(
+                int(req.organization_id),
+                "graph_priors",
                 role_id=role_taali_id,
-                referrer_id=referrer_id,
-                as_of=t,
-            )
+                require_role_authority=True,
+            ):
+                priors = self._graph_backend().get_priors(
+                    brand_id=int(req.organization_id),
+                    case_id=candidate_taali_id,
+                    role_id=role_taali_id,
+                    referrer_id=referrer_id,
+                    as_of=t,
+                )
+        except GraphProviderAdmissionError:
+            raise
         except Exception as exc:  # pragma: no cover — backend never raises, defensive
             logger.warning("vendored GraphitiBackend.get_priors failed: %s", exc)
             return None
@@ -286,23 +273,14 @@ class GraphPriorsSubAgent:
     def run(
         self, req: SubAgentRequest, *, db: Session | None = None
     ) -> SubAgentResult:
-        cache_key = (int(req.application_id), int(req.role_id))
-        if not req.skip_cache:
-            with _CACHE_LOCK:
-                hit = _CYCLE_CACHE.get(cache_key)
-            if hit is not None:
-                return SubAgentResult(
-                    sub_agent=self.name,
-                    ok=hit.ok,
-                    output=dict(hit.output),
-                    confidence=hit.confidence,
-                    cache_hit=True,
-                )
-
         session = db or SessionLocal()
         owns = db is None
         try:
             result = self._run(req, session)
+        except GraphProviderAdmissionError:
+            # A live Pause/disable decision is execution authority, not an empty
+            # graph signal. Let the autonomous boundary abort the cycle.
+            raise
         except Exception as exc:  # pragma: no cover — defensive
             logger.exception("graph_priors sub-agent crashed")
             result = SubAgentResult(
@@ -311,12 +289,86 @@ class GraphPriorsSubAgent:
         finally:
             if owns:
                 session.close()
-
-        with _CACHE_LOCK:
-            _CYCLE_CACHE[cache_key] = result
         return result
 
     def _run(self, req: SubAgentRequest, db: Session) -> SubAgentResult:
+        role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(req.role_id),
+                Role.organization_id == int(req.organization_id),
+                Role.deleted_at.is_(None),
+            )
+            .one_or_none()
+        )
+        if role is None:
+            return SubAgentResult(
+                sub_agent=self.name,
+                ok=False,
+                error=f"role {req.role_id} not found",
+            )
+
+        expected_application_role_id = int(role.id)
+        if str(role.role_kind or "") == ROLE_KIND_SISTER:
+            if role.ats_owner_role_id is None:
+                return SubAgentResult(
+                    sub_agent=self.name,
+                    ok=False,
+                    error=f"sister role {req.role_id} has no ATS owner role",
+                )
+            expected_application_role_id = int(role.ats_owner_role_id)
+            owner_exists = (
+                db.query(Role.id)
+                .filter(
+                    Role.id == expected_application_role_id,
+                    Role.organization_id == int(req.organization_id),
+                    Role.deleted_at.is_(None),
+                )
+                .one_or_none()
+            )
+            if owner_exists is None:
+                return SubAgentResult(
+                    sub_agent=self.name,
+                    ok=False,
+                    error=f"ATS owner role {expected_application_role_id} not found",
+                )
+
+        app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(req.application_id),
+                CandidateApplication.organization_id == int(req.organization_id),
+                CandidateApplication.role_id == expected_application_role_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .one_or_none()
+        )
+        if app is None:
+            return SubAgentResult(
+                sub_agent=self.name,
+                ok=False,
+                error=(
+                    f"application {req.application_id} not found for role "
+                    f"{expected_application_role_id}"
+                ),
+            )
+
+        candidate = (
+            db.query(Candidate)
+            .filter(
+                Candidate.id == int(app.candidate_id),
+                Candidate.organization_id == int(req.organization_id),
+                Candidate.deleted_at.is_(None),
+            )
+            .one_or_none()
+        )
+        if candidate is None:
+            return SubAgentResult(
+                sub_agent=self.name,
+                ok=False,
+                error=f"candidate {app.candidate_id} not found",
+            )
+
         config = _resolve_graph_config(
             db,
             organization_id=int(req.organization_id),
@@ -330,34 +382,9 @@ class GraphPriorsSubAgent:
         # GraphRAG path (Phase 2) — try multi-hop queries first. The
         # heuristic path remains as a fallback so this rolls out
         # without breaking organisations whose graph is sparse.
-        graphrag = self._try_graphrag(req, db, config=config)
+        graphrag = self._try_graphrag(req, app=app, config=config)
         if graphrag is not None and graphrag.ok and (graphrag.output.get("p_advance") is not None):
             return graphrag
-
-        app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == req.application_id,
-                CandidateApplication.organization_id == req.organization_id,
-            )
-            .one_or_none()
-        )
-        if app is None:
-            return SubAgentResult(
-                sub_agent=self.name,
-                ok=False,
-                error=f"application {req.application_id} not found",
-            )
-        candidate = (
-            db.query(Candidate).filter(Candidate.id == app.candidate_id).one_or_none()
-        )
-        role = db.query(Role).filter(Role.id == req.role_id).one_or_none()
-        if candidate is None or role is None:
-            return SubAgentResult(
-                sub_agent=self.name,
-                ok=False,
-                error="candidate or role not found",
-            )
 
         # 1. Neighbourhood payload (cheap on graph hit; cached upstream).
         try:
@@ -365,8 +392,11 @@ class GraphPriorsSubAgent:
                 organization_id=int(req.organization_id),
                 candidate_id=int(candidate.id),
                 role_id=int(req.role_id),
+                require_role_authority=True,
                 max_companies=int(config.neighbourhood_size),
             )
+        except GraphProviderAdmissionError:
+            raise
         except Exception as exc:
             logger.warning("colleague_neighbourhood crashed: %s", exc)
             return _empty_result(f"neighbourhood error: {exc}")
@@ -381,7 +411,10 @@ class GraphPriorsSubAgent:
                 organization_id=int(req.organization_id),
                 predicates=predicates,
                 role_id=int(req.role_id),
+                require_role_authority=True,
             )
+        except GraphProviderAdmissionError:
+            raise
         except Exception as exc:
             logger.warning("candidate_ids_matching_all crashed: %s", exc)
             return _empty_result(f"intersection error: {exc}")
@@ -399,6 +432,8 @@ class GraphPriorsSubAgent:
                 CandidateApplication.organization_id == req.organization_id,
                 CandidateApplication.candidate_id.in_(neighbour_ids),
                 CandidateApplication.deleted_at.is_(None),
+                Role.organization_id == req.organization_id,
+                Role.deleted_at.is_(None),
             )
             .all()
         )

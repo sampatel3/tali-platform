@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Callable
 
-from ..llm import MeteringContext, generate_structured
+from ..llm import MeteringContext, ProviderAuthorityError, generate_structured
 from ..platform.config import settings
 from ..services.fraud_detection import (
     apply_integrity_penalty,
@@ -251,6 +251,8 @@ def run_cv_match(
         )
         if archetype is not None:
             archetype_weights = archetype.normalised_dimension_weights()
+    except ProviderAuthorityError:
+        raise
     except Exception as exc:  # pragma: no cover — defensive
         if exc is archetype_authority_failure:
             raise
@@ -284,6 +286,9 @@ def run_cv_match(
             entity_id=metering_context.get("entity_id"),
             user_id=metering_context.get("user_id"),
             trace_id=ctx.trace_id,
+            require_role_authority=bool(
+                metering_context.get("require_role_authority", False)
+            ),
         )
     else:
         gw_metering = MeteringContext.skipped(

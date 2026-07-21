@@ -42,7 +42,7 @@ from typing import Any, Callable, Generic, Optional, Sequence, TypeVar
 from pydantic import BaseModel
 from pydantic import ValidationError as PydanticValidationError
 
-from .core import CallUsage, MeteringContext, one_call
+from .core import CallUsage, MeteringContext, ProviderAuthorityError, one_call
 
 logger = logging.getLogger("taali.llm.structured")
 
@@ -379,6 +379,10 @@ def generate_structured(
                 retry_attempt=attempt,
                 usage_sink=usage,
             )
+        except ProviderAuthorityError:
+            # Pause/disable is execution control, not a failed model response.
+            # Preserve it for the autonomous boundary to abort terminally.
+            raise
         except Exception as exc:
             logger.warning("gateway call failed (attempt %d): %s", attempt + 1, exc)
             return StructuredResult(
