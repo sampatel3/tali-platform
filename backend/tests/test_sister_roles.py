@@ -20,7 +20,10 @@ from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.role_brief import BRIEF_STATUS_APPLIED, RoleBrief
 from app.models.role_change_event import RoleChangeEvent
 from app.models.role_criterion import RoleCriterion
-from app.models.sister_role_evaluation import SisterRoleEvaluation
+from app.models.sister_role_evaluation import (
+    SISTER_EVAL_STATUSES,
+    SisterRoleEvaluation,
+)
 from app.models.user import User
 from app.services.sister_role_service import related_role_advance_note
 from tests.conftest import TestingSessionLocal, auth_headers
@@ -116,6 +119,29 @@ def _scorable_evaluation(db, *, organization_id: int):
     db.add(evaluation)
     db.commit()
     return source, evaluation
+
+
+@pytest.mark.parametrize("score_status", sorted(SISTER_EVAL_STATUSES))
+def test_related_role_application_api_serializes_every_persisted_score_status(
+    client, db, score_status
+):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    _source, evaluation = _scorable_evaluation(
+        db,
+        organization_id=int(user.organization_id),
+    )
+    evaluation.status = score_status
+    db.commit()
+
+    response = client.get(
+        f"/api/v1/roles/{int(evaluation.role_id)}/applications",
+        params={"application_outcome": "open"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()[0]["score_status"] == score_status
 
 
 def _match_output(*, ok: bool):

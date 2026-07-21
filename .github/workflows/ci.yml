@@ -138,7 +138,8 @@ jobs:
             tests/test_graph_outbox_role_id_migration.py \
             tests/test_workable_stage_local_write_guard.py \
             tests/test_roles_list_ordering.py \
-            tests/test_send_assessment_action.py
+            tests/test_send_assessment_action.py \
+            tests/test_sister_roles.py
 
   frontend:
     runs-on: ubuntu-latest
@@ -169,6 +170,7 @@ jobs:
             src/features/home/HomeNow.optimistic.test.jsx \
             src/features/chat/Thread.test.jsx \
             src/features/chat/useChatStream.session.test.jsx
+          npm test -- src/features/candidates/candidatesUiUtils.test.js
           npm test -- src/test/vercelCaching.test.js
       - name: Build frontend
         # Vite build will fail on import errors, type errors (where
