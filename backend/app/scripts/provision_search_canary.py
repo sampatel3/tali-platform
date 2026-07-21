@@ -264,20 +264,39 @@ def _upsert_candidate_truth(
         ),
         label=f"application {truth['email']}",
     )
+    transition_at = datetime.now(timezone.utc)
     if application is None:
         application = CandidateApplication(
             organization_id=org.id,
             candidate_id=candidate.id,
             role_id=role.id,
+            status="applied",
+            pipeline_stage="review",
+            pipeline_stage_updated_at=transition_at,
+            pipeline_stage_source="system",
+            application_outcome="open",
+            application_outcome_updated_at=transition_at,
+            version=1,
+            source="manual",
+            external_refs={"internal_canary": "search-v1"},
         )
         db.add(application)
-        db.flush()
     application.status = "applied"
-    application.pipeline_stage = "review"
-    application.application_outcome = "open"
+    if application.pipeline_stage != "review":
+        application.pipeline_stage = "review"
+        application.pipeline_stage_updated_at = transition_at
+    elif application.pipeline_stage_updated_at is None:
+        application.pipeline_stage_updated_at = transition_at
+    application.pipeline_stage_source = "system"
+    if application.application_outcome != "open":
+        application.application_outcome = "open"
+        application.application_outcome_updated_at = transition_at
+    elif application.application_outcome_updated_at is None:
+        application.application_outcome_updated_at = transition_at
     application.source = "manual"
     application.external_refs = {"internal_canary": "search-v1"}
     application.deleted_at = None
+    db.flush()
 
     assessment = _one_or_none(
         db.query(Assessment).filter(

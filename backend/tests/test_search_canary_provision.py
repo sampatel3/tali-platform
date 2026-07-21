@@ -1,5 +1,7 @@
 """One-time synthetic truth-fixture provisioning is isolated and idempotent."""
 
+from datetime import datetime, timezone
+
 from sqlalchemy.orm import sessionmaker
 
 from app.models.api_key import (
@@ -40,6 +42,13 @@ def test_search_canary_fixture_is_idempotent_and_has_grounded_exclusions(db):
     completed_at = {
         int(row.id): row.completed_at for row in db.query(Assessment).all()
     }
+    transition_timestamps = {
+        int(row.id): (
+            row.pipeline_stage_updated_at,
+            row.application_outcome_updated_at,
+        )
+        for row in db.query(CandidateApplication).all()
+    }
 
     second_role, second_key = provisioner.provision(db)
     db.flush()
@@ -54,6 +63,17 @@ def test_search_canary_fixture_is_idempotent_and_has_grounded_exclusions(db):
     assert {
         int(row.id): row.completed_at for row in db.query(Assessment).all()
     } == completed_at
+    assert {
+        int(row.id): (
+            row.pipeline_stage_updated_at,
+            row.application_outcome_updated_at,
+        )
+        for row in db.query(CandidateApplication).all()
+    } == transition_timestamps
+    assert all(
+        pipeline_at is not None and outcome_at is not None
+        for pipeline_at, outcome_at in transition_timestamps.values()
+    )
     assert len(set(assessment_tokens.values())) == 4
     assert all(
         token and not token.startswith("internal-search-canary-v1-")
@@ -100,6 +120,47 @@ def test_canary_key_is_hash_only_and_has_no_general_application_scope(db):
     assert key.last_used_at is None
     assert key.revoked_at is None
     assert key.expires_at is not None
+
+
+def test_provision_repairs_transition_state_without_rewinding_version(db):
+    role, _token = provisioner.provision(db)
+    application = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.role_id == role.id)
+        .order_by(CandidateApplication.id)
+        .first()
+    )
+    assert application is not None
+    stale_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    application.status = "hired"
+    application.pipeline_stage = "in_assessment"
+    application.pipeline_stage_updated_at = stale_at
+    application.application_outcome = "hired"
+    application.application_outcome_updated_at = stale_at
+    application.version = 7
+    db.flush()
+
+    provisioner.provision(db)
+    db.flush()
+
+    assert application.status == "applied"
+    assert application.pipeline_stage == "review"
+    assert application.pipeline_stage_updated_at != stale_at
+    assert application.application_outcome == "open"
+    assert application.application_outcome_updated_at != stale_at
+    assert application.version == 7
+    repaired_timestamps = (
+        application.pipeline_stage_updated_at,
+        application.application_outcome_updated_at,
+    )
+
+    provisioner.provision(db)
+    db.flush()
+    assert (
+        application.pipeline_stage_updated_at,
+        application.application_outcome_updated_at,
+    ) == repaired_timestamps
+    assert application.version == 7
 
 
 def test_provisioning_command_prints_secrets_after_session_closes(
