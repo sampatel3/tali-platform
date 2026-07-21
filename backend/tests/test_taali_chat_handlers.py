@@ -18,6 +18,8 @@ from app.candidate_search.schemas import (
     GraphPayload,
     ParsedFilter,
     SearchOutput,
+    SearchRetrievalSummary,
+    SearchRetrievalTrace,
 )
 from app.mcp import handlers
 from app.models.candidate import Candidate
@@ -89,6 +91,8 @@ def test_nl_search_candidates_passes_through_run_search(db):
         parsed_filter=ParsedFilter(skills_all=["aws"], free_text="aws engineers"),
         warnings=[],
         rerank_applied=True,
+        database_matches=1,
+        retrieval_matches=2,
         deep_checked=2,
         evidence_succeeded=1,
         evidence_failed=1,
@@ -123,7 +127,10 @@ def test_nl_search_candidates_passes_through_run_search(db):
     assert kwargs["rerank_enabled"] is False
     assert kwargs["include_subgraph"] is False
     assert out["total_matched"] == 2
-    assert out["database_matches"] == 2
+    assert out["database_matches"] == 1
+    assert out["retrieval_matches"] == 2
+    assert out["postgres_matches"] == 1
+    assert out["is_exact_empty"] is False
     assert out["returned"] == 2
     assert out["rerank_applied"] is True
     assert out["deep_checked"] == 2
@@ -179,8 +186,31 @@ def test_nl_search_candidates_supports_person_result_pagination(db):
         application_ids=[a.id for a in apps],
         parsed_filter=ParsedFilter(skills_all=["Python"]),
         database_matches=4,
+        retrieval_matches=4,
+        verification_results=[
+            CandidateDeepVerification(
+                application_id=app.id,
+                status="qualified",
+                reason=f"evidence-{app.id}",
+            )
+            for app in apps
+        ],
+        retrieval=SearchRetrievalSummary(
+            mode="postgres_only",
+            graph_status="not_selected",
+            hits=[
+                SearchRetrievalTrace(
+                    application_id=app.id,
+                    candidate_id=int(app.candidate_id),
+                    score=float(4 - index),
+                    sources=["postgres"],
+                    postgres_rank=index + 1,
+                )
+                for index, app in enumerate(apps)
+            ],
+        ),
     )
-    with patch("app.candidate_search.runner.run_search", return_value=fake):
+    with patch("app.candidate_search.runner.run_search", return_value=fake) as runner:
         out = handlers.nl_search_candidates(
             db, user, query="Python", limit=2, offset=2
         )
@@ -190,6 +220,17 @@ def test_nl_search_candidates_supports_person_result_pagination(db):
     ]
     assert out["offset"] == 2
     assert out["database_matches"] == 4
+    assert [row["application_id"] for row in out["verification_results"]] == [
+        apps[2].id,
+        apps[3].id,
+    ]
+    assert [row["application_id"] for row in out["retrieval"]["hits"]] == [
+        apps[2].id,
+        apps[3].id,
+    ]
+    assert out["retrieval"]["total_hits"] == 4
+    assert out["retrieval"]["returned_hits"] == 2
+    assert runner.call_args.kwargs["retrieval_limit"] == 1000
 
 
 def test_nl_search_candidates_rejects_empty_query(db):
@@ -653,80 +694,180 @@ def test_graph_topology_caps_at_60_nodes_but_preserves_edge_endpoints():
 # ---------------------------------------------------------------------------
 
 
-def test_graph_search_unconfigured_returns_warning(db):
+def test_graph_search_preserves_hybrid_unavailable_coverage(db):
     user, _org = _make_user_and_org(db)
-    with patch("app.candidate_graph.client.is_configured", return_value=False):
-        out = handlers.graph_search_candidates(db, user, query="worked at stripe")
-    assert out["applications"] == []
-    assert out["graph_facts"] == []
-    assert out["warnings"][0]["code"] == "neo4j_unavailable"
-
-
-def test_graph_search_returns_candidates_from_graph(db):
-    """When graph nodes carry a ``taali_id``, hydrate to applications."""
-    user, org = _make_user_and_org(db)
-    role = Role(organization_id=org.id, name="X", source="manual")
-    db.add(role)
-    db.commit()
-    target_app = _make_app(
-        db, org_id=org.id, role=role, candidate_name="Sam",
-        email="sam@x.test", taali=85.0,
-    )
-    other_org = Organization(name="Other", slug="other")
-    db.add(other_org)
-    db.commit()
-
-    payload = GraphPayload(
-        nodes=[
+    shared_result = {
+        "applications": [],
+        "total_matched": 0,
+        "database_matches": 0,
+        "retrieval_matches": 0,
+        "returned": 0,
+        "capped": False,
+        "exhaustive": False,
+        "is_exact_empty": False,
+        "verification_results": [],
+        "retrieval": {
+            "mode": "hybrid",
+            "graph_status": "unavailable",
+            "hits": [],
+        },
+        "warnings": [
             {
-                "id": "person-1",
-                "label": "Person",
-                "name": "Sam",
-                "extra": {"taali_id": str(target_app.candidate_id)},
-            },
-            # A leaked Person from another org — guarded against by
-            # CandidateApplication.organization_id filter inside the handler.
-            {
-                "id": "person-2",
-                "label": "Person",
-                "name": "External",
-                "extra": {"taali_id": "999999"},
-            },
-            # Edge endpoint must exist in the node list — _graph_topology
-            # drops dangling edges to keep cytoscape from crashing.
-            {
-                "id": "company-1",
-                "label": "Company",
-                "name": "Stripe",
-                "extra": {},
-            },
-        ],
-        edges=[
-            {
-                "source": "person-1",
-                "target": "company-1",
-                "label": "WORKED_AT",
-                "extra": {"fact": "Senior Engineer at Stripe"},
+                "code": "graph_retrieval_unavailable",
+                "message": "Graph recall is unavailable.",
             }
         ],
+        "graph": None,
+    }
+    with patch(
+        "app.mcp.handlers.nl_search_candidates", return_value=shared_result
+    ) as shared_search:
+        out = handlers.graph_search_candidates(db, user, query="worked at stripe")
+
+    shared_search.assert_called_once_with(
+        db,
+        user,
+        query="worked at stripe",
+        role_id=None,
+        deep_verify=False,
+        include_graph=True,
+        limit=25,
+        offset=0,
     )
+    assert out["applications"] == []
+    assert out["graph_facts"] == []
+    assert out["graph_facts_are_evidence"] is False
+    assert out["evidence"] == []
+    assert out["warnings"][0]["code"] == "graph_retrieval_unavailable"
+    assert out["exhaustive"] is False
+    assert out["is_exact_empty"] is False
 
-    with patch("app.candidate_graph.client.is_configured", return_value=True), patch(
-        "app.candidate_graph.search.subgraph_for_query", return_value=payload
-    ):
-        out = handlers.graph_search_candidates(db, user, query="stripe")
 
-    ids = {a["application_id"] for a in out["applications"]}
-    assert target_app.id in ids
-    # The graph topology (nodes + edges) is also surfaced for inline
-    # visualisation. Source-of-truth shape so the React side can call
-    # cytoscape.layout against it.
-    assert "graph" in out
-    assert {n["id"] for n in out["graph"]["nodes"]} >= {"person-1", "person-2"}
-    assert any(e["source"] == "person-1" and e["target"] == "company-1" for e in out["graph"]["edges"])
-    # Cross-org candidate id (999999) must not surface — even via graph hits.
-    assert all(a["candidate_id"] == target_app.candidate_id for a in out["applications"])
-    assert any("Stripe" in f["fact"] for f in out["graph_facts"])
+def test_graph_search_preserves_shared_exact_empty_state(db):
+    user, _org = _make_user_and_org(db)
+    shared_result = {
+        "applications": [],
+        "total_matched": 0,
+        "database_matches": 0,
+        "retrieval_matches": 0,
+        "returned": 0,
+        "capped": False,
+        "exhaustive": True,
+        "is_exact_empty": True,
+        "verification_results": [],
+        "retrieval": {
+            "mode": "postgres_only",
+            "graph_status": "not_selected",
+            "hits": [],
+        },
+        "warnings": [],
+        "graph": None,
+    }
+    with patch("app.mcp.handlers.nl_search_candidates", return_value=shared_result):
+        out = handlers.graph_search_candidates(db, user, query="unknown skill")
+
+    assert out["is_exact_empty"] is True
+    assert out["exhaustive"] is True
+    assert out["graph_facts"] == []
+    assert out["evidence"] == []
+
+
+def test_graph_search_wraps_shared_role_scoped_result_with_topology_and_evidence(
+    db,
+):
+    user, _org = _make_user_and_org(db)
+    shared_result = {
+        "applications": [{"application_id": 17, "candidate_id": 9}],
+        "total_matched": 1,
+        "database_matches": 0,
+        "retrieval_matches": 1,
+        "returned": 1,
+        "capped": True,
+        "exhaustive": False,
+        "is_exact_empty": False,
+        "verification_results": [],
+        "retrieval": {
+            "mode": "hybrid",
+            "graph_status": "ok",
+            "hits": [
+                {
+                    "application_id": 17,
+                    "candidate_id": 9,
+                    "sources": ["graph"],
+                    "evidence": [
+                        {
+                            "source": "candidate_cv",
+                            "reference": "episode:cv-9",
+                            "clause_ids": ["criterion-worked-at"],
+                        }
+                    ],
+                }
+            ],
+        },
+        "warnings": [{"code": "graph_coverage_partial", "message": "Partial."}],
+        "graph": {
+            "nodes": [
+                {"id": "person-9", "label": "Person", "name": "Sam", "extra": {}},
+                {
+                    "id": "company-1",
+                    "label": "Company",
+                    "name": "Stripe",
+                    "extra": {},
+                },
+            ],
+            "edges": [
+                {
+                    "source": "person-9",
+                    "target": "company-1",
+                    "label": "WORKED_AT",
+                    "fact": "Sam worked at Stripe",
+                }
+            ],
+        },
+    }
+
+    with patch(
+        "app.mcp.handlers.nl_search_candidates", return_value=shared_result
+    ) as shared_search:
+        out = handlers.graph_search_candidates(
+            db, user, query="worked at stripe", role_id=42, limit=10
+        )
+
+    shared_search.assert_called_once_with(
+        db,
+        user,
+        query="worked at stripe",
+        role_id=42,
+        deep_verify=False,
+        include_graph=True,
+        limit=10,
+        offset=0,
+    )
+    assert out["applications"] == [{"application_id": 17, "candidate_id": 9}]
+    assert out["graph"] == shared_result["graph"]
+    assert out["graph_facts"] == [
+        {
+            "fact": "Sam worked at Stripe",
+            "source": "person-9",
+            "target": "company-1",
+            "label": "WORKED_AT",
+            "is_citation": False,
+        }
+    ]
+    assert out["graph_facts_are_evidence"] is False
+    assert out["evidence"] == [
+        {
+            "application_id": 17,
+            "candidate_id": 9,
+            "source": "candidate_cv",
+            "reference": "episode:cv-9",
+            "clause_ids": ["criterion-worked-at"],
+        }
+    ]
+    assert out["database_matches"] == 0
+    assert out["retrieval_matches"] == 1
+    assert out["capped"] is True
+    assert out["is_exact_empty"] is False
 
 
 # ---------------------------------------------------------------------------

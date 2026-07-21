@@ -1,0 +1,444 @@
+{
+  "id": "domain-neutral-search",
+  "version": "1.1.0",
+  "world": {
+    "id": "constructed-people-v1",
+    "closed_world_predicates": [
+      "demonstrated",
+      "located_in",
+      "notice_period_days",
+      "studied_at",
+      "training_only",
+      "verified",
+      "worked_at"
+    ],
+    "entities": [
+      {"id": "p1", "kind": "person", "attributes": {"name": "Ada"}},
+      {"id": "p2", "kind": "person", "attributes": {"name": "Ben"}},
+      {"id": "p3", "kind": "person", "attributes": {"name": "Chen"}},
+      {"id": "p4", "kind": "person", "attributes": {"name": "Devi"}},
+      {"id": "p5", "kind": "person", "attributes": {"name": "Eli"}},
+      {"id": "p6", "kind": "person", "attributes": {"name": "Fay"}},
+      {"id": "p7", "kind": "person", "attributes": {"name": "Gita"}},
+      {"id": "p8", "kind": "person", "attributes": {"name": "Hugo"}}
+    ],
+    "documents": [
+      {"id": "p1-k8s", "entity_id": "p1", "source_type": "cv", "content": "Built and operated Kubernetes platforms from 2022-01-01 to 2024-07-01.", "content_sha256": "f36c4a7caee7e079e27be86ea23dd60fe1a7b0995be2542440de2cefbe39ea48"},
+      {"id": "p1-dubai", "entity_id": "p1", "source_type": "profile", "content": "Dubai", "content_sha256": "6c425048aa7badd9d84615bd8620ca1864efd81cfdb69dcd5d5a94b68013d48d"},
+      {"id": "p2-k8s", "entity_id": "p2", "source_type": "cv", "content": "Ben's team used Kubernetes; Ben did not operate it directly.", "content_sha256": "25356248fd0c55d40a84c4b867cea2fbc1a6dd95e472e8fbbd4de05313f3f094"},
+      {"id": "p2-postgres", "entity_id": "p2", "source_type": "cv", "content": "Postgres", "content_sha256": "44368adad746bc27c3f1133f81ad8938a444ddb3789a3f15bce4544bc1459801"},
+      {"id": "p3-python", "entity_id": "p3", "source_type": "cv", "content": "Python", "content_sha256": "18885f27b5af9012df19e496460f9294d5ab76128824c6f993787004f6d9a7db"},
+      {"id": "p3-graph", "entity_id": "p3", "source_type": "cv", "content": "Graph database", "content_sha256": "e89322f421c8fc27fbe03e1bf60c519226620eb322ff13d098fb067d9f55da13"},
+      {"id": "p3-acme", "entity_id": "p3", "source_type": "employment", "content": "Acme", "content_sha256": "37036cd8f9746d335038eca92f8a73ae5f1bca4779a1e55e5812e37743b2f5bf"},
+      {"id": "p3-london", "entity_id": "p3", "source_type": "profile", "content": "London", "content_sha256": "ecc0e7dc084f141b29479058967d0bc07dee25d9690a98ee4e6fdad5168274d7"},
+      {"id": "p4-go", "entity_id": "p4", "source_type": "cv", "content": "Go", "content_sha256": "6cc8519b91584e8bd435d63341e0838a99721948718b1c9c1e9c358c64ba992a"},
+      {"id": "p4-dubai", "entity_id": "p4", "source_type": "profile", "content": "Dubai", "content_sha256": "6c425048aa7badd9d84615bd8620ca1864efd81cfdb69dcd5d5a94b68013d48d"},
+      {"id": "p5-python", "entity_id": "p5", "source_type": "cv", "content": "Python training", "content_sha256": "6665f7af91e721ea33d4a0da013e1844790f23e3eb284e698bb0cfeab14c5c94"},
+      {"id": "p6-go", "entity_id": "p6", "source_type": "cv", "content": "Go", "content_sha256": "6cc8519b91584e8bd435d63341e0838a99721948718b1c9c1e9c358c64ba992a"},
+      {"id": "p6-graph", "entity_id": "p6", "source_type": "cv", "content": "Graph database", "content_sha256": "e89322f421c8fc27fbe03e1bf60c519226620eb322ff13d098fb067d9f55da13"},
+      {"id": "p6-dubai", "entity_id": "p6", "source_type": "profile", "content": "Dubai", "content_sha256": "6c425048aa7badd9d84615bd8620ca1864efd81cfdb69dcd5d5a94b68013d48d"},
+      {"id": "p6-acme", "entity_id": "p6", "source_type": "employment", "content": "Acme", "content_sha256": "37036cd8f9746d335038eca92f8a73ae5f1bca4779a1e55e5812e37743b2f5bf"},
+      {"id": "p6-notice", "entity_id": "p6", "source_type": "profile", "content": "30 days", "content_sha256": "ffd7280513ce285e6d9dc8d0b7078c4f39c8fe0e69b0d0a87d8af2965e445d7a"},
+      {"id": "p7-notice", "entity_id": "p7", "source_type": "profile", "content": "14 days", "content_sha256": "60acc36e5d51315d92d69fa8dc75929ce56ac4582214c9148c15314ba848f0d0"},
+      {"id": "p7-imperial", "entity_id": "p7", "source_type": "education", "content": "Imperial College", "content_sha256": "5501f0f009f465cb75585ded907e5e8a248a68c3b0272343920e2415f6188c7b"},
+      {"id": "p7-globex", "entity_id": "p7", "source_type": "employment", "content": "Globex", "content_sha256": "9b4ed45bf939450eff9f6afa5bc05076f7c483c6dd83d363ce66ceb813c560b0"},
+      {"id": "p7-clearance", "entity_id": "p7", "source_type": "cv", "content": "Security clearance", "content_sha256": "cdcda5725aa8228eab679f1b644ca788b895325ed0c700a82b07125140d08b80"},
+      {"id": "p8-notice", "entity_id": "p8", "source_type": "profile", "content": "60 days", "content_sha256": "600a4e11044e7b72e4432ddc79d1ac71ea7aa54287a141c518f6a6c7d343bc2e"},
+      {"id": "p8-imperial", "entity_id": "p8", "source_type": "education", "content": "Imperial College", "content_sha256": "5501f0f009f465cb75585ded907e5e8a248a68c3b0272343920e2415f6188c7b"},
+      {"id": "p8-initech", "entity_id": "p8", "source_type": "employment", "content": "Initech", "content_sha256": "834d492e8e85a879eaa796e14b179229916b78619e05f7a8d55c6e18601670e5"},
+      {"id": "p8-clearance-cv", "entity_id": "p8", "source_type": "cv", "content": "Security clearance", "content_sha256": "cdcda5725aa8228eab679f1b644ca788b895325ed0c700a82b07125140d08b80"},
+      {"id": "p8-clearance-assessment", "entity_id": "p8", "source_type": "assessment", "content": "Security clearance", "content_sha256": "cdcda5725aa8228eab679f1b644ca788b895325ed0c700a82b07125140d08b80"}
+    ],
+    "facts": [
+      {
+        "id": "f-p1-k8s", "subject_id": "p1", "predicate": "demonstrated",
+        "object": {"kind": "capability", "value": "Kubernetes"},
+        "valid_from": "2022-01-01", "valid_to": "2024-07-01",
+        "confidence": 0.98, "direct_subject": true,
+        "provenance": [{"document_id": "p1-k8s", "start": 0, "end": 70, "quote": "Built and operated Kubernetes platforms from 2022-01-01 to 2024-07-01."}]
+      },
+      {
+        "id": "f-p1-dubai", "subject_id": "p1", "predicate": "located_in",
+        "object": {"kind": "location", "value": "Dubai"},
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p1-dubai", "start": 0, "end": 5, "quote": "Dubai"}]
+      },
+      {
+        "id": "f-p2-k8s-team", "subject_id": "p2", "predicate": "demonstrated",
+        "object": {"kind": "capability", "value": "Kubernetes"},
+        "valid_from": "2020-01-01", "valid_to": "2025-01-01",
+        "confidence": 0.99, "direct_subject": false,
+        "provenance": [{"document_id": "p2-k8s", "start": 0, "end": 60, "quote": "Ben's team used Kubernetes; Ben did not operate it directly."}]
+      },
+      {
+        "id": "f-p2-postgres", "subject_id": "p2", "predicate": "demonstrated",
+        "object": {"kind": "capability", "value": "Postgres"},
+        "valid_from": "2021-01-01", "valid_to": "2025-01-01",
+        "confidence": 0.95, "direct_subject": true,
+        "provenance": [{"document_id": "p2-postgres", "start": 0, "end": 8, "quote": "Postgres"}]
+      },
+      {
+        "id": "f-p3-python", "subject_id": "p3", "predicate": "demonstrated",
+        "object": {"kind": "capability", "value": "Python"},
+        "valid_from": "2020-01-01", "valid_to": "2025-01-01",
+        "confidence": 0.97, "direct_subject": true,
+        "provenance": [{"document_id": "p3-python", "start": 0, "end": 6, "quote": "Python"}]
+      },
+      {
+        "id": "f-p3-graph", "subject_id": "p3", "predicate": "demonstrated",
+        "object": {"kind": "capability", "value": "Graph database"},
+        "valid_from": "2022-01-01", "valid_to": "2025-01-01",
+        "confidence": 0.94, "direct_subject": true,
+        "provenance": [{"document_id": "p3-graph", "start": 0, "end": 14, "quote": "Graph database"}]
+      },
+      {
+        "id": "f-p3-acme", "subject_id": "p3", "predicate": "worked_at",
+        "object": {"kind": "organization", "value": "Acme"},
+        "valid_from": "2020-01-01", "valid_to": "2023-01-01",
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p3-acme", "start": 0, "end": 4, "quote": "Acme"}]
+      },
+      {
+        "id": "f-p3-london", "subject_id": "p3", "predicate": "located_in",
+        "object": {"kind": "location", "value": "London"},
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p3-london", "start": 0, "end": 6, "quote": "London"}]
+      },
+      {
+        "id": "f-p4-go", "subject_id": "p4", "predicate": "demonstrated",
+        "object": {"kind": "capability", "value": "Go"},
+        "valid_from": "2021-01-01", "valid_to": "2025-01-01",
+        "confidence": 0.96, "direct_subject": true,
+        "provenance": [{"document_id": "p4-go", "start": 0, "end": 2, "quote": "Go"}]
+      },
+      {
+        "id": "f-p4-dubai", "subject_id": "p4", "predicate": "located_in",
+        "object": {"kind": "location", "value": "Dubai"},
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p4-dubai", "start": 0, "end": 5, "quote": "Dubai"}]
+      },
+      {
+        "id": "f-p5-training", "subject_id": "p5", "predicate": "training_only",
+        "object": {"kind": "capability", "value": "Python"},
+        "confidence": 0.99, "direct_subject": true,
+        "provenance": [{"document_id": "p5-python", "start": 0, "end": 15, "quote": "Python training"}]
+      },
+      {
+        "id": "f-p6-go", "subject_id": "p6", "predicate": "demonstrated",
+        "object": {"kind": "capability", "value": "Go"},
+        "valid_from": "2022-01-01", "valid_to": "2025-01-01",
+        "confidence": 0.93, "direct_subject": true,
+        "provenance": [{"document_id": "p6-go", "start": 0, "end": 2, "quote": "Go"}]
+      },
+      {
+        "id": "f-p6-graph", "subject_id": "p6", "predicate": "demonstrated",
+        "object": {"kind": "capability", "value": "Graph database"},
+        "valid_from": "2022-01-01", "valid_to": "2025-01-01",
+        "confidence": 0.96, "direct_subject": true,
+        "provenance": [{"document_id": "p6-graph", "start": 0, "end": 14, "quote": "Graph database"}]
+      },
+      {
+        "id": "f-p6-dubai", "subject_id": "p6", "predicate": "located_in",
+        "object": {"kind": "location", "value": "Dubai"},
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p6-dubai", "start": 0, "end": 5, "quote": "Dubai"}]
+      },
+      {
+        "id": "f-p6-acme", "subject_id": "p6", "predicate": "worked_at",
+        "object": {"kind": "organization", "value": "Acme"},
+        "valid_from": "2021-01-01", "valid_to": "2024-01-01",
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p6-acme", "start": 0, "end": 4, "quote": "Acme"}]
+      },
+      {
+        "id": "f-p6-notice", "subject_id": "p6", "predicate": "notice_period_days",
+        "object": {"kind": "availability", "value": "notice period"}, "value": 30,
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p6-notice", "start": 0, "end": 7, "quote": "30 days"}]
+      },
+      {
+        "id": "f-p7-notice", "subject_id": "p7", "predicate": "notice_period_days",
+        "object": {"kind": "availability", "value": "notice period"}, "value": 14,
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p7-notice", "start": 0, "end": 7, "quote": "14 days"}]
+      },
+      {
+        "id": "f-p8-notice", "subject_id": "p8", "predicate": "notice_period_days",
+        "object": {"kind": "availability", "value": "notice period"}, "value": 60,
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p8-notice", "start": 0, "end": 7, "quote": "60 days"}]
+      },
+      {
+        "id": "f-p7-imperial", "subject_id": "p7", "predicate": "studied_at",
+        "object": {"kind": "school", "value": "Imperial College"},
+        "valid_from": "2013-09-01", "valid_to": "2017-06-30",
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p7-imperial", "start": 0, "end": 16, "quote": "Imperial College"}]
+      },
+      {
+        "id": "f-p8-imperial", "subject_id": "p8", "predicate": "studied_at",
+        "object": {"kind": "school", "value": "Imperial College"},
+        "valid_from": "2012-09-01", "valid_to": "2016-06-30",
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p8-imperial", "start": 0, "end": 16, "quote": "Imperial College"}]
+      },
+      {
+        "id": "f-p7-globex", "subject_id": "p7", "predicate": "worked_at",
+        "object": {"kind": "organization", "value": "Globex"},
+        "valid_from": "2021-01-01", "valid_to": "2025-01-01",
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p7-globex", "start": 0, "end": 6, "quote": "Globex"}]
+      },
+      {
+        "id": "f-p8-initech", "subject_id": "p8", "predicate": "worked_at",
+        "object": {"kind": "organization", "value": "Initech"},
+        "valid_from": "2020-01-01", "valid_to": "2025-01-01",
+        "confidence": 1.0, "direct_subject": true,
+        "provenance": [{"document_id": "p8-initech", "start": 0, "end": 7, "quote": "Initech"}]
+      },
+      {
+        "id": "f-p7-clearance", "subject_id": "p7", "predicate": "verified",
+        "object": {"kind": "credential", "value": "Security clearance"},
+        "confidence": 0.98, "direct_subject": true,
+        "provenance": [{"document_id": "p7-clearance", "start": 0, "end": 18, "quote": "Security clearance"}]
+      },
+      {
+        "id": "f-p8-clearance", "subject_id": "p8", "predicate": "verified",
+        "object": {"kind": "credential", "value": "Security clearance"},
+        "confidence": 0.99, "direct_subject": true,
+        "provenance": [
+          {"document_id": "p8-clearance-cv", "start": 0, "end": 18, "quote": "Security clearance"},
+          {"document_id": "p8-clearance-assessment", "start": 0, "end": 18, "quote": "Security clearance"}
+        ]
+      }
+    ]
+  },
+  "intents": [
+    {
+      "id": "sustained-kubernetes",
+      "plan": {
+        "query": "People with at least two years of Kubernetes; Dubai preferred",
+        "criteria": [
+          {
+            "id": "kubernetes-24m",
+            "predicate": {"name": "demonstrated"},
+            "subject": {"kind": "person"},
+            "object": {"kind": "capability", "value": "Kubernetes"},
+            "comparison": {"operator": "exists"},
+            "temporal": {"minimum_duration_months": 24},
+            "modality": "must",
+            "evidence": {"require_direct_subject": true, "require_citation_span": true, "minimum_sources": 1, "minimum_confidence": 0.8}
+          },
+          {
+            "id": "dubai-preferred",
+            "predicate": {"name": "located_in"},
+            "subject": {"kind": "person"},
+            "object": {"kind": "location", "value": "Dubai"},
+            "comparison": {"operator": "exists"},
+            "modality": "should",
+            "evidence": {"require_direct_subject": true, "require_citation_span": true, "minimum_sources": 1}
+          }
+        ],
+        "root": {"operator": "criterion", "criterion_id": "kubernetes-24m"},
+        "limit": 20
+      }
+    },
+    {
+      "id": "language-with-exclusion",
+      "plan": {
+        "query": "Python or Go, excluding training-only evidence; graph database preferred",
+        "criteria": [
+          {
+            "id": "python", "predicate": {"name": "demonstrated"},
+            "subject": {"kind": "person"}, "object": {"kind": "capability", "value": "Python"},
+            "comparison": {"operator": "exists"}, "modality": "must",
+            "evidence": {"require_direct_subject": true, "require_citation_span": true, "minimum_sources": 1}
+          },
+          {
+            "id": "go", "predicate": {"name": "demonstrated"},
+            "subject": {"kind": "person"}, "object": {"kind": "capability", "value": "Go"},
+            "comparison": {"operator": "exists"}, "modality": "must",
+            "evidence": {"require_direct_subject": true, "require_citation_span": true, "minimum_sources": 1}
+          },
+          {
+            "id": "python-training", "predicate": {"name": "training_only"},
+            "subject": {"kind": "person"}, "object": {"kind": "capability", "value": "Python"},
+            "comparison": {"operator": "exists"}, "modality": "must_not",
+            "evidence": {"require_direct_subject": true, "require_citation_span": true, "minimum_sources": 1}
+          },
+          {
+            "id": "graph-preferred", "predicate": {"name": "demonstrated"},
+            "subject": {"kind": "person"}, "object": {"kind": "capability", "value": "Graph database"},
+            "comparison": {"operator": "exists"}, "modality": "should", "weight": 2.0,
+            "evidence": {"require_direct_subject": true, "require_citation_span": true, "minimum_sources": 1}
+          }
+        ],
+        "root": {
+          "operator": "all",
+          "children": [
+            {"operator": "any", "children": [
+              {"operator": "criterion", "criterion_id": "python"},
+              {"operator": "criterion", "criterion_id": "go"}
+            ]},
+            {"operator": "not", "children": [
+              {"operator": "criterion", "criterion_id": "python-training"}
+            ]}
+          ]
+        },
+        "limit": 20
+      }
+    },
+    {
+      "id": "graph-relations",
+      "plan": {
+        "query": "People who worked at Acme and are located in Dubai",
+        "criteria": [
+          {
+            "id": "worked-acme", "predicate": {"name": "worked_at"},
+            "subject": {"kind": "person"}, "object": {"kind": "organization", "value": "Acme"},
+            "comparison": {"operator": "exists"}, "modality": "must",
+            "evidence": {"require_direct_subject": true, "require_citation_span": true, "minimum_sources": 1}
+          },
+          {
+            "id": "located-dubai", "predicate": {"name": "located_in"},
+            "subject": {"kind": "person"}, "object": {"kind": "location", "value": "Dubai"},
+            "comparison": {"operator": "exists"}, "modality": "must",
+            "evidence": {"require_direct_subject": true, "require_citation_span": true, "minimum_sources": 1}
+          }
+        ],
+        "root": {"operator": "all", "children": [
+          {"operator": "criterion", "criterion_id": "worked-acme"},
+          {"operator": "criterion", "criterion_id": "located-dubai"}
+        ]},
+        "limit": 20
+      }
+    },
+    {
+      "id": "notice-period-comparison",
+      "plan": {
+        "query": "People available within 30 days",
+        "criteria": [
+          {
+            "id": "notice-at-most-30",
+            "predicate": {"name": "notice_period_days"},
+            "subject": {"kind": "person"},
+            "object": {"kind": "availability", "value": "notice period"},
+            "comparison": {"operator": "lte", "value": 30},
+            "modality": "must",
+            "evidence": {
+              "require_direct_subject": true,
+              "require_citation_span": true,
+              "minimum_sources": 1,
+              "allowed_source_types": ["profile"]
+            }
+          }
+        ],
+        "root": {"operator": "criterion", "criterion_id": "notice-at-most-30"},
+        "limit": 20
+      }
+    },
+    {
+      "id": "education-and-employer",
+      "plan": {
+        "query": "People who studied at Imperial College and worked at Globex",
+        "criteria": [
+          {
+            "id": "studied-imperial",
+            "predicate": {"name": "studied_at"},
+            "subject": {"kind": "person"},
+            "object": {"kind": "school", "value": "Imperial College"},
+            "comparison": {"operator": "exists"},
+            "modality": "must",
+            "evidence": {
+              "require_direct_subject": true,
+              "require_citation_span": true,
+              "minimum_sources": 1,
+              "allowed_source_types": ["education"]
+            }
+          },
+          {
+            "id": "worked-globex",
+            "predicate": {"name": "worked_at"},
+            "subject": {"kind": "person"},
+            "object": {"kind": "organization", "value": "Globex"},
+            "comparison": {"operator": "exists"},
+            "modality": "must",
+            "evidence": {
+              "require_direct_subject": true,
+              "require_citation_span": true,
+              "minimum_sources": 1,
+              "allowed_source_types": ["employment"]
+            }
+          }
+        ],
+        "root": {"operator": "all", "children": [
+          {"operator": "criterion", "criterion_id": "studied-imperial"},
+          {"operator": "criterion", "criterion_id": "worked-globex"}
+        ]},
+        "limit": 20
+      }
+    },
+    {
+      "id": "grounded-empty-result",
+      "plan": {
+        "query": "People who worked at Acme and studied at Imperial College",
+        "criteria": [
+          {
+            "id": "empty-worked-acme", "predicate": {"name": "worked_at"},
+            "subject": {"kind": "person"},
+            "object": {"kind": "organization", "value": "Acme"},
+            "comparison": {"operator": "exists"}, "modality": "must",
+            "evidence": {
+              "require_direct_subject": true,
+              "require_citation_span": true,
+              "minimum_sources": 1,
+              "allowed_source_types": ["employment"]
+            }
+          },
+          {
+            "id": "empty-studied-imperial", "predicate": {"name": "studied_at"},
+            "subject": {"kind": "person"},
+            "object": {"kind": "school", "value": "Imperial College"},
+            "comparison": {"operator": "exists"}, "modality": "must",
+            "evidence": {
+              "require_direct_subject": true,
+              "require_citation_span": true,
+              "minimum_sources": 1,
+              "allowed_source_types": ["education"]
+            }
+          }
+        ],
+        "root": {"operator": "all", "children": [
+          {"operator": "criterion", "criterion_id": "empty-worked-acme"},
+          {"operator": "criterion", "criterion_id": "empty-studied-imperial"}
+        ]},
+        "limit": 20
+      }
+    },
+    {
+      "id": "two-source-clearance",
+      "plan": {
+        "query": "People with security clearance verified by two sources",
+        "criteria": [
+          {
+            "id": "verified-clearance",
+            "predicate": {"name": "verified"},
+            "subject": {"kind": "person"},
+            "object": {"kind": "credential", "value": "Security clearance"},
+            "comparison": {"operator": "exists"},
+            "modality": "must",
+            "evidence": {
+              "require_direct_subject": true,
+              "require_citation_span": true,
+              "minimum_sources": 2,
+              "minimum_confidence": 0.95,
+              "allowed_source_types": ["cv", "assessment"]
+            }
+          }
+        ],
+        "root": {"operator": "criterion", "criterion_id": "verified-clearance"},
+        "limit": 20
+      }
+    }
+  ]
+}

@@ -65,7 +65,7 @@ def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
     ]
     keywords = [s.strip() for s in filter_obj.keywords if s and s.strip()]
 
-    return filter_obj.model_copy(
+    normalized = filter_obj.model_copy(
         update={
             "locations_country": countries,
             "locations_region": regions,
@@ -80,6 +80,13 @@ def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
             "parse_degraded": False,
         }
     )
+    # A schema-valid tool response can still carry no executable meaning.  Do
+    # not let that shape become an unfiltered, apparently exhaustive search of
+    # the whole organization; retain the query as an explicitly degraded
+    # lexical fallback instead.
+    if normalized.is_empty() and query.strip():
+        return _fallback_filter(query)
+    return normalized
 
 
 def _fallback_filter(query: str) -> ParsedFilter:

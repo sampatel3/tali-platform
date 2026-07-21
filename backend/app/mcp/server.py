@@ -64,10 +64,11 @@ filters accept 0-10 or 0-100 input; results include both the stored 0-10
 
 For semantic queries ("AWS Glue engineer with 5+ years", "people who worked
 at YC companies"), use ``nl_search_candidates`` rather than
-``search_applications`` — it parses the query, runs JSONB/CV-text filters,
-and re-ranks with an LLM. ``graph_search_candidates`` queries the temporal
-knowledge graph (Graphiti) for shape-based questions ("colleagues of X",
-"worked at startups").
+``search_applications`` — it parses the query and runs the shared hybrid
+PostgreSQL/graph retrieval framework. ``graph_search_candidates`` is the
+graph-oriented, topology-returning view of that same scoped search. Exact
+colleague and multi-hop paths report unsupported coverage rather than
+falling back to an ungrounded substring match.
 
 Every result includes a ``frontend_url`` the user can click to open the
 matching page in the Tali web app.
@@ -295,9 +296,10 @@ def graph_search_candidates(
     ctx: Context,
     query: NonEmptyString,
     limit: PageLimit = 25,
+    role_id: Optional[PositiveInt] = None,
 ) -> dict[str, Any]:
     args = get_tool_spec("graph_search_candidates").validate(
-        {"query": query, "limit": limit}
+        {"query": query, "limit": limit, "role_id": role_id}
     )
     with _open_session(
         ctx, get_tool_spec("graph_search_candidates").required_scopes

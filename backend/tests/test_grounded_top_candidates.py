@@ -598,6 +598,36 @@ def test_collect_criteria_keeps_genuinely_distinct_criteria():
     assert tc._collect_criteria(parsed) == ["banking domain", "real-time data"]
 
 
+def test_collect_criteria_includes_graph_relationships_as_required_evidence():
+    parsed = ParsedFilter(
+        graph_predicates=[
+            {"type": "worked_at", "value": "Google"},
+            {"type": "studied_at", "value": "MIT"},
+        ],
+        graph_predicate_operator="all",
+    )
+
+    criteria = tc._collect_criteria(parsed)
+
+    assert criteria == ["worked at Google", "studied at MIT"]
+    assert tc._required_criteria(parsed, criteria) == criteria
+
+
+def test_collect_criteria_preserves_graph_or_as_one_required_clause():
+    parsed = ParsedFilter(
+        graph_predicates=[
+            {"type": "worked_at", "value": "Google"},
+            {"type": "worked_at", "value": "Meta"},
+        ],
+        graph_predicate_operator="any",
+    )
+
+    criteria = tc._collect_criteria(parsed)
+
+    assert criteria == ["worked at Google OR worked at Meta"]
+    assert tc._required_criteria(parsed, criteria) == criteria
+
+
 def test_collect_criteria_drops_count_and_filler_fragments():
     # "top 5" / "candidates" leak from the query text and must never become a
     # criterion everyone is judged MISSING on.
@@ -914,6 +944,7 @@ def test_find_top_candidates_does_not_pad_zero_structural_matches(monkeypatch):
                 soft_criteria=["Treasury experience", "Data experience"],
             ),
             warnings=[],
+            is_exact_empty=True,
         ),
     )
     monkeypatch.setattr(tc, "_pool_count", lambda bq: 1_461)
@@ -939,6 +970,110 @@ def test_find_top_candidates_does_not_pad_zero_structural_matches(monkeypatch):
     assert out["shown"] == 0
     assert out["candidates"] == []
     assert out["warnings"][-1]["code"] == "no_structural_matches"
+
+
+def test_find_top_candidates_does_not_claim_zero_when_retrieval_is_partial(
+    monkeypatch,
+):
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **kw: SearchOutput(
+            application_ids=[],
+            parsed_filter=ParsedFilter(
+                skills_all=["Agentforce"],
+                soft_criteria=["hands-on Agentforce experience"],
+            ),
+            warnings=[],
+            capped=True,
+            exhaustive=False,
+            is_exact_empty=False,
+        ),
+    )
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: 100)
+    monkeypatch.setattr(
+        tc,
+        "_load_candidates",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unrelated candidates must not be loaded")
+        ),
+    )
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="Agentforce experience",
+        base_query=MagicMock(),
+        limit=10,
+    )
+
+    assert out["qualified_total"] is None
+    assert out["search_status"] == "structural_retrieval_incomplete"
+    assert out["capped"] is True
+    assert out["is_exact_empty"] is False
+    assert out["warnings"][-1]["code"] == "structural_retrieval_incomplete"
+
+
+def test_find_top_candidates_does_not_claim_complete_total_for_partial_nonzero(
+    monkeypatch,
+):
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **_kw: SearchOutput(
+            application_ids=[1],
+            parsed_filter=ParsedFilter(soft_criteria=["Treasury experience"]),
+            warnings=[],
+            capped=False,
+            exhaustive=False,
+            is_exact_empty=False,
+            retrieval_matches=1,
+        ),
+    )
+    app = _fake_app(1, taali=91, name="Grounded candidate")
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: 1)
+    monkeypatch.setattr(tc, "_load_candidates", lambda *_args, **_kwargs: [app])
+    monkeypatch.setattr(
+        tc,
+        "_ground_window",
+        lambda rows, **_kwargs: [
+            (
+                row,
+                [
+                    ge.CriterionVerdict(
+                        "Treasury experience",
+                        status="met",
+                        grounded=True,
+                        evidence=[
+                            ge.Evidence(
+                                quote="Led a treasury transformation",
+                                source="cv",
+                            )
+                        ],
+                    )
+                ],
+            )
+            for row in rows
+        ],
+    )
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="Treasury experience",
+        base_query=MagicMock(),
+        evidence_client=MagicMock(),
+    )
+
+    assert out["shown"] == 1
+    assert out["qualified_in_checked"] == 1
+    assert out["qualified_total"] is None
+    assert out["capped"] is True
+    assert out["exhaustive"] is False
 
 
 def test_find_top_candidates_hides_not_met(monkeypatch):

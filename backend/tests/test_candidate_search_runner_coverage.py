@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from app.candidate_search import runner
+from app.candidate_graph.search import GraphEvidenceSearchResult
 from app.candidate_search.rerank import CandidateRerankOutcome, RerankBatchResult
 from app.candidate_search.schemas import ParsedFilter
 
@@ -12,16 +13,16 @@ from app.candidate_search.schemas import ParsedFilter
 def _wire_query(monkeypatch, *, parsed: ParsedFilter, rows: list[tuple[int, int]]):
     query = MagicMock()
     query.with_entities.return_value.all.return_value = rows
+    query.with_entities.return_value.limit.return_value.all.return_value = rows
     monkeypatch.setattr(runner.cache_module, "get", lambda _key: parsed)
     monkeypatch.setattr(runner, "apply_parsed_filter", lambda *a, **k: query)
     monkeypatch.setattr(runner, "apply_relevance_order", lambda q, _parsed: q)
-    monkeypatch.setattr(runner, "_execute_graph_predicates", lambda **kw: None)
     return query
 
 
 def test_search_deduplicates_people_before_count_and_limit(monkeypatch):
     parsed = ParsedFilter(skills_all=["Python"])
-    _wire_query(
+    query = _wire_query(
         monkeypatch,
         parsed=parsed,
         rows=[(10, 100), (11, 100), (20, 200)],
@@ -33,6 +34,7 @@ def test_search_deduplicates_people_before_count_and_limit(monkeypatch):
         nl_query="Python",
         base_query=MagicMock(),
         rerank_enabled=False,
+        retrieval_limit=2,
     )
 
     assert out.application_ids == [10, 20]
@@ -40,6 +42,26 @@ def test_search_deduplicates_people_before_count_and_limit(monkeypatch):
     assert out.qualified is None
     assert out.deep_checked == 0
     assert out.exhaustive is True
+    query.with_entities.return_value.limit.assert_called_once_with(11)
+
+
+def test_saturated_application_window_is_reported_as_partial(monkeypatch):
+    parsed = ParsedFilter(skills_all=["Python"])
+    rows = [(application_id, 100) for application_id in range(1, 12)]
+    _wire_query(monkeypatch, parsed=parsed, rows=rows)
+
+    out = runner.run_search(
+        db=MagicMock(),
+        organization_id=1,
+        nl_query="Python",
+        base_query=MagicMock(),
+        retrieval_limit=2,
+    )
+
+    assert out.application_ids == [1]
+    assert out.database_matches == 1
+    assert out.capped is True
+    assert out.exhaustive is False
 
 
 def test_degraded_parser_fallback_is_disclosed(monkeypatch):
@@ -67,6 +89,7 @@ def test_inherited_title_population_is_applied_when_followup_query_omits_it(
     parsed = ParsedFilter(soft_criteria=["Treasury banking experience"])
     query = MagicMock()
     query.with_entities.return_value.all.return_value = []
+    query.with_entities.return_value.limit.return_value.all.return_value = []
     monkeypatch.setattr(runner.cache_module, "get", lambda _key: parsed)
     captured = {}
 
@@ -76,7 +99,6 @@ def test_inherited_title_population_is_applied_when_followup_query_omits_it(
 
     monkeypatch.setattr(runner, "apply_parsed_filter", _apply)
     monkeypatch.setattr(runner, "apply_relevance_order", lambda q, _parsed: q)
-    monkeypatch.setattr(runner, "_execute_graph_predicates", lambda **_kwargs: None)
 
     out = runner.run_search(
         db=MagicMock(),
@@ -252,22 +274,30 @@ def test_all_verifier_errors_leave_qualified_unknown(monkeypatch):
     assert out.warnings[-1].code == "rerank_partial"
 
 
-def test_role_id_reaches_graph_predicate_execution(monkeypatch):
+def test_role_id_reaches_graph_semantic_retrieval(monkeypatch):
     parsed = ParsedFilter(
         graph_predicates=[{"type": "worked_at", "value": "Acme"}]
     )
     query = MagicMock()
     query.with_entities.return_value.all.return_value = []
+    query.with_entities.return_value.limit.return_value.all.return_value = []
     monkeypatch.setattr(runner.cache_module, "get", lambda _key: parsed)
     monkeypatch.setattr(runner, "apply_parsed_filter", lambda *a, **k: query)
     monkeypatch.setattr(runner, "apply_relevance_order", lambda q, _parsed: q)
     captured = {}
 
+    real_hybrid = runner.run_hybrid_retrieval
+
     def _execute(**kwargs):
         captured.update(kwargs)
-        return None
+        return real_hybrid(
+            **kwargs,
+            graph_search_fn=lambda **_graph_kwargs: GraphEvidenceSearchResult(
+                status="unavailable"
+            ),
+        )
 
-    monkeypatch.setattr(runner, "_execute_graph_predicates", _execute)
+    monkeypatch.setattr(runner, "run_hybrid_retrieval", _execute)
 
     runner.run_search(
         db=MagicMock(),

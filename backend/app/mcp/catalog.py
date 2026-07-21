@@ -150,6 +150,7 @@ class NaturalLanguageSearchInput(ToolInput):
 class GraphSearchInput(ToolInput):
     query: NonEmptyString
     limit: PageLimit = 25
+    role_id: PositiveInt | None = None
 
 
 class GetCandidateCVInput(ToolInput):
@@ -374,7 +375,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "nl_search_candidates",
-        "Exhaustive, person-deduplicated retrieval for explicit all/every requests over normalized fields and indexed CV text. Reports database vs verification coverage; unchecked qualitative matches must not be described as passed or failed. Optional bounded verification and graph context.",
+        "Person-deduplicated hybrid retrieval for explicit all/every requests over normalized fields, indexed CV text, and source-backed graph recall. Reports separate PostgreSQL and fused retrieval counts plus capped/exhaustive/is_exact_empty. Say that no candidates exist only when is_exact_empty=true; otherwise say no candidates were retrieved and disclose the partial/unavailable coverage warning. Unchecked qualitative matches must not be described as passed or failed. Optional bounded verification and graph context.",
         NaturalLanguageSearchInput,
         "nl_search_candidates",
         _BOTH,
@@ -384,11 +385,12 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "graph_search_candidates",
-        "Search the organization's temporal candidate graph and return matching facts plus an inline subgraph when available.",
+        "Graph-oriented view over the same person-deduplicated hybrid candidate search used elsewhere. Uses PostgreSQL as the organization/role authorization boundary, admits graph hits only when backed by original source evidence, and returns coverage, exact-empty state, evidence references, and an inline topology when available. graph_facts are generated visual context and are never citations; use only evidence references to ground a claim. Exact colleague and multi-hop paths fail closed until a parameterized path retriever is available.",
         GraphSearchInput,
         "graph_search_candidates",
         _BOTH,
         _APPLICATIONS_READ,
+        cost="paid",
         renderer="candidate_graph",
     ),
     ToolSpec(

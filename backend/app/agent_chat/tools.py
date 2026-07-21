@@ -823,10 +823,11 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "search_candidates",
         "description": (
-            "Exhaustive/deterministic natural-language retrieval over this role's "
-            "candidate pool. Reserve it for explicit all/every requests and pool "
+            "Broad person-deduplicated hybrid retrieval over this role's candidate "
+            "pool. Reserve it for explicit all/every requests and pool "
             "scoping, e.g. 'all candidates based in MENA' or 'every candidate with a "
-            "stated salary'. Report database/returned/verification coverage honestly; "
+            "stated salary'. Report PostgreSQL/retrieval/returned/verification coverage "
+            "honestly, and claim no candidates exist only when is_exact_empty=true; "
             "never imply unchecked qualitative matches passed or failed. For bounded "
             "qualitative discovery, use find_top_candidates instead."
         ),

@@ -55,6 +55,10 @@ class ParsedFilter(BaseModel):
     locations_region: list[str] = Field(default_factory=list)
     min_years_experience: Optional[int] = Field(default=None, ge=0, le=60)
     graph_predicates: list[GraphPredicate] = Field(default_factory=list)
+    # Boolean relation between legacy flat graph predicates. Typed search plans
+    # can express nested logic; this compatibility field prevents an explicit
+    # employer/school OR from silently becoming an intersection.
+    graph_predicate_operator: Literal["all", "any"] = "all"
     soft_criteria: list[str] = Field(default_factory=list)
     preferred_criteria: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
@@ -86,10 +90,15 @@ class SearchWarning(BaseModel):
 
     code: Literal[
         "parser_failed",
+        "search_plan_failed",
+        "unsupported_search_constraint",
         "neo4j_unavailable",
         "rerank_skipped",
         "rerank_partial",
         "graph_predicate_dropped",
+        "graph_retrieval_unavailable",
+        "graph_retrieval_failed",
+        "graph_coverage_partial",
         "verification_capped",
     ]
     message: str
@@ -123,6 +132,32 @@ class CandidateDeepVerification(BaseModel):
     error_code: Optional[str] = None
 
 
+class SearchRetrievalTrace(BaseModel):
+    """Auditable rank contribution for one candidate/application pair."""
+
+    application_id: int
+    candidate_id: int
+    score: float
+    sources: list[Literal["graph", "postgres"]] = Field(default_factory=list)
+    # Public traces are one-based even though backend adapters may use
+    # zero-based offsets internally.
+    graph_rank: Optional[int] = Field(default=None, ge=1)
+    postgres_rank: Optional[int] = Field(default=None, ge=1)
+    evidence: list[dict] = Field(default_factory=list)
+
+
+class SearchRetrievalSummary(BaseModel):
+    """Backend coverage is separate from evidence qualification coverage."""
+
+    mode: Literal["postgres_only", "graph_only", "hybrid"]
+    graph_status: Literal["ok", "unavailable", "error", "not_selected"]
+    graph_coverage: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    capped: bool = False
+    exhaustive: bool = True
+    is_exact_empty: bool = False
+    hits: list[SearchRetrievalTrace] = Field(default_factory=list)
+
+
 class SearchOutput(BaseModel):
     """End-to-end output returned to the route handler."""
 
@@ -131,9 +166,10 @@ class SearchOutput(BaseModel):
     warnings: list[SearchWarning] = Field(default_factory=list)
     rerank_applied: bool = False
     subgraph: Optional[GraphPayload] = None
-    # Person-level counts. ``database_matches`` is the complete deterministic
-    # retrieval set before an optional bounded deep-verification pass.
+    # Person-level counts. ``database_matches`` counts the PostgreSQL branch;
+    # ``retrieval_matches`` counts the fused GraphDB/PostgreSQL candidate set.
     database_matches: Optional[int] = None
+    retrieval_matches: Optional[int] = None
     # Attempted per-candidate checks, including explicit error outcomes.
     deep_checked: int = 0
     # Completed positive/negative checks vs checks that could not produce a
@@ -142,5 +178,11 @@ class SearchOutput(BaseModel):
     evidence_failed: int = 0
     qualified: Optional[int] = None
     verification_results: list[CandidateDeepVerification] = Field(default_factory=list)
+    # Auditable backend-independent meaning used by retrieval and offline evals.
+    search_plan: Optional[dict] = None
+    retrieval: Optional[SearchRetrievalSummary] = None
     capped: bool = False
     exhaustive: bool = True
+    # A zero count is safe to describe as "no matches" only when every
+    # selected backend completed exhaustively and returned no authorized hit.
+    is_exact_empty: bool = False

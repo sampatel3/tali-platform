@@ -231,6 +231,12 @@ def parse_common_query(query: str) -> ParsedFilter | None:
     # "Treasury banking experience" and bounded requests prefixed with
     # "top candidates with".
     qualitative = _DISCOVERY_LEADING.sub("", working).strip(" ,")
+    evidence_phrase = re.sub(
+        r"^(?:with|having)\s+", "", qualitative, flags=re.IGNORECASE
+    ).strip(" ,")
+    requested_experience = bool(
+        re.search(r"\b(?:experience|background|expertise)\s*$", qualitative, re.IGNORECASE)
+    )
     if (
         _SIMPLE_QUALITATIVE.fullmatch(qualitative)
         and not _SPELLED_YEARS.search(qualitative)
@@ -241,7 +247,11 @@ def parse_common_query(query: str) -> ParsedFilter | None:
         if is_common_title(structured_term):
             return ParsedFilter(titles_all=[structured_term], free_text=original)
         if is_common_skill(structured_term):
-            return ParsedFilter(skills_all=[structured_term], free_text=original)
+            return ParsedFilter(
+                skills_all=[structured_term],
+                soft_criteria=[evidence_phrase] if requested_experience else [],
+                free_text=original,
+            )
         quality = _atomic_quality(qualitative)
         preferred_quality = _explicit_preference_quality(quality)
         if preferred_quality:
@@ -276,11 +286,17 @@ def parse_common_query(query: str) -> ParsedFilter | None:
 
     titles = [term for term, is_title in zip(terms, title_flags) if is_title]
     skills = [term for term, is_title in zip(terms, title_flags) if not is_title]
+    evidence_criteria = (
+        [evidence_phrase]
+        if requested_experience and skills and not titles
+        else []
+    )
     return ParsedFilter(
         titles_any=titles if has_or else [],
         titles_all=titles if not has_or else [],
         skills_any=skills if has_or else [],
         skills_all=skills if not has_or else [],
+        soft_criteria=evidence_criteria,
         locations_country=countries,
         locations_region=regions,
         min_years_experience=years,

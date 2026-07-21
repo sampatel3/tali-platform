@@ -35,7 +35,7 @@ def test_attribute_search_resets_on_exception():
     assert graph_metering_ctx.get() is None  # reset even when the body raises
 
 
-def test_attribute_search_enforces_role_admission_when_role_scoped():
+def test_attribute_search_attributes_role_without_agent_authority():
     assert graph_metering_ctx.get() is None
     with _attribute_search(42, "predicate", role_id=9):
         ctx = graph_metering_ctx.get()
@@ -43,6 +43,6 @@ def test_attribute_search_enforces_role_admission_when_role_scoped():
         assert ctx.organization_id == 42
         assert ctx.role_id == 9
         assert ctx.require_hard_admission is True
-        assert ctx.require_role_admission is True
+        assert ctx.require_role_admission is False
         assert ctx.trace_id == "graph-search:42:role:9:predicate"
     assert graph_metering_ctx.get() is None

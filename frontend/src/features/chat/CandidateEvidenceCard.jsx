@@ -244,7 +244,9 @@ function evidenceCoverage(data, candidates, rankLabel) {
   const deepChecked = countValue(data.deep_checked) ?? countValue(data.screened) ?? 0;
   const evidenceSucceeded = countValue(data.evidence_succeeded);
   const qualified = countValue(data.qualified_in_checked ?? data.qualified);
-  const databaseMatches = countValue(data.database_matches ?? data.total_matched);
+  const databaseMatches = countValue(
+    data.total_matched ?? data.retrieval_matches ?? data.database_matches,
+  );
   const shownCount = countValue(data.shown) ?? candidates.length;
   const evidenceReused = countValue(data.evidence_reused);
   const citedCandidates = candidates.filter(candidateHasCitation).length;
@@ -411,7 +413,7 @@ export default function CandidateEvidenceCard({ data, detailed = false, showRepo
   // history against a NEW requirement, ranked by fit to THAT (not the role
   // score) — the header says so, and a bounded window was deep-checked.
   const isRediscovery = data.mode === 'rediscovery';
-  const population = data.database_matches ?? data.total_matched;
+  const population = data.total_matched ?? data.retrieval_matches ?? data.database_matches;
   const rankingMeta = isRediscovery
     ? `ranked by fit to your requirement${
       typeof population === 'number'

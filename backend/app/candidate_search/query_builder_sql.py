@@ -15,7 +15,18 @@ import logging
 import re
 from typing import Optional
 
-from sqlalchemy import Text, and_, bindparam, cast, func, literal_column, or_, text
+from sqlalchemy import (
+    Text,
+    and_,
+    bindparam,
+    case,
+    cast,
+    false,
+    func,
+    literal_column,
+    or_,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 
 from ..models.candidate import Candidate
@@ -248,6 +259,52 @@ def _min_years_clause(min_years: Optional[int]):
     ).bindparams(years=int(min_years))
 
 
+def _graph_predicate_clause(predicate, *, index: int):
+    """Deterministic Postgres recall for exact graph-shaped requirements.
+
+    Relationship/path predicates without a canonical SQL representation return
+    ``false``. They can still be recovered by GraphDB, but never broaden the
+    PostgreSQL branch to the entire tenant pool.
+    """
+
+    value = normalize_term(predicate.value)
+    if not value:
+        return false()
+    pattern = f"%{value}%"
+    if predicate.type == "worked_at":
+        bind_name = f"graph_employer_{index}"
+        experience = text(
+            "EXISTS (SELECT 1 FROM jsonb_array_elements("
+            "COALESCE(candidates.experience_entries::jsonb, '[]'::jsonb)) e "
+            f"WHERE COALESCE(e->>'company', '') ILIKE :{bind_name})"
+        ).bindparams(bindparam(bind_name, pattern))
+        return or_(
+            func.lower(func.coalesce(Candidate.company_name, "")).like(pattern),
+            experience,
+        )
+    if predicate.type == "studied_at":
+        bind_name = f"graph_school_{index}"
+        return text(
+            "EXISTS (SELECT 1 FROM jsonb_array_elements("
+            "COALESCE(candidates.education_entries::jsonb, '[]'::jsonb)) e "
+            "WHERE COALESCE(e->>'school', e->>'institution', '') "
+            f"ILIKE :{bind_name})"
+        ).bindparams(bindparam(bind_name, pattern))
+    return false()
+
+
+def _graph_predicates_clause(parsed: ParsedFilter):
+    clauses = [
+        _graph_predicate_clause(item, index=index)
+        for index, item in enumerate(parsed.graph_predicates)
+    ]
+    if not clauses:
+        return None
+    if parsed.graph_predicate_operator == "any":
+        return or_(*clauses)
+    return and_(*clauses)
+
+
 def _keywords_clause(keywords: list[str], *, match_all: bool = False):
     """Indexed full-text retrieval across CVs plus enriched profile fallback.
 
@@ -302,6 +359,7 @@ def needs_candidate_join(parsed: ParsedFilter) -> bool:
         or parsed.locations_country
         or parsed.locations_region
         or parsed.min_years_experience
+        or parsed.graph_predicates
         or parsed.keywords
         or parsed.soft_criteria
         or parsed.preferred_criteria
@@ -355,6 +413,10 @@ def apply_parsed_filter(
     years_c = _min_years_clause(parsed.min_years_experience)
     if years_c is not None:
         query = query.filter(years_c)
+
+    graph_c = _graph_predicates_clause(parsed)
+    if graph_c is not None:
+        query = query.filter(graph_c)
 
     effective_keywords = list(parsed.keywords)
     effective_soft = list(parsed.soft_criteria) if soft_criteria_as_keywords else []
@@ -416,6 +478,10 @@ def apply_relevance_order(base_query, parsed: ParsedFilter):
         query = base_query
     order.extend(
         [
+            case(
+                (CandidateApplication.application_outcome == "open", 0),
+                else_=1,
+            ).asc(),
             CandidateApplication.updated_at.desc().nullslast(),
             CandidateApplication.created_at.desc().nullslast(),
             CandidateApplication.id.desc(),

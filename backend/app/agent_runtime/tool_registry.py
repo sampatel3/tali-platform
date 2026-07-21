@@ -301,7 +301,6 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "role_id": {"type": "integer", "description": "Restrict to one role. Usually your current role."},
                 "min_score": {
                     "type": "number",
                     "description": "Threshold on the score named in score_type. Accepts 0-10 or 0-100.",
@@ -373,20 +372,61 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "nl_search_candidates",
         "description": (
-            "Natural-language candidate search across CV text, skills, "
-            "experience entries, AND the org's knowledge graph (when "
-            "configured). Wraps the same parser the recruiter UI uses. "
-            "Examples: 'senior python engineers who worked at fintechs', "
-            "'candidates with kubernetes experience'. Returns matched "
-            "applications plus the parsed filter so you can verify the "
-            "search interpreted your intent correctly."
+            "Broad, person-deduplicated hybrid retrieval for explicit all/every "
+            "or cohort-scoping requests across PostgreSQL and source-backed graph "
+            "recall. This is retrieval, not proof that unchecked qualitative "
+            "requirements were met. Read database_matches, retrieval_matches, "
+            "capped, exhaustive, and is_exact_empty literally; claim the pool has "
+            "no matches only when is_exact_empty=true. For bounded qualitative "
+            "discovery, use find_top_candidates instead."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Natural-language description of the candidates you want."},
-                "rerank": {"type": "boolean", "default": True},
+                "rerank": {"type": "boolean", "default": False},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "find_top_candidates",
+        "description": (
+            "Default for bounded qualitative candidate discovery on this role, "
+            "including requests such as 'who has banking experience?' even when "
+            "the recruiter did not say top or best. Unhedged qualities are "
+            "required and explicit preferences are optional. Returns grounded "
+            "required matches with per-criterion cited evidence and explicit "
+            "coverage/degradation fields. Never treat missing, partial, or "
+            "unchecked required evidence as a match."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Self-contained population and qualitative requirements.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 25,
+                    "default": 10,
+                },
+                "rank_by": {
+                    "type": "string",
+                    "enum": [
+                        "taali",
+                        "pre_screen",
+                        "rank",
+                        "cv_match",
+                        "workable",
+                        "assessment",
+                        "role_fit",
+                    ],
+                    "default": "taali",
+                },
             },
             "required": ["query"],
         },
@@ -394,12 +434,12 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "graph_search_candidates",
         "description": (
-            "Knowledge-graph-only search across the org's Graphiti subgraph. "
-            "Returns candidates whose graph facts mention the query plus the "
-            "actual fact strings so you can cite specifics (e.g. 'Senior "
-            "Engineer at Stripe, 2020-2024'). Falls back gracefully when the "
-            "graph isn't configured. Prefer nl_search_candidates unless you "
-            "specifically want graph-only matches."
+            "Graph-oriented view over the same role-scoped hybrid candidate "
+            "retrieval used by nl_search_candidates. graph_facts are generated "
+            "topology labels for visual context and are NOT citations. Ground "
+            "claims only in the returned original-source evidence references. "
+            "Read capped, exhaustive, and is_exact_empty literally; exact "
+            "colleague or multi-hop requests may fail closed rather than guess."
         ),
         "input_schema": {
             "type": "object",
@@ -807,12 +847,12 @@ def _tool_get_candidate_cv(db: Session, *, agent_run: AgentRun, role: Role, args
 
 
 def _tool_search_applications(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
-    # Default to the agent's own role unless the caller explicitly passes one.
-    role_id = args.get("role_id")
     return mcp_handlers.search_applications(
         db,
         _read_ctx(role),
-        role_id=int(role_id) if role_id is not None else int(role.id),
+        # Autonomous cohort reads never accept a model-supplied role identity;
+        # the running role is the authorization scope.
+        role_id=int(role.id),
         min_score=args.get("min_score"),
         score_type=str(args.get("score_type") or "taali"),
         pipeline_stage=args.get("pipeline_stage"),
@@ -847,8 +887,23 @@ def _tool_nl_search_candidates(db: Session, *, agent_run: AgentRun, role: Role, 
         # Never accept a model-supplied billing identity: otherwise an agent
         # could consume another role's allowance and bypass its own cap.
         role_id=int(role.id),
-        rerank=bool(args.get("rerank", True)),
+        rerank=bool(args.get("rerank", False)),
         limit=int(args.get("limit") or 25),
+    )
+
+
+def _tool_find_top_candidates(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    return mcp_handlers.find_top_candidates(
+        db,
+        _read_ctx(role),
+        query=str(args.get("query") or ""),
+        limit=int(args.get("limit") or 10),
+        rank_by=str(args.get("rank_by") or "taali"),
+        # Search scope and provider attribution always belong to the running
+        # role; never accept a model-supplied role identity.
+        role_id=int(role.id),
     )
 
 
@@ -920,6 +975,9 @@ def _tool_graph_search_candidates(db: Session, *, agent_run: AgentRun, role: Rol
         _read_ctx(role),
         query=str(args.get("query") or ""),
         limit=int(args.get("limit") or 25),
+        # The compatibility graph view now uses the shared hybrid runner, so
+        # it must inherit the autonomous agent's role scope as well.
+        role_id=int(role.id),
     )
 
 
@@ -2804,6 +2862,7 @@ QUEUE_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
 GOVERNED_ACTION_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "nl_search_candidates",
+        "find_top_candidates",
         "graph_search_candidates",
         "get_cohort_signals",
         "score_cv",
@@ -2926,6 +2985,7 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "search_applications": _tool_search_applications,
     "compare_applications": _tool_compare_applications,
     "nl_search_candidates": _tool_nl_search_candidates,
+    "find_top_candidates": _tool_find_top_candidates,
     "graph_search_candidates": _tool_graph_search_candidates,
     "refresh_candidate_graph": _tool_refresh_candidate_graph,
     "get_cohort_signals": _tool_get_cohort_signals,

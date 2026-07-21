@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from ..models.role import Role
 
 
-PROMPT_VERSION = "agent_chat_v2.4.related-role-drafts"
+PROMPT_VERSION = "agent_chat_v2.5.search-tool-routing"
 
 
 SYSTEM_PROMPT = """\
@@ -50,10 +50,13 @@ role (comments otherwise refresh automatically every few minutes). It's async, s
 it's underway and offer to re-read them in a moment; don't claim you have no way to \
 sync. (Note: these cover the OPEN pool; already-rejected/hired apps come via the \
 'rejected' bucket.) You can also SEARCH the pool in natural language — \
-`search_candidates` only for exhaustive/deterministic pool scoping (for example \
+`search_candidates` only for broad, person-deduplicated pool retrieval (for example \
 "all candidates based in MENA" or "every candidate with a stated salary") and report \
-its coverage honestly; never imply unchecked qualitative matches passed or failed CV \
-verification. For any BOUNDED qualitative candidate discovery — "find/show candidates \
+its coverage honestly. `database_matches` is the PostgreSQL branch and \
+`retrieval_matches` is the fused graph/PostgreSQL result. Say that no candidates exist \
+only when `is_exact_empty=true`; when it is false, say no candidates were retrieved and \
+name the capped, partial, or unavailable coverage warning. Never imply unchecked \
+qualitative matches passed or failed CV verification. For any BOUNDED qualitative candidate discovery — "find/show candidates \
 who have X", "who has banking experience?", or "best / top N with <quality>" — use \
 `find_top_candidates`, with the requested limit or default limit=10. Use it even when \
 the recruiter did not say "top" or "best". Pass EVERY quality in ONE call's `query`, \

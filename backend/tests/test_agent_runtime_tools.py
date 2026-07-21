@@ -3,7 +3,7 @@
 These bypass the Anthropic loop and call ``tool_registry.dispatch``
 directly with a synthetic AgentRun. They cover:
 - the new read tools (search_applications, compare_applications,
-  nl_search_candidates, get_candidate)
+  nl_search_candidates, find_top_candidates, get_candidate)
 - the new queue tools (queue_reject_decision,
   queue_skip_assessment_reject_decision)
 - the reject side-effect wired into approve_decision
@@ -249,6 +249,7 @@ def test_agent_tools_catalogue_contains_expected_names():
         "search_applications",
         "compare_applications",
         "nl_search_candidates",
+        "find_top_candidates",
         "graph_search_candidates",
         "get_cohort_signals",
         # execute
@@ -270,6 +271,7 @@ def test_agent_tools_catalogue_contains_expected_names():
         t for t in tool_registry.AGENT_TOOLS if t["name"] == "search_applications"
     )
     properties = search_tool["input_schema"]["properties"]
+    assert "role_id" not in properties
     assert set(properties["score_type"]["enum"]) == {
         "taali",
         "pre_screen",
@@ -281,6 +283,26 @@ def test_agent_tools_catalogue_contains_expected_names():
     }
     assert "sourced" in properties["pipeline_stage"]["enum"]
     assert properties["offset"]["minimum"] == 0
+    nl_search_tool = next(
+        t for t in tool_registry.AGENT_TOOLS if t["name"] == "nl_search_candidates"
+    )
+    assert nl_search_tool["input_schema"]["properties"]["rerank"]["default"] is False
+    grounded_search_tool = next(
+        t for t in tool_registry.AGENT_TOOLS if t["name"] == "find_top_candidates"
+    )
+    assert grounded_search_tool["input_schema"]["required"] == ["query"]
+    assert set(grounded_search_tool["input_schema"]["properties"]) == {
+        "query",
+        "limit",
+        "rank_by",
+    }
+    graph_search_tool = next(
+        t for t in tool_registry.AGENT_TOOLS if t["name"] == "graph_search_candidates"
+    )
+    graph_description = graph_search_tool["description"].lower()
+    assert "not citations" in graph_description
+    assert "original-source evidence references" in graph_description
+    assert "cite specifics" not in graph_description
     compare_tool = next(
         t for t in tool_registry.AGENT_TOOLS if t["name"] == "compare_applications"
     )
@@ -303,6 +325,8 @@ def test_default_role_tools_hide_legacy_mutations(db):
     assert "post_workable_note" not in names
     assert "refresh_candidate_graph" not in names
     assert "get_application" in names
+    assert "find_top_candidates" in names
+    assert "find_top_candidates" in tool_registry.DEFAULT_AGENT_ACTION_ALLOWLIST
     assert "agent_run_complete" in names
 
 
@@ -881,7 +905,7 @@ def test_dispatch_unknown_tool_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_search_applications_dispatch_returns_role_scoped_results(db):
+def test_search_applications_dispatch_ignores_spoofed_role_id(db):
     org = _make_org(db)
     role = _make_role(db, org)
     other_role = Role(organization_id=org.id, name="Other", source="manual")
@@ -889,12 +913,19 @@ def test_search_applications_dispatch_returns_role_scoped_results(db):
     db.flush()
     a1 = _make_application(db, org=org, role=role, name="High", email="h@x.test", taali=85.0)
     a2 = _make_application(db, org=org, role=role, name="Mid", email="m@x.test", taali=60.0)
-    _make_application(db, org=org, role=other_role, name="Other Role", email="o@x.test", taali=99.0)
+    other_app = _make_application(
+        db,
+        org=org,
+        role=other_role,
+        name="Other Role",
+        email="o@x.test",
+        taali=99.0,
+    )
     run = _make_agent_run(db, role)
 
     result = tool_registry.dispatch(
         "search_applications",
-        {"min_score": 70.0, "limit": 10},
+        {"role_id": other_role.id, "min_score": 70.0, "limit": 10},
         db=db,
         agent_run=run,
         role=role,
@@ -903,6 +934,7 @@ def test_search_applications_dispatch_returns_role_scoped_results(db):
     ids = [r["application_id"] for r in result]
     assert a1.id in ids
     assert a2.id not in ids  # below threshold
+    assert other_app.id not in ids  # spoofed role scope is ignored
 
 
 def test_search_applications_defaults_to_agents_role(db):
@@ -966,8 +998,46 @@ def test_nl_search_candidates_dispatch_pins_agent_role_id(db):
 
     assert mock_runner.called
     assert mock_runner.call_args.kwargs["role_id"] == role.id
+    assert mock_runner.call_args.kwargs["rerank_enabled"] is False
     assert result["total_matched"] == 1
     assert result["applications"][0]["application_id"] == a1.id
+
+
+def test_find_top_candidates_dispatch_pins_agent_role_id(db):
+    """Grounded discovery cannot search or bill against another role."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    run = _make_agent_run(db, role)
+    payload = {
+        "candidates": [],
+        "criteria_unchecked": [],
+        "deep_checked": 0,
+        "qualified_in_checked": 0,
+    }
+
+    with patch(
+        "app.mcp.handlers.find_top_candidates", return_value=payload
+    ) as mock_find:
+        result = tool_registry.dispatch(
+            "find_top_candidates",
+            {
+                "query": "banking experience",
+                "limit": 7,
+                "rank_by": "role_fit",
+                "role_id": 999_999,
+            },
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert result == payload
+    assert mock_find.call_args.kwargs == {
+        "query": "banking experience",
+        "limit": 7,
+        "rank_by": "role_fit",
+        "role_id": role.id,
+    }
 
 
 def test_get_candidate_dispatch(db):
@@ -987,25 +1057,30 @@ def test_get_candidate_dispatch(db):
     assert result["full_name"] == "Cand"
 
 
-def test_graph_search_candidates_returns_warning_when_unconfigured(db):
-    """Without NEO4J creds the tool should degrade gracefully, not crash."""
+def test_graph_search_candidates_dispatch_pins_agent_role_id(db):
+    """Graph-shaped search cannot escape the autonomous agent's role."""
     org = _make_org(db)
     role = _make_role(db, org)
     run = _make_agent_run(db, role)
+    payload = {"applications": [], "graph_facts": [], "warnings": []}
 
     with patch(
-        "app.candidate_graph.client.is_configured", return_value=False
-    ):
+        "app.mcp.handlers.graph_search_candidates", return_value=payload
+    ) as mock_graph_search:
         result = tool_registry.dispatch(
             "graph_search_candidates",
-            {"query": "stripe"},
+            {"query": "stripe", "limit": 7, "role_id": 999_999},
             db=db,
             agent_run=run,
             role=role,
         )
 
-    assert result["applications"] == []
-    assert any(w["code"] == "neo4j_unavailable" for w in result["warnings"])
+    assert result == payload
+    assert mock_graph_search.call_args.kwargs == {
+        "query": "stripe",
+        "limit": 7,
+        "role_id": role.id,
+    }
 
 
 def test_refresh_candidate_graph_returns_unconfigured_when_graph_off(db):

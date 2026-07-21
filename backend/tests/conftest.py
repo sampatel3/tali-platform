@@ -28,6 +28,14 @@ os.environ["DATABASE_URL"] = os.environ.get(
 # tests can opt-in by monkeypatching settings.
 os.environ["MVP_DISABLE_WORKABLE"] = "true"
 os.environ["MVP_DISABLE_STRIPE"] = "true"
+# Unit/API tests must never inherit developer or CI provider credentials. Tests
+# that exercise provider-aware branches opt in with local fakes/monkeypatches.
+# This is especially important now that semantic search can select Graphiti,
+# whose query embedding would otherwise be a paid Voyage request.
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["VOYAGE_API_KEY"] = ""
+os.environ["NEO4J_URI"] = ""
+os.environ["NEO4J_PASSWORD"] = ""
 os.environ["CLAUDE_MODEL"] = "claude-3-5-haiku-latest"
 # Preserve test fixtures that create/update/delete tasks through API helpers.
 os.environ["TASK_AUTHORING_API_ENABLED"] = "true"

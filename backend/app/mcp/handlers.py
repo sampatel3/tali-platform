@@ -49,6 +49,14 @@ APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
 # ---------------------------------------------------------------------------
 
 
+def _bounded_search_text(value: object, *, field_name: str = "query") -> str:
+    """Apply the shared paid-search input bound before any engine work."""
+
+    from ..candidate_search.graph_retrieval_cache import validate_search_query
+
+    return validate_search_query(value, field_name=field_name)
+
+
 def _stage_counts_for_role(db: Session, *, organization_id: int, role_id: int) -> dict[str, int]:
     rows = (
         db.query(CandidateApplication.pipeline_stage, func.count(CandidateApplication.id))
@@ -429,11 +437,10 @@ def nl_search_candidates(
     application summaries with the ``parsed_filter`` and any ``warnings``
     so the caller (Claude / UI) can show what it actually searched for.
     """
-    from ..candidate_search.runner import run_search
+    text = _bounded_search_text(query)
 
-    text = (query or "").strip()
-    if not text:
-        raise ValueError("query must be non-empty")
+    from ..candidate_search.retrieval_reporting import page_retrieval_payload
+    from ..candidate_search.runner import MAX_RETRIEVAL_LIMIT, run_search
 
     base = (
         db.query(CandidateApplication)
@@ -465,9 +472,12 @@ def nl_search_candidates(
         nl_query=text,
         base_query=base,
         rerank_enabled=verify,
-        # Graph retrieval is an explicit relationship/visualisation request.
-        # Ordinary skills search stays entirely in Postgres.
+        # Topology rendering is optional. Semantic graph recall is selected by
+        # the search plan independently of whether the caller requests a view.
         include_subgraph=bool(include_graph),
+        # Pagination slices a fixed bounded person window. Retrieval totals must
+        # not change merely because the caller asks for a later page.
+        retrieval_limit=MAX_RETRIEVAL_LIMIT,
     )
 
     safe_limit = max(1, min(int(limit), 100))
@@ -491,27 +501,53 @@ def nl_search_candidates(
         if verification is not None:
             row["deep_verification"] = verification
         application_rows.append(row)
+    retrieval_matches = (
+        int(result.retrieval_matches)
+        if result.retrieval_matches is not None
+        else len(result.application_ids)
+    )
     database_matches = (
         int(result.database_matches)
         if result.database_matches is not None
         else len(result.application_ids)
     )
+    page_ids = set(capped_ids)
+    page_verification_payload = [
+        item
+        for item in verification_payload
+        if int(item["application_id"]) in page_ids
+    ]
+    retrieval_payload = (
+        page_retrieval_payload(
+            result.retrieval.model_dump(mode="json"),
+            eligible_application_ids=list(result.application_ids),
+            page_application_ids=capped_ids,
+            retrieval_matches=retrieval_matches,
+        )
+        if result.retrieval is not None
+        else None
+    )
     return {
         "applications": application_rows,
         # Backward-compatible name plus the explicit coverage vocabulary.
-        "total_matched": database_matches,
+        "total_matched": retrieval_matches,
         "database_matches": database_matches,
+        "retrieval_matches": retrieval_matches,
+        "postgres_matches": database_matches,
         "deep_checked": int(result.deep_checked),
         "evidence_succeeded": int(result.evidence_succeeded),
         "evidence_failed": int(result.evidence_failed),
         "qualified": result.qualified,
-        "verification_results": verification_payload,
+        "verification_results": page_verification_payload,
         "returned": len(ordered),
         "offset": safe_offset,
         "capped": bool(result.capped),
         "exhaustive": bool(result.exhaustive),
+        "is_exact_empty": bool(getattr(result, "is_exact_empty", False)),
         "rerank_applied": bool(result.rerank_applied),
         "parsed_filter": result.parsed_filter.model_dump(mode="json"),
+        "search_plan": result.search_plan,
+        "retrieval": retrieval_payload,
         "warnings": [w.model_dump(mode="json") for w in result.warnings],
         "graph": _graph_topology(result.subgraph) if result.subgraph else None,
     }
@@ -537,11 +573,9 @@ def find_top_candidates(
     30-day unguessable bearer ``report_url`` for the same read-only, recursively
     scrubbed evidence snapshot.
     """
-    from ..candidate_search.top_candidates import find_top_candidates as _engine
+    text = _bounded_search_text(query)
 
-    text = (query or "").strip()
-    if not text:
-        raise ValueError("query must be non-empty")
+    from ..candidate_search.top_candidates import find_top_candidates as _engine
 
     base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == user.organization_id,
@@ -638,13 +672,11 @@ def screen_pool_against_requirement(
     per-candidate ``coverage``, ``rescore_candidate_ids`` (those a full re-score
     clarifies), and a shareable report preserving the same coverage state.
     """
+    text = _bounded_search_text(requirement_text, field_name="requirement_text")
+
     from ..candidate_search.top_candidates import (
         screen_pool_against_requirement as _engine,
     )
-
-    text = (requirement_text or "").strip()
-    if not text:
-        raise ValueError("requirement_text must be non-empty")
 
     # The scored history to rediscover from: every candidate with a stored CV
     # match, EXCEPT those already hired (placed). Unlike find_top_candidates we
@@ -719,82 +751,70 @@ def graph_search_candidates(
     *,
     query: str,
     limit: int = 25,
+    role_id: int | None = None,
 ) -> dict[str, Any]:
-    """Knowledge-graph search across the org's Graphiti subgraph.
+    """Compatibility view over the canonical hybrid candidate search.
 
-    Returns candidates whose graph facts mention the query, plus a short
-    list of the actual fact strings so the caller can cite specifics
-    (e.g. "Sam — 'Senior Engineer at Stripe, 2020-2024'").
+    Candidate admission, role scope, grounding, coverage, and exact-zero
+    semantics come from :func:`nl_search_candidates`. ``graph_facts`` remains
+    for existing clients, but is presentation data from the topology of
+    already-authorized results—not a second substring-matching search path.
+    Original-source graph citations are exposed separately as ``evidence``.
     """
-    from ..candidate_graph import client as graph_client
-    from ..candidate_graph import search as graph_search
+    text = _bounded_search_text(query)
+    result = nl_search_candidates(
+        db,
+        user,
+        query=text,
+        role_id=role_id,
+        deep_verify=False,
+        include_graph=True,
+        limit=limit,
+        offset=0,
+    )
+    topology = result.get("graph") or {}
+    graph_facts: list[dict[str, Any]] = []
+    for edge in topology.get("edges") or []:
+        fact = edge.get("fact") if isinstance(edge, dict) else None
+        if not fact:
+            continue
+        graph_facts.append(
+            {
+                "fact": str(fact),
+                "source": str(edge.get("source") or ""),
+                "target": str(edge.get("target") or ""),
+                "label": str(edge.get("label") or ""),
+                # Graphiti edge text is generated topology context. Only the
+                # episode references returned in ``evidence`` are grounding.
+                "is_citation": False,
+            }
+        )
+        if len(graph_facts) >= 10:
+            break
 
-    text = (query or "").strip()
-    if not text:
-        raise ValueError("query must be non-empty")
-    if not graph_client.is_configured():
-        return {
-            "applications": [],
-            "graph_facts": [],
-            "warnings": [
+    evidence: list[dict[str, Any]] = []
+    retrieval = result.get("retrieval") or {}
+    for hit in retrieval.get("hits") or []:
+        if not isinstance(hit, dict) or "graph" not in (hit.get("sources") or []):
+            continue
+        for item in hit.get("evidence") or []:
+            if not isinstance(item, dict):
+                continue
+            evidence.append(
                 {
-                    "code": "neo4j_unavailable",
-                    "message": "Knowledge graph is not configured for this deployment.",
+                    "application_id": hit.get("application_id"),
+                    "candidate_id": hit.get("candidate_id"),
+                    "source": item.get("source"),
+                    "reference": item.get("reference"),
+                    "clause_ids": list(item.get("clause_ids") or []),
                 }
-            ],
-        }
+            )
 
-    payload = graph_search.subgraph_for_query(
-        organization_id=int(user.organization_id), query=text
-    )
-    # Person nodes carry a ``taali_id`` in extras when synced from candidates.
-    candidate_ids: list[int] = []
-    seen: set[int] = set()
-    for node in payload.nodes:
-        if node.label != "Person":
-            continue
-        raw = node.extra.get("taali_id") if isinstance(node.extra, dict) else None
-        try:
-            cid = int(raw) if raw is not None else None
-        except (TypeError, ValueError):
-            cid = None
-        if cid is None or cid in seen:
-            continue
-        seen.add(cid)
-        candidate_ids.append(cid)
-
-    if not candidate_ids:
-        return {
-            "applications": [],
-            "graph_facts": _facts_from_payload(payload, limit=10),
-            "graph": _graph_topology(payload),
-            "warnings": [],
-        }
-
-    apps = (
-        db.query(CandidateApplication)
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
-        )
-        .filter(
-            CandidateApplication.organization_id == user.organization_id,
-            CandidateApplication.candidate_id.in_(candidate_ids),
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
-        )
-        .all()
-    )
-    apps.sort(
-        key=lambda a: (a.taali_score_cache_100 if a.taali_score_cache_100 is not None else float("-inf")),
-        reverse=True,
-    )
-    capped = apps[: max(1, min(int(limit), 100))]
     return {
-        "applications": [application_summary(a) for a in capped],
-        "graph_facts": _facts_from_payload(payload, limit=10),
-        "graph": _graph_topology(payload),
-        "warnings": [],
+        **result,
+        "graph_facts": graph_facts,
+        "graph_facts_are_evidence": False,
+        "evidence": evidence,
     }
 
 
@@ -870,25 +890,6 @@ def _graph_topology(payload) -> dict[str, Any]:
         if edge.source in seen_kept and edge.target in seen_kept
     ]
     return {"nodes": nodes_out, "edges": edges_out}
-
-
-def _facts_from_payload(payload, *, limit: int) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
-    for edge in payload.edges or []:
-        fact = (edge.extra or {}).get("fact") if isinstance(edge.extra, dict) else None
-        if not fact:
-            continue
-        out.append(
-            {
-                "fact": str(fact),
-                "source": edge.source,
-                "target": edge.target,
-                "label": str(edge.label),
-            }
-        )
-        if len(out) >= limit:
-            break
-    return out
 
 
 def get_candidate_cv(

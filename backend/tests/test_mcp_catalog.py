@@ -74,6 +74,11 @@ def test_search_contract_supports_real_pipeline_and_pagination():
     )
     assert args == {"score_type": "assessment", "sort_by": "assessment_score"}
 
+    graph_args = get_tool_spec("graph_search_candidates").validate(
+        {"query": "worked at Stripe", "role_id": 42, "limit": 10}
+    )
+    assert graph_args == {"query": "worked at Stripe", "role_id": 42, "limit": 10}
+
 
 @pytest.mark.parametrize(
     ("name", "arguments"),
@@ -132,6 +137,7 @@ def test_sensitive_source_tool_has_nonstandard_persistence_policy():
     assert grounded.cost == "paid"
     assert grounded.persistence == "sensitive"
     assert get_tool_spec("nl_search_candidates").cost == "paid"
+    assert get_tool_spec("graph_search_candidates").cost == "paid"
 
 
 def test_related_role_contracts_are_chat_only_and_describe_the_paid_mutation():
