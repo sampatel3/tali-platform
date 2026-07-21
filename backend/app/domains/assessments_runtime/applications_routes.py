@@ -118,7 +118,8 @@ from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
     revert_candidate_disqualification_in_workable,
 )
-from .application_search_support import page_retrieval_payload, preferred_application_order
+from .application_search_support import enforce_provider_mode_request, page_retrieval_payload, preferred_application_order, release_metadata, run_search_for_route
+from .search_canary_auth import SearchCanaryPrincipal, get_applications_search_principal
 from .role_support import (
     application_list_payload,
     application_detail_payload,
@@ -1593,6 +1594,7 @@ def list_applications_global(
         default=False,
         description="Opt in to bounded deep verification of qualitative criteria.",
     ),
+    provider_mode: str = Query(default="auto", pattern="^(auto|forbid)$"),
     sort_by: str = Query(
         default="pre_screen_score",
         pattern="^(pre_screen_score|pipeline_stage_updated_at|created_at|taali_score|cv_match_score|cv_match_scored_at)$",
@@ -1605,7 +1607,7 @@ def list_applications_global(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User | SearchCanaryPrincipal = Depends(get_applications_search_principal),
 ):
     started_at = perf_counter()
 
@@ -1734,9 +1736,10 @@ def list_applications_global(
             .exists()
         )
 
-    # With nl_query, parsed filters are authoritative and legacy search text is
-    # ignored; deterministic chips remain part of the SQL scope above.
     nl_query_clean = (nl_query or "").strip()
+    enforce_provider_mode_request(
+        nl_query=nl_query_clean, provider_mode=provider_mode, rerank=rerank, view=view
+    )
     parsed_filter_payload = None
     nl_warnings: list[dict] = []
     nl_subgraph_payload = None
@@ -1748,7 +1751,7 @@ def list_applications_global(
     nl_ids: list[int] = []
     if nl_query_clean:
         from ...candidate_search import rate_limit as nl_rate_limit
-        from ...candidate_search.runner import MAX_RETRIEVAL_LIMIT, run_search
+        from ...candidate_search.runner import MAX_RETRIEVAL_LIMIT
 
         if not nl_rate_limit.check_and_record(int(current_user.organization_id)):
             raise HTTPException(
@@ -1756,20 +1759,17 @@ def list_applications_global(
                 detail="Too many natural-language queries — try again in a minute.",
             )
 
-        # Prefer an active scoped application; recency breaks fallback ties.
         nl_base = filtered_scope_query.order_by(*preferred_application_order())
-        nl_result = run_search(
+        nl_result = run_search_for_route(
             db=db,
             organization_id=int(current_user.organization_id),
-            # Multi-role/workspace searches remain workspace-metered.
             role_id=unique_role_ids[0] if len(unique_role_ids) == 1 else None,
             nl_query=nl_query_clean,
             base_query=nl_base,
             rerank_enabled=bool(rerank),
             include_subgraph=(view == "graph"),
-            # Every page searches the same bounded person window so totals and
-            # rank order do not grow merely because the caller changed offset.
             retrieval_limit=MAX_RETRIEVAL_LIMIT,
+            provider_mode=provider_mode,
         )
         nl_ids = list(
             dict.fromkeys(
@@ -1945,10 +1945,14 @@ def list_applications_global(
     }
     if include_stage_counts:
         response_payload["stage_counts"] = stage_counts
+    response_payload.update(
+        release_metadata(provider_mode=provider_mode, nl_query=nl_query_clean)
+    )
     if nl_query_clean:
         response_payload["parsed_filter"] = parsed_filter_payload
         response_payload["nl_warnings"] = nl_warnings
         response_payload["nl_rerank_applied"] = nl_rerank_applied
+        response_payload["nl_provider_mode"] = provider_mode
         response_payload["nl_coverage"] = nl_coverage_payload
         if nl_retrieval_payload is not None:
             response_payload["nl_retrieval"] = nl_retrieval_payload

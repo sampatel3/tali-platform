@@ -34,6 +34,10 @@ SCOPE_APPLICATIONS_READ = "applications:read"
 SCOPE_ASSESSMENTS_READ = "assessments:read"
 SCOPE_ASSESSMENTS_WRITE = "assessments:write"
 SCOPE_SHARE_LINKS_WRITE = "share-links:write"
+# Internal-only scope. Deliberately excluded from ``API_KEY_SCOPES`` so it
+# cannot be minted through the customer-facing Developers API. The production
+# search canary accepts it on exactly one GET route and no public API/MCP tool.
+SCOPE_INTERNAL_SEARCH_CANARY_READ = "internal:search-canary:read"
 
 API_KEY_SCOPES = frozenset({
     SCOPE_ROLES_READ,

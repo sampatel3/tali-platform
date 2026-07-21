@@ -53,6 +53,9 @@ from app.candidate_search.search_plan import (
 )
 from app.candidate_search.tool_failure_contract import candidate_search_result_failed
 from app.deps import get_current_user
+from app.domains.assessments_runtime.search_canary_auth import (
+    get_applications_search_principal,
+)
 from app.llm import StructuredResult
 from app.main import app
 from app.mcp import handlers
@@ -684,6 +687,9 @@ def test_real_postgres_search_is_identical_across_all_product_surfaces(
     previous = dict(app.dependency_overrides)
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = lambda: search_world.user
+    app.dependency_overrides[get_applications_search_principal] = (
+        lambda: search_world.user
+    )
     try:
         with TestClient(app) as client:
             response = client.get(

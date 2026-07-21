@@ -27,7 +27,7 @@ from ..models.candidate_application import CandidateApplication
 from . import cache as cache_module
 from .criteria_policy import DEFAULT_MAX_CRITERIA, _collect_criteria, _required_criteria
 from .hybrid import retrieve_graph_backend, run_hybrid_retrieval
-from .parser import parse_nl_query
+from .parser import ProviderCallsForbiddenError, parse_nl_query
 from .person_retrieval import MAX_PERSON_RETRIEVAL_LIMIT, bounded_person_rows
 from .plan_adapter import parsed_filter_to_search_plan
 from .plan_evidence import graph_evidence_requirements
@@ -58,6 +58,22 @@ logger = logging.getLogger("taali.candidate_search.runner")
 RERANK_TOP_N = 50
 DEFAULT_RETRIEVAL_LIMIT = 200
 MAX_RETRIEVAL_LIMIT = MAX_PERSON_RETRIEVAL_LIMIT
+
+
+def _assert_provider_free_filter(parsed: ParsedFilter) -> None:
+    """Reject every parsed shape that could select a provider-backed branch."""
+
+    if (
+        parsed.is_empty()
+        or parsed.parse_degraded
+        or parsed.soft_criteria
+        or parsed.preferred_criteria
+        or parsed.keywords
+        or parsed.graph_predicates
+    ):
+        raise ProviderCallsForbiddenError(
+            "This query requires semantic retrieval and cannot run with providers forbidden."
+        )
 
 
 def _candidate_ids_for_application_ids(
@@ -91,6 +107,7 @@ def run_search(
     inherited_titles_any: list[str] | None = None,
     retrieval_limit: int = DEFAULT_RETRIEVAL_LIMIT,
     require_role_authority: bool = False,
+    provider_mode: str = "auto",
 ) -> SearchOutput:
     """Execute one NL search pass.
 
@@ -99,8 +116,17 @@ def run_search(
     constraints (role_ids, source, outcome) — they compose with our
     NL filters.
 
-    Never raises: on any failure we degrade and surface a warning.
+    Normal execution degrades and surfaces warnings. ``provider_mode=forbid``
+    instead raises ``ProviderCallsForbiddenError`` before a provider-backed
+    path can be selected.
     """
+    if provider_mode not in {"auto", "forbid"}:
+        raise ValueError("provider_mode must be 'auto' or 'forbid'")
+    if provider_mode == "forbid" and (rerank_enabled or include_subgraph):
+        raise ProviderCallsForbiddenError(
+            "Reranking and graph views cannot run with providers forbidden."
+        )
+
     base_query = apply_searchable_candidate_scope(
         base_query,
         organization_id=organization_id,
@@ -110,7 +136,11 @@ def run_search(
         organization_id=organization_id, query=nl_query
     )
 
-    parsed = cache_module.get(cache_key)
+    # Provider-forbidden execution bypasses the model-derived cache. It must
+    # prove that this exact request is understood by today's deterministic
+    # parser rather than trusting a structure produced by an earlier model
+    # call or an older parser version.
+    parsed = None if provider_mode == "forbid" else cache_module.get(cache_key)
     if parsed is None:
         try:
             parsed = parse_nl_query(
@@ -124,7 +154,10 @@ def run_search(
                     **({"role_id": int(role_id)} if role_id is not None else {}),
                 },
                 require_role_authority=bool(require_role_authority),
+                provider_mode=provider_mode,
             )
+        except ProviderCallsForbiddenError:
+            raise
         except Exception as exc:  # pragma: no cover — parser already swallows
             logger.warning("Parser raised: %s", exc)
             parsed = ParsedFilter(
@@ -150,7 +183,12 @@ def run_search(
                     ),
                 )
             )
-        if parsed and not parsed.is_empty() and not parsed.parse_degraded:
+        if (
+            provider_mode != "forbid"
+            and parsed
+            and not parsed.is_empty()
+            and not parsed.parse_degraded
+        ):
             cache_module.set(cache_key, parsed)
     elif parsed.parse_degraded:
         warnings.append(
@@ -162,6 +200,9 @@ def run_search(
                 ),
             )
         )
+
+    if provider_mode == "forbid":
+        _assert_provider_free_filter(parsed)
 
     if not parsed.titles_all and not parsed.titles_any:
         inherited_all = [

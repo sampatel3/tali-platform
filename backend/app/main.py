@@ -15,6 +15,7 @@ from .platform.brand import BRAND_APP_DESCRIPTION, BRAND_NAME
 from .platform.config import settings
 from .platform.logging import setup_logging
 from .platform.middleware import EnterpriseAccessMiddleware, RateLimitMiddleware, RequestLoggingMiddleware, SecurityHeadersMiddleware, is_candidate_assessment_path, redact_sensitive_request_path, scrub_sentry_candidate_request as _scrub_sentry_candidate_request  # noqa: E501
+from .platform.release import runtime_release_sha
 from .platform.startup_validation import collect_startup_failures, is_production_like
 from .services.task_catalog_startup import sync_canonical_task_specs_on_startup
 
@@ -607,6 +608,7 @@ def _health_payload() -> dict:
     return {
         "status": status_str,
         "service": "taali-api",
+        "deployment": {"commit_sha": runtime_release_sha()},
         "database": db_ok,
         "redis": redis_ok,
         "agent_worker": agent_worker,
