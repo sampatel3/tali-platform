@@ -320,6 +320,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const isShareRoute = Boolean(sharedRouteToken);
   const isShowcaseDemo = routeApplicationKey === 'demo'
     && searchParams.get('showcase') === '1';
+  // The pitch deck needs to demonstrate the authenticated recruiter report,
+  // including the completed-assessment pane, without exposing a real candidate
+  // or enabling recruiter actions. Keep this fixture-backed surface read-only
+  // through `isInterviewView`, but let an explicit internal preview render the
+  // same tab set as the authenticated product. Client previews remain scrubbed.
+  const isInternalShowcaseView = isShowcaseDemo
+    && searchParams.get('view') === 'internal';
   const numericApplicationId = Number(routeApplicationKey);
   const isClientView = shareViewMode === 'client'
     || (isShowcaseDemo && searchParams.get('view') === 'client');
@@ -331,7 +338,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
   const hiddenTabs = isClientView
     ? CLIENT_HIDDEN_TABS
-    : (isInterviewView ? INTERNAL_TABS : new Set());
+    : (isInterviewView && !isInternalShowcaseView ? INTERNAL_TABS : new Set());
   const requestedTab = searchParams.get('tab') || 'overview';
   // Back-link source of truth is ?from. ?from=jobs/<id> → role pipeline;
   // anything else (including ?from=home or absent) → /home. Using
@@ -1333,6 +1340,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             <Eye size={16} />
             {isClientView ? (
               <span><b>Client view.</b> External, client-safe summary — recruiter notes, scoring breakdown, and interview prep are hidden.</span>
+            ) : isInternalShowcaseView ? (
+              <span><b>Product preview.</b> Internal recruiter report with representative data — controls are read-only.</span>
             ) : (
               <span><b>Recruiter view.</b> Full internal report — includes recruiter notes, timeline, and interview prep. Don&apos;t share with candidates.</span>
             )}
@@ -1695,7 +1704,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     </span>
                   </div>
                 ) : null}
-                {assessmentId ? (
+                {assessmentId && !isInterviewView ? (
                   <div className="assessment-actions" ref={assessmentActionsRef}>
                     <button
                       type="button"
@@ -1771,7 +1780,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               recorder, role criteria and chat log it used to carry are dropped:
               they duplicate the DecisionRail, the Requirements tab and the
               Prompts evidence panel. */}
-          {candidateView && assessmentContentMounted ? (
+          {candidateView && assessmentContentMounted && !isInterviewView ? (
             <ErrorBoundary
               fallback={
                 <div className="mc-notes-empty">
