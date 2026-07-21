@@ -1,0 +1,41 @@
+name: Production Search Canary
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-search-canary
+  cancel-in-progress: true
+
+jobs:
+  grounded-search:
+    name: Exact-SHA grounded candidate search
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout the expected release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Verify exact deployed SHA with grounded PostgreSQL search
+        env:
+          TALI_EXPECTED_RELEASE_SHA: ${{ github.sha }}
+          TALI_PROD_URL: ${{ secrets.TALI_PROD_URL }}
+          TALI_SEARCH_CANARY_TOKEN: ${{ secrets.TALI_SEARCH_CANARY_TOKEN }}
+          TALI_SEARCH_CANARY_ROLE_ID: ${{ secrets.TALI_SEARCH_CANARY_ROLE_ID }}
+        run: |
+          set -euo pipefail
+          python scripts/qa/prod_candidate_search_canary.py \
+            --expected-sha "$TALI_EXPECTED_RELEASE_SHA" \
+            --wait-seconds 900

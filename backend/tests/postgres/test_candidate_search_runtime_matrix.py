@@ -53,6 +53,9 @@ from app.candidate_search.search_plan import (
 )
 from app.candidate_search.tool_failure_contract import candidate_search_result_failed
 from app.deps import get_current_user
+from app.domains.assessments_runtime.search_canary_auth import (
+    get_applications_search_principal,
+)
 from app.llm import StructuredResult
 from app.main import app
 from app.mcp import handlers
@@ -161,6 +164,7 @@ def _seed_world(db) -> SearchWorld:
         )
         db.add(candidate)
         db.flush()
+        transition_at = datetime.now(timezone.utc)
         application = CandidateApplication(
             organization_id=selected_org.id,
             candidate_id=candidate.id,
@@ -168,8 +172,10 @@ def _seed_world(db) -> SearchWorld:
             source="manual",
             status="applied",
             pipeline_stage="review",
+            pipeline_stage_updated_at=transition_at,
             pipeline_stage_source="recruiter",
             application_outcome="open",
+            application_outcome_updated_at=transition_at,
             cv_text=cv_text,
             deleted_at=deleted_at if application_deleted else None,
         )
@@ -467,8 +473,27 @@ def test_migrated_postgres_schema_has_candidate_search_indexes(
                 )
             )
         }
+        transition_defaults = {
+            str(row[0]): row[1]
+            for row in connection.execute(
+                text(
+                    "SELECT column_name, column_default "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() "
+                    "AND table_name = 'candidate_applications' "
+                    "AND column_name IN ("
+                    "'pipeline_stage_updated_at', "
+                    "'application_outcome_updated_at'"
+                    ")"
+                )
+            )
+        }
     assert actual_heads == expected_heads
     assert SEARCH_INDEXES <= indexes
+    assert transition_defaults == {
+        "application_outcome_updated_at": None,
+        "pipeline_stage_updated_at": None,
+    }
 
 
 @pytest.mark.parametrize(
@@ -684,6 +709,9 @@ def test_real_postgres_search_is_identical_across_all_product_surfaces(
     previous = dict(app.dependency_overrides)
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_current_user] = lambda: search_world.user
+    app.dependency_overrides[get_applications_search_principal] = (
+        lambda: search_world.user
+    )
     try:
         with TestClient(app) as client:
             response = client.get(

@@ -133,7 +133,10 @@ jobs:
       - name: PostgreSQL candidate-search truth matrix
         # Executes the real parser -> scope -> PostgreSQL -> fusion -> product
         # handler chain. Provider/model/GraphDB boundaries are local fakes.
-        run: python -m pytest -q tests/postgres/test_candidate_search_runtime_matrix.py
+        run: |
+          python -m pytest -q \
+            tests/postgres/test_candidate_search_runtime_matrix.py \
+            tests/postgres/test_production_search_canary.py
       - name: Targeted backend regression tests
         # Pins canonical-release controls and merge-sensitive behavior: local
         # ATS writes, role ordering/paging, atomic assessment dispatch, and
@@ -142,7 +145,9 @@ jobs:
           python -m pytest -q \
             ../scripts/ci/tests/test_check_merge_safety.py \
             tests/platform/test_release_safeguards.py \
+            tests/platform/test_release_metadata.py \
             tests/platform/test_railway_deployment_contract.py \
+            tests/platform/test_production_search_canary_contract.py \
             tests/platform/test_railway_worker_start.py \
             tests/evals \
             tests/test_agent_chat_*.py \
@@ -159,6 +164,7 @@ jobs:
             tests/test_candidate_search_hybrid.py \
             tests/test_candidate_search_metering.py \
             tests/test_candidate_search_population.py \
+            tests/test_candidate_search_provider_mode.py \
             tests/test_candidate_search_rerank.py \
             tests/test_candidate_search_runner_hybrid.py \
             tests/test_candidate_search_tool_failure_contract.py \
@@ -178,6 +184,9 @@ jobs:
             tests/test_roles_list_ordering.py \
             tests/test_send_assessment_action.py \
             tests/test_sister_roles.py
+          python -m pytest -q \
+            tests/test_production_search_canary.py \
+            tests/test_search_canary_provision.py
 
   frontend:
     runs-on: ubuntu-latest

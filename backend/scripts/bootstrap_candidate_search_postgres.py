@@ -16,6 +16,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import text
 from sqlalchemy.engine import make_url
 
 
@@ -53,6 +54,18 @@ def main() -> None:
     from app.platform.database import Base, engine
 
     Base.metadata.create_all(bind=engine)
+    # ORM metadata declares server defaults for these transition timestamps,
+    # but migration 032 intentionally removed those defaults before making the
+    # columns NOT NULL. Mirror the migrated production contract so fixture
+    # builders cannot accidentally depend on create_all-only behavior.
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE candidate_applications "
+                "ALTER COLUMN pipeline_stage_updated_at DROP DEFAULT, "
+                "ALTER COLUMN application_outcome_updated_at DROP DEFAULT"
+            )
+        )
     engine.dispose()
 
     config = Config(str(backend_root / "alembic.ini"))

@@ -33,6 +33,10 @@ PARSER_TEMPERATURE = 0.0
 PARSER_MODEL = os.getenv("CLAUDE_SEARCH_PARSER_MODEL") or "claude-sonnet-4-6"
 
 
+class ProviderCallsForbiddenError(ValueError):
+    """The requested search cannot run under a zero-provider policy."""
+
+
 def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
     """Server-side cleanup applied AFTER schema validation.
 
@@ -113,13 +117,16 @@ def parse_nl_query(
     role_id: int | None = None,
     metering: dict | None = None,
     require_role_authority: bool = False,
+    provider_mode: str = "auto",
 ) -> ParsedFilter:
-    """Parse one NL query. Never raises; returns a best-effort ``ParsedFilter``.
+    """Parse one NL query, failing closed when providers are forbidden.
 
     Paid parsing requires an organization so it can be hard-admitted before
     the SDK call. ``role_id`` adds the role's monthly ceiling to that admission;
     leaving it unset is an intentional workspace-level search.
     """
+    if provider_mode not in {"auto", "forbid"}:
+        raise ValueError("provider_mode must be 'auto' or 'forbid'")
     cleaned_query = (query or "").strip()
     if not cleaned_query:
         return ParsedFilter(free_text="")
@@ -132,6 +139,14 @@ def parse_nl_query(
     if deterministic is not None:
         return deterministic
 
+    if provider_mode == "forbid":
+        # This check deliberately happens before prompt construction, client
+        # resolution, metering admission, or any SDK access. Production
+        # canaries can therefore exercise the real search route with a hard
+        # guarantee that an ambiguous query cannot incur provider work.
+        raise ProviderCallsForbiddenError(
+            "This query requires the model parser and cannot run with providers forbidden."
+        )
     system_prompt, user_prompt = build_parser_prompt(cleaned_query)
 
     base_metering = dict(metering or {})

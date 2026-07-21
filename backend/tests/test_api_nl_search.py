@@ -17,6 +17,7 @@ from unittest.mock import patch
 import pytest
 
 from app.candidate_search import rate_limit as nl_rate_limit
+from app.candidate_search.parser import ProviderCallsForbiddenError
 from app.candidate_search.schemas import (
     CandidateDeepVerification,
     GraphPayload,
@@ -491,6 +492,72 @@ def test_rerank_false_propagates_to_runner(client):
         )
     assert resp.status_code == 200
     assert mocked.call_args.kwargs["rerank_enabled"] is False
+
+
+def test_provider_forbid_propagates_and_is_auditable(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    release_sha = "a" * 40
+    monkeypatch.setattr(
+        "app.domains.assessments_runtime.application_search_support.runtime_release_sha",
+        lambda: release_sha,
+    )
+    with patch(
+        "app.candidate_search.runner.run_search",
+        return_value=_stub_search_output(),
+    ) as mocked:
+        response = client.get(
+            "/api/v1/applications",
+            params={"nl_query": "Python", "provider_mode": "forbid"},
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["nl_provider_mode"] == "forbid"
+    assert payload["deployment_sha"] == release_sha
+    assert mocked.call_args.kwargs["provider_mode"] == "forbid"
+
+
+@pytest.mark.parametrize("params", [{"rerank": "true"}, {"view": "graph"}])
+def test_provider_forbid_rejects_explicit_provider_paths_before_runner(
+    client, params
+):
+    headers, _ = auth_headers(client)
+    with patch(
+        "app.candidate_search.runner.run_search",
+        side_effect=AssertionError("runner must not execute"),
+    ) as mocked:
+        response = client.get(
+            "/api/v1/applications",
+            params={"nl_query": "Python", "provider_mode": "forbid", **params},
+            headers=headers,
+        )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == (
+        "candidate_search_provider_path_forbidden"
+    )
+    mocked.assert_not_called()
+
+
+def test_provider_forbid_surfaces_ambiguous_query_as_typed_422(client):
+    headers, _ = auth_headers(client)
+    with patch(
+        "app.candidate_search.runner.run_search",
+        side_effect=ProviderCallsForbiddenError(
+            "This query requires the model parser and cannot run with providers forbidden."
+        ),
+    ):
+        response = client.get(
+            "/api/v1/applications",
+            params={"nl_query": "ambiguous request", "provider_mode": "forbid"},
+            headers=headers,
+        )
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == (
+        "candidate_search_provider_path_forbidden"
+    )
 
 
 def test_deep_verification_coverage_and_failures_are_exposed(client):
