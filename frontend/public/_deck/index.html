@@ -65,6 +65,96 @@
      app routes — the same approach taali.ai/demo uses, no mock-ups.
      ──────────────────────────────────────────────────────────────────── -->
 <style id="partner-additions">
+  /* Hub71 opening sequence — reused here without pulling the retired
+     Hub71 deck's full stylesheet into the partnership deck. */
+  .h71-head { margin-bottom: 28px; position: relative; z-index: 2; }
+  .h71-title { max-width: 1720px; font-size: 64px; }
+  .h71-deck {
+    margin: 14px 0 0; max-width: 1500px; font-size: 19px;
+    line-height: 1.42; color: var(--ink-2);
+  }
+  .h71-kicker {
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.3;
+    letter-spacing: .14em; color: var(--purple); text-transform: uppercase;
+    font-weight: 700;
+  }
+  .dark .h71-kicker { color: var(--purple-lav); }
+
+  /* Hub71 02 · Problem */
+  .h71-problem-two {
+    flex: 1; min-height: 0; display: grid;
+    grid-template-columns: 1fr 1fr; gap: 24px;
+  }
+  .h71-problem-half {
+    min-height: 0; padding: 42px 48px; border: 1px solid var(--line);
+    border-radius: 24px; background: var(--bg-2); display: flex;
+    flex-direction: column; justify-content: space-between;
+  }
+  .h71-problem-half.dark {
+    background: var(--ink); border-color: var(--ink); color: #fff;
+  }
+  .h71-word {
+    font-family: var(--font-display); font-size: 78px; font-weight: 600;
+    line-height: .96; letter-spacing: -.045em; color: var(--ink);
+  }
+  .h71-problem-half.dark .h71-word { color: #fff; }
+  .h71-problem-half p {
+    margin: 0; max-width: 650px; font-size: 22px; line-height: 1.45;
+    color: var(--ink-2);
+  }
+  .h71-problem-half.dark p { color: rgba(255,255,255,.78); }
+  .h71-takeaway {
+    min-height: 84px; margin-top: 18px; padding: 0 28px; border-radius: 16px;
+    background: var(--purple-soft); display: grid;
+    grid-template-columns: 440px 1fr; gap: 26px; align-items: center;
+  }
+  .h71-takeaway b { font-family: var(--font-display); font-size: 22px; }
+  .h71-takeaway span { font-size: 19px; color: var(--ink-2); }
+
+  /* Hub71 03 · Product */
+  .h71-two-engine {
+    flex: 1; min-height: 0; display: grid;
+    grid-template-columns: 1fr 1fr; gap: 24px;
+  }
+  .h71-engine-simple {
+    min-height: 0; padding: 42px 46px; border: 1px solid var(--line);
+    border-radius: 24px; background: var(--bg-2); display: flex;
+    flex-direction: column;
+  }
+  .h71-engine-simple.dark {
+    background: var(--ink); border-color: var(--ink); color: #fff;
+  }
+  .h71-engine-simple h3 {
+    margin: 34px 0 0; font-family: var(--font-display); font-size: 54px;
+    line-height: 1; letter-spacing: -.035em;
+  }
+  .h71-engine-simple p {
+    margin: 30px 0 0; max-width: 690px; font-size: 21px;
+    line-height: 1.48; color: var(--ink-2);
+  }
+  .h71-engine-simple.dark p { color: rgba(255,255,255,.76); }
+  .h71-engine-path {
+    margin-top: auto; padding-top: 25px; border-top: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--font-mono); font-size: 14px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--purple);
+  }
+  .h71-engine-simple.dark .h71-engine-path {
+    border-color: rgba(255,255,255,.15); color: var(--purple-lav);
+  }
+  .h71-engine-path b { font-size: 18px; }
+  .h71-control-line {
+    min-height: 76px; margin-top: 18px; padding: 0 26px;
+    border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
+    border-radius: 15px; background: var(--purple-soft); display: grid;
+    grid-template-columns: 230px 1fr; align-items: center;
+  }
+  .h71-control-line span {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em;
+    color: var(--purple); text-transform: uppercase;
+  }
+  .h71-control-line b { font-size: 19px; }
+
   /* Dark takeaway band under a slide's cards */
   .takeaway-band {
     margin-top: 24px; padding: 22px 30px; background: var(--ink); color: #fff;
@@ -192,7 +282,7 @@
   .sr-quote { border-left: 3px solid var(--purple); padding: 7px 13px; background: var(--bg); border-radius: 0 8px 8px 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
   .sr-cite { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); margin-top: 5px; }
 
-  /* ---- slide 5: real product screenshots ---- */
+  /* ---- slide 6: real product screenshots ---- */
   .shot { margin: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 24px 60px -30px rgba(91,44,168,0.4); }
   .shot-bar { display: flex; align-items: center; gap: 10px; padding: 9px 15px; border-bottom: 1px solid var(--line); background: var(--bg); }
   .shot-bar .dots { display: flex; gap: 6px; }
@@ -206,7 +296,7 @@
   .shot-cap .t em { font-style: normal; color: var(--purple); }
   .shot-cap .d { font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
 
-  /* ---- slide 8: role chips + filled stat grid ---- */
+  /* ---- slide 9: role chips + filled stat grid ---- */
   .role-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
   .role-chips span { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.02em; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 5px 11px; }
   .proof-right { display: flex; flex-direction: column; gap: 14px; }
@@ -218,7 +308,7 @@
   .outcome-band { padding: 18px 24px; background: var(--ink); color: #fff; border-radius: 14px; font-size: 17px; line-height: 1.5; }
   .outcome-band b { color: var(--purple-lav); }
 
-  /* ---- slide 9: bigger, bolder two options ---- */
+  /* ---- slide 10: bigger, bolder two options ---- */
   .ways { flex: 1; }
   .way { padding: 30px 36px 28px; }
   .way-num { font-family: var(--font-display); font-size: 30px; font-weight: 600; color: color-mix(in oklab, var(--purple) 45%, var(--mute)); letter-spacing: -0.02em; line-height: 1; margin-bottom: 10px; }
@@ -229,12 +319,12 @@
   .way-foot { margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--line); font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--purple); }
   .way.hero .way-foot { border-color: rgba(255,255,255,0.2); color: var(--purple-lav); }
 
-  /* ---- slide 4: commentary chips (demo-style annotation) ---- */
+  /* ---- slide 5: commentary chips (demo-style annotation) ---- */
   .commentary { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
   .commentary span { display: inline-flex; align-items: center; gap: 8px; padding: 8px 15px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px; font-size: 15px; color: var(--ink-2); }
   .commentary b { color: var(--purple); font-weight: 700; font-family: var(--font-mono); }
 
-  /* ---- slide 5: two annotated halves (agentic+HITL / bespoke search) ---- */
+  /* ---- slide 6: two annotated halves (agentic+HITL / bespoke search) ---- */
   .s5-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 26px; min-height: 0; }
   .s5-col { display: flex; flex-direction: column; gap: 13px; min-height: 0; }
   .s5-head { display: flex; align-items: flex-start; gap: 12px; }
@@ -250,11 +340,11 @@
   .s5-note b { color: var(--ink); font-weight: 600; }
   .s5-note.graph .k { color: var(--mute); }
   .s5-note.graph { color: var(--mute); }
-  /* slide 5 shot frames — fixed aspect, full content (no crop) */
+  /* slide 6 shot frames — fixed aspect, full content (no crop) */
   .s5-col .shot { flex: none; }
   .s5-col .shot-img { aspect-ratio: 1.6; background-size: cover; background-position: top center; background-color: var(--bg-2); }
 
-  /* ---- slide 4: captured & scored → report strip ---- */
+  /* ---- slide 5: captured & scored → report strip ---- */
   .s4-strip { display: grid; grid-template-columns: 0.95fr 1.3fr 0.95fr; gap: 14px; margin-top: 14px; }
   .s4-cell { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 13px 16px; display: flex; flex-direction: column; gap: 9px; }
   .s4-tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
@@ -269,7 +359,7 @@
   .s4-rep { font-size: 14px; line-height: 1.5; color: var(--ink-2); }
   .s4-rep b { color: var(--ink); font-weight: 600; }
 
-  /* ---- slide 5 v6: built product panels (faithful, legible — not screenshots) ---- */
+  /* ---- slide 6 v6: built product panels (faithful, legible — not screenshots) ---- */
   .prod-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 20px 50px -30px rgba(91,44,168,0.4); }
   .pp-bar { display: flex; align-items: center; gap: 10px; padding: 9px 15px; border-bottom: 1px solid var(--line); background: var(--bg); }
   .pp-bar .dots { display: flex; gap: 6px; }
@@ -327,7 +417,7 @@
   .rk-sc { font-family: var(--font-mono); font-weight: 700; font-size: 13px; padding: 3px 10px; border-radius: 999px; flex: none; color: var(--purple); background: var(--purple-soft); }
   .rk-note { font-family: var(--font-mono); font-size: 11px; color: var(--mute); }
 
-  /* ---- slide 5 v7: faithful home decision detail (A) ---- */
+  /* ---- slide 6 v7: faithful home decision detail (A) ---- */
   .hb-funnel { display: flex; gap: 7px; flex-wrap: wrap; }
   .hb-funnel span { font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; }
   .hb-funnel b { color: var(--ink); font-weight: 700; }
@@ -359,7 +449,7 @@
   .ab.amber-o { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 45%, var(--line)); }
   .ab.purple { color: #fff; background: var(--purple); border-color: var(--purple); }
 
-  /* ---- slide 5 v7: faithful candidate evidence card (B) ---- */
+  /* ---- slide 6 v7: faithful candidate evidence card (B) ---- */
   .ev-head { display: flex; flex-direction: column; gap: 5px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
   .ev-title { font-size: 13px; line-height: 1.45; color: var(--ink-2); }
   .ev-title b { color: var(--ink); font-family: var(--font-display); }
@@ -379,7 +469,7 @@
   .ev-cand-mini { display: flex; align-items: center; gap: 9px; padding-top: 9px; border-top: 1px solid var(--line); flex-wrap: wrap; }
   .ev-cand-mini .ev-nm { font-size: 14.5px; }
 
-  /* ---- slide 4 v9: assessment (2/3) + client report (1/3) ---- */
+  /* ---- slide 5 v9: assessment (2/3) + client report (1/3) ---- */
   .s4-split { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; margin-top: 12px; align-items: stretch; }
   .s4-split .ide { margin-top: 0; }
   .asm-img { flex: 1; min-height: 0; background-size: cover; background-position: top center; background-color: var(--bg-2); }
@@ -631,65 +721,70 @@
     </div>
 
     <div class="slide-foot">
-      <span>02 / 12 · The shift</span>
+      <span>02 / 13 · The shift</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       03 · WHAT TAALI IS (solution)
+       03 · THE PROBLEM (from Hub71 Access)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="solution" data-screen-label="03 What Taali is">
-    <div class="tally-grid tg-r"></div>
-
-    <div class="slide-head">
-      <div class="eyebrow"><span class="num">03</span><span class="dot">·</span><span>What Taali is</span></div>
-      <h2 class="slide-title">A hiring agent, and an AI-native assessment. <em>You stay in control.</em></h2>
-      <p class="slide-sub">Taali works each live mandate end-to-end — picks up applicants the moment they land, scores and ranks them, and surfaces the calls that need a human on your home hub. Ask it in plain English to tailor a role and pull the right shortlist. Every candidate you put forward can sit a real, in-browser work sample with AI in their hands.</p>
+  <section data-slide="trust-problem" data-screen-label="03 The problem">
+    <div class="tally-grid tg-tr"></div>
+    <div class="slide-head h71-head">
+      <div class="eyebrow"><span class="num">03</span><span class="dot">·</span><span>The problem</span></div>
+      <h2 class="slide-title h71-title">AI has made hiring easier to enter — <em>and harder to trust.</em></h2>
+      <p class="h71-deck">More applications create more recruiter work, while the signals used to make decisions reveal less about who can actually perform.</p>
     </div>
-
-    <div class="solution-grid">
-      <div class="pillar">
-        <div class="p-num"><span>01</span><span class="name">SCREEN &amp; SEARCH</span></div>
-        <div class="p-title">The agent runs your pipeline.</div>
-        <div class="p-body">It starts at the brief: chat a requisition into existence — or send your client a no-login link and let them brief the agent directly. From there one orchestrator plus a deterministic policy works every role in real time — pre-screen, CV↔JD scoring, integrity checks, ranking, dedupe across your ATS. Then just ask: "top 5 with payments and AI experience".</div>
-        <div class="p-meta">
-          <span><b>Always-on</b> per active role</span>
-          <span><b>Conversational</b> intake, search + role tailoring</span>
-        </div>
+    <div class="h71-problem-two">
+      <div class="h71-problem-half">
+        <div class="h71-kicker">01 · Volume</div>
+        <div class="h71-word">More<br/>volume.</div>
+        <p>AI-tailored applications can be produced at scale. Strong candidates disappear inside manual triage, duplicated records, and inconsistent screening.</p>
       </div>
-      <div class="pillar hero">
-        <div class="p-num"><span>02</span><span class="name">PROVE</span></div>
-        <div class="p-title">Real repo. Real Claude. Real evidence.</div>
-        <div class="p-body">The candidate works in the exact environment they'd use on day one — a repo, an editor, and Claude alongside. We capture every move and score the 5 Ds, including how well they work <em>with</em> AI — the dimension your clients now hire for, and nobody else measures.</div>
-        <div class="p-meta">
-          <span><b>the 5 Ds</b> · delegation · description · discernment · diligence · deliverable</span>
-          <span><b>Live</b> fraud + proxy-candidate detection</span>
-        </div>
-      </div>
-      <div class="pillar">
-        <div class="p-num"><span>03</span><span class="name">CONTROL</span></div>
-        <div class="p-title">Human sign-off on every call. <em>And it learns from you.</em></div>
-        <div class="p-body">Advance and reject decisions queue on your home hub with the agent's reasoning, score and evidence. You approve, override or reject — it never acts alone. Every verdict is rule-traced and auditable, and your overrides retrain the policy overnight.</div>
-        <div class="p-meta">
-          <span><b>HITL</b> gate on every advance / reject</span>
-          <span><b>Evidence-linked</b>, exportable, FS-defensible</span>
-        </div>
+      <div class="h71-problem-half dark">
+        <div class="h71-kicker">02 · Signal</div>
+        <div class="h71-word">Less<br/>signal.</div>
+        <p>CVs are claims. Legacy tests ban or ignore AI, so they cannot show who can direct it, challenge it, verify it, and still deliver excellent work.</p>
       </div>
     </div>
-
-    <div class="slide-foot">
-      <span>03 / 12 · What Taali is</span>
-      <span class="brand">taali<span class="p">.</span></span>
-    </div>
+    <div class="h71-takeaway"><b>The new hiring stack needs both.</b><span>Automation to run the funnel — and trustworthy evidence to make the decision.</span></div>
+    <div class="slide-foot"><span>03 / 13 · The problem</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       04 · THE HUB — live product surface (iframe: /showcase/home)
+       04 · THE PRODUCT (from Hub71 Access)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="surf-hub" data-screen-label="04 The Hub">
+  <section data-slide="product" data-screen-label="04 The product">
+    <div class="slide-head h71-head">
+      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The product</span></div>
+      <h2 class="slide-title h71-title">Taali is the hiring operating system <em>and the proof layer.</em></h2>
+      <p class="h71-deck">Two connected products close the loop from a role brief to an interview decision.</p>
+    </div>
+    <div class="h71-two-engine">
+      <div class="h71-engine-simple dark">
+        <div class="h71-kicker">01 · Agentic ATS</div>
+        <h3>Create the role.<br/>Receive the shortlist.</h3>
+        <p>One agent per role processes applicants, removes duplicates, checks must-haves, scores and ranks, sends assessments, and brings the best people back for interview.</p>
+        <div class="h71-engine-path"><span>Role</span><b>→</b><span>Screen</span><b>→</b><span>Assess</span><b>→</b><span>Shortlist</span></div>
+      </div>
+      <div class="h71-engine-simple">
+        <div class="h71-kicker">02 · AI-native assessment</div>
+        <h3>Observe the work.<br/>Not the claims.</h3>
+        <p>Candidates complete role-specific coding or knowledge work with AI. Taali captures the full work trace — prompts, tool calls, edits, tests, Git history — and turns it into an evidence-linked report.</p>
+        <div class="h71-engine-path"><span>Task</span><b>→</b><span>Work trace</span><b>→</b><span>Evidence</span><b>→</b><span>Verdict</span></div>
+      </div>
+    </div>
+    <div class="h71-control-line"><span>The recruiter stays accountable</span><b>Set policy and budget · approve consequential actions · inspect or override every recommendation</b></div>
+    <div class="slide-foot"><span>04 / 13 · Two products, one decision loop</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       05 · THE HUB — live product surface (iframe: /showcase/home)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="surf-hub" data-screen-label="05 The Hub">
     <div class="slide-head surf-head">
-      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The product · live, not a mock-up</span></div>
+      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>The product · live, not a mock-up</span></div>
       <h2 class="surf-title">Mission control: steer the agent in plain English — <em>keep every call honest.</em></h2>
     </div>
     <div class="surf">
@@ -705,17 +800,17 @@
       </div>
     </div>
     <div class="slide-foot">
-      <span>04 / 12 · The Hub · live product</span>
+      <span>05 / 13 · The Hub · live product</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       05 · AGENTIC TRIAGE — live product surface (iframe: /jobs)
+       06 · AGENTIC TRIAGE — live product surface (iframe: /jobs)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="surf-triage" data-screen-label="05 Agentic triage">
+  <section data-slide="surf-triage" data-screen-label="06 Agentic triage">
     <div class="slide-head surf-head">
-      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>The product · the agent on duty</span></div>
+      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>The product · the agent on duty</span></div>
       <h2 class="surf-title">The Jobs board the agent works against — <em>one agent per role, on a leash you set.</em></h2>
     </div>
     <div class="surf">
@@ -731,17 +826,17 @@
       </div>
     </div>
     <div class="slide-foot">
-      <span>05 / 12 · Agentic triage · the agent on duty</span>
+      <span>06 / 13 · Agentic triage · the agent on duty</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       06 · AI ASSESSMENT — live product surface (iframe: /assessment/live)
+       07 · AI ASSESSMENT — live product surface (iframe: /assessment/live)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="surf-assess" data-screen-label="06 AI assessment">
+  <section data-slide="surf-assess" data-screen-label="07 AI assessment">
     <div class="slide-head surf-head">
-      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>The product · the work sample</span></div>
+      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>The product · the work sample</span></div>
       <h2 class="surf-title">The chat-first workspace the candidate drives — <em>pairing with AI is the work.</em></h2>
     </div>
     <div class="surf">
@@ -758,17 +853,17 @@
       </div>
     </div>
     <div class="slide-foot">
-      <span>06 / 12 · AI assessment · candidate workspace</span>
+      <span>07 / 13 · AI assessment · candidate workspace</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       07 · STANDING REPORT — live product surface (iframe: /c/demo client view)
+       08 · STANDING REPORT — live product surface (iframe: /c/demo client view)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="surf-report" data-screen-label="07 Standing report">
+  <section data-slide="surf-report" data-screen-label="08 Standing report">
     <div class="slide-head surf-head">
-      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>The product · what you send the client</span></div>
+      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>The product · what you send the client</span></div>
       <h2 class="surf-title">The standing report your client opens — <em>every score links to the evidence.</em></h2>
     </div>
     <div class="surf">
@@ -784,17 +879,17 @@
       </div>
     </div>
     <div class="slide-foot">
-      <span>07 / 12 · Standing report · the client view</span>
+      <span>08 / 13 · Standing report · the client view</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       08 · CHAT & AGENTS — live product surface (iframe: /showcase/chat)
+       09 · CHAT & AGENTS — live product surface (iframe: /showcase/chat)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="surf-chat" data-screen-label="08 Chat &amp; agents">
+  <section data-slide="surf-chat" data-screen-label="09 Chat &amp; agents">
     <div class="slide-head surf-head">
-      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>The product · find anyone, in plain English</span></div>
+      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>The product · find anyone, in plain English</span></div>
       <h2 class="surf-title">Ask your whole pipeline anything — <em>or set a role's agent loose on it.</em></h2>
     </div>
     <div class="surf">
@@ -810,17 +905,17 @@
       </div>
     </div>
     <div class="slide-foot">
-      <span>08 / 12 · Chat &amp; agents · find anyone</span>
+      <span>09 / 13 · Chat &amp; agents · find anyone</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       06 · RUNS YOUR WHOLE DESK (pipeline — all live)
+       10 · RUNS YOUR WHOLE DESK (pipeline — all live)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="pipeline" data-screen-label="09 End to end">
+  <section data-slide="pipeline" data-screen-label="10 End to end">
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>End to end</span></div>
+      <div class="eyebrow"><span class="num">10</span><span class="dot">·</span><span>End to end</span></div>
       <h2 class="slide-title" style="font-size:56px;">Taali runs every stage of the desk. <em>Live in production today.</em></h2>
     </div>
 
@@ -942,17 +1037,17 @@
     </div>
 
     <div class="slide-foot">
-      <span>09 / 12 · End to end · agent-led</span>
+      <span>10 / 13 · End to end · agent-led</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       07 · WHY TAALI (wedge — true today)
+       11 · WHY TAALI (wedge — true today)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="wedge" data-screen-label="10 Why Taali">
+  <section data-slide="wedge" data-screen-label="11 Why Taali">
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">10</span><span class="dot">·</span><span>Why Taali</span></div>
+      <div class="eyebrow"><span class="num">11</span><span class="dot">·</span><span>Why Taali</span></div>
       <h2 class="slide-title">Built around the agent and the work sample — <em>not bolted onto a CV.</em></h2>
     </div>
 
@@ -1029,19 +1124,19 @@
     </div>
 
     <div class="slide-foot">
-      <span>10 / 12 · Why Taali</span>
+      <span>11 / 13 · Why Taali</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       08 · PROOF (DeepLight — real numbers + correct positioning)
+       12 · PROOF (DeepLight — real numbers + correct positioning)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="proof" data-screen-label="11 Proof">
+  <section data-slide="proof" data-screen-label="12 Proof">
     <div class="tally-grid tg-tr"></div>
 
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">11</span><span class="dot">·</span><span>Proof</span></div>
+      <div class="eyebrow"><span class="num">12</span><span class="dot">·</span><span>Proof</span></div>
       <h2 class="slide-title">Not a demo — it runs a <em>real hiring operation</em> every day.</h2>
     </div>
 
@@ -1082,19 +1177,19 @@
     </div>
 
     <div class="slide-foot">
-      <span>11 / 12 · Proof</span>
+      <span>12 / 13 · Proof</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
 
   <!-- ═══════════════════════════════════════════════════════════════════════
-       12 · THE OFFERING (one model, two uses + credits + free pilot)
+       13 · THE OFFERING (one model, two uses + credits + free pilot)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="offering" data-screen-label="12 The offering">
+  <section data-slide="offering" data-screen-label="13 The offering">
     <div class="tally-grid tg-br"></div>
 
     <div class="slide-head">
-      <div class="eyebrow"><span class="num">12</span><span class="dot">·</span><span>The offering</span></div>
+      <div class="eyebrow"><span class="num">13</span><span class="dot">·</span><span>The offering</span></div>
       <h2 class="slide-title" style="font-size:60px;">One platform. <em>However you hire.</em></h2>
     </div>
 
@@ -1136,7 +1231,7 @@
     </div>
 
     <div class="slide-foot">
-      <span>12 / 12 · The offering · thank you</span>
+      <span>13 / 13 · The offering · thank you</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
@@ -1148,9 +1243,10 @@
 <!-- Speaker notes -->
 <script type="application/json" id="speaker-notes">
 [
-  "Thanks for the time. I'm Sam — I built Taali from the ground up, and proved it running the hiring at DeepLight, a data & AI consultancy that hires exactly the kind of technical people you place. This isn't a generic HR-tech pitch; it's one operator showing another a platform built for our shared problem. Two things to land today: it makes your consultants faster and your submissions provable, and it works both sides of your desk — placing into your clients and hiring your own teams. Twelve slides, ending on a free pilot.",
+  "Thanks for the time. I'm Sam — I built Taali from the ground up, and proved it running the hiring at DeepLight, a data & AI consultancy that hires exactly the kind of technical people you place. This isn't a generic HR-tech pitch; it's one operator showing another a platform built for our shared problem. Two things to land today: it makes your consultants faster and your submissions provable, and it works both sides of your desk — placing into your clients and hiring your own teams. Thirteen slides, ending on a free pilot.",
   "The ground has shifted under recruitment — worst of all for exactly the roles you place: software, data, AI, change. 78% of CVs now contain AI-generated content and resume fraud costs around $600B a year, so your consultants burn billable hours on a slush pile that looks qualified. Legacy tech tests saw a 5x cheating spike because candidates build with AI all day and the tests pretend they don't. And one in three hiring managers has caught a fake or proxy candidate — so clients no longer trust a CV, which means they no longer trust a CV-based shortlist. Whoever can prove capability, not just forward it, wins the mandate.",
-  "Taali is two things in one. A hiring agent that runs each live mandate end-to-end — and crucially, keeps you in control: it brings decisions to your home hub, you make the call. And an AI-native assessment that produces real evidence. Three pillars: Screen and search — it starts at the brief: you chat a requisition into existence, or send your client a no-login link and they brief the agent directly; from there it pre-screens, scores, integrity-checks and ranks, and you can ask it in plain English to pull a shortlist. Prove — every candidate works a real task in a real repo with Claude in hand, scored on five axes including how they work with AI. Control — every advance and reject is queued for your sign-off, evidence-linked and auditable, and your overrides retrain it overnight.",
+  "AI has changed both sides of hiring. Applications can now be tailored and produced at scale, adding load to manual screening. At the same time, CVs and sealed legacy tests reveal less about performance in an AI-enabled workplace. Hiring therefore needs automation for the workflow and evidence for the decision.",
+  "Taali has two connected products. The agentic ATS processes applications, checks must-haves, scores and ranks candidates, orchestrates assessments, and returns a shortlist. The assessment product observes real coding and knowledge work with AI, captures the complete work trace, and produces an evidence-linked report. Recruiters set policy, budget, approval gates, and sign-off.",
   "This is the Hub — mission control, live in front of you. You steer each role's agent in plain English: 'cap salary at ninety', 'drop the cut-off to sixty-five' — it reasons, shows the impact, asks before it spends. Below that, the decision feed: every advance, escalate and pre-screen reject the agents queued, reviewable and reversible, and your overrides become its training signal. One rail for every agent — pending counts, budgets, bulk actions. The point to land: the agent does the volume, you keep every call honest.",
   "The Jobs board those agents work against — one agent per role, on a leash you set. The live agent bar shows what each role's agent advanced, escalated or rejected in the last hour. Every role carries its own budget, autonomy dial and decision feed — you can run full autonomy on a high-volume role and review-everything on a sensitive one. Click into any role and you see the pipeline the way your team will every morning.",
   "The work sample itself — the candidate's actual workspace, not a mock-up. A real repo, a real editor, and Claude at the centre, because pairing with AI is the work now. Here it's a GenAI production-readiness task for a bank — three failing tests including a high-risk action that wrongly skips human review. We capture the whole session — every prompt, paste, edit and test run, even time-to-first-prompt and browser focus — plus live misuse detection: prompt-injection or off-task use of the assistant is flagged in real time. No lockdown browser, no webcam — the transcript is the record.",
