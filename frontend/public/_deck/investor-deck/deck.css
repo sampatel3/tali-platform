@@ -749,6 +749,11 @@ deck-stage > section[data-slide] {
   background: color-mix(in oklab, var(--amber) 12%, #fff);
   border: 1px solid color-mix(in oklab, var(--amber) 35%, var(--line));
 }
+.pipe-card .badge.available {
+  color: var(--green);
+  background: color-mix(in oklab, var(--green) 12%, #fff);
+  border: 1px solid color-mix(in oklab, var(--green) 35%, var(--line));
+}
 .pipe-card .ti {
   font-family: var(--font-display);
   font-size: 15px;
@@ -774,6 +779,7 @@ deck-stage > section[data-slide] {
 }
 .pipe-legend .sw { display: inline-block; width: 14px; height: 14px; border-radius: 4px; vertical-align: middle; margin-right: 8px; }
 .pipe-legend .sw.live { background: var(--purple); }
+.pipe-legend .sw.available { background: color-mix(in oklab, var(--green) 18%, #fff); border: 1px solid var(--green); }
 .pipe-legend .sw.rollout { background: color-mix(in oklab, var(--amber) 18%, #fff); border: 1px solid var(--amber); }
 .pipe-legend .sw.roadmap { border: 1px dashed var(--mute); }
 

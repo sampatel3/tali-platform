@@ -214,6 +214,7 @@ describe('SecureCandidateShareLinks', () => {
     // notes, interview feedback, and activity travel in the share payload since
     // the unauth page can't call the auth-only endpoints.
     const notesLink = await screen.findByRole('link', { name: 'Notes & timeline' });
+    expect(screen.queryByRole('link', { name: 'Assessment' })).not.toBeInTheDocument();
     const notesPane = document.getElementById('report-pane-notes');
     const interviewPane = document.getElementById('report-pane-prep');
 
@@ -257,5 +258,6 @@ describe('SecureCandidateShareLinks', () => {
 
     // External client shares must never expose recruiter Notes & timeline.
     expect(screen.queryByRole('link', { name: 'Notes & timeline' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Assessment' })).not.toBeInTheDocument();
   });
 });

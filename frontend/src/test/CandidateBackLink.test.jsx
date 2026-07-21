@@ -26,6 +26,7 @@ vi.mock('../shared/api', () => ({
     addNote: vi.fn(),
     uploadCv: vi.fn(),
     postToWorkable: vi.fn(),
+    updateManualEvaluation: vi.fn(),
   },
   billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
   organizations: {
@@ -141,7 +142,7 @@ vi.mock('@monaco-editor/react', () => ({
 }));
 
 import { auth } from '../shared/api/authClient';
-import { agent as agentApi, roles as rolesApi } from '../shared/api';
+import { agent as agentApi, assessments as assessmentsApi, roles as rolesApi } from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -208,13 +209,32 @@ describe('Candidate report back link', () => {
   it('keeps the fixture-backed candidate showcase public, client-safe, and read-only', async () => {
     localStorage.clear();
 
-    renderAppAt('/c/demo?view=client&showcase=1');
+    renderAppAt('/c/demo?view=client&showcase=1&tab=assessment');
 
     expect(await screen.findByText('Client view.')).toBeInTheDocument();
     expect(await screen.findAllByText('Priya Raman')).not.toHaveLength(0);
     expect(window.location.pathname).toBe('/c/demo');
     expect(screen.queryByRole('button', { name: 'Share internally' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Share with client' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Assessment' })).not.toBeInTheDocument();
+    expect(rolesApi.getApplication).not.toHaveBeenCalled();
+  });
+
+  it('shows the completed Assessment pane in the read-only internal product preview', async () => {
+    localStorage.clear();
+
+    renderAppAt('/c/demo?view=internal&showcase=1&tab=assessment');
+
+    expect(await screen.findByText('Product preview.')).toBeInTheDocument();
+    const assessmentLink = await screen.findByRole('link', { name: 'Assessment' });
+    expect(assessmentLink).toHaveAttribute('aria-current', 'page');
+    expect(await screen.findByLabelText('Assessment scorecard — the 5 Ds')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Share internally' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Share with client' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Actions' })).not.toBeInTheDocument();
+    expect(screen.queryByText('YOUR EVALUATION')).not.toBeInTheDocument();
+    expect(assessmentsApi.remove).not.toHaveBeenCalled();
+    expect(assessmentsApi.updateManualEvaluation).not.toHaveBeenCalled();
     expect(rolesApi.getApplication).not.toHaveBeenCalled();
   });
 
