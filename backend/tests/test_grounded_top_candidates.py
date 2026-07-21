@@ -409,10 +409,12 @@ def test_grounding_threads_role_into_each_admitted_call(monkeypatch):
         organization_id=1,
         role_id=88,
         application_id=9,
+        require_role_authority=True,
     )
 
     assert out[0].status == "met"
     assert captured[0]["role_id"] == 88
+    assert captured[0]["require_role_authority"] is True
     assert client.requests[0]["metering"]["role_id"] == 88
 
 

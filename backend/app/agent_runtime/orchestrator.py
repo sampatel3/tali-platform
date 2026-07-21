@@ -18,6 +18,14 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from ..agent_chat.events import try_post_agent_run_event
+from ..candidate_search.tool_failure_contract import (
+    CANDIDATE_SEARCH_UNAVAILABLE_CODE,
+    candidate_search_result_failed,
+    candidate_search_tools_first,
+    is_candidate_search_tool,
+    new_candidate_search_incident_id,
+    unexpected_tool_failure_result,
+)
 from ..models.agent_run import AgentRun
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.organization import Organization
@@ -35,7 +43,7 @@ from ..services.usage_metering_service import InsufficientCreditsError
 from . import budget_guard, calibration, data_readiness
 from .system_prompt import PROMPT_VERSION, build_system_prompt
 from .tool_registry import (
-    QUEUE_DECISION_TOOL_NAMES,
+    QUEUE_DECISION_TOOL_NAMES as QUEUE_DECISION_TOOL_NAMES,
     dispatch,
     is_run_complete,
     tools_for_role,
@@ -412,8 +420,8 @@ def run_cycle(
         _emit_cycle_abort_event(
             db, run=run, application_id=application_id,
             reason=(
-                f"Agent paused — monthly budget cap reached for this role. "
-                f"Raise the monthly cap above current spend to resume."
+                "Agent paused — monthly budget cap reached for this role. "
+                "Raise the monthly cap above current spend to resume."
             ),
         )
         try_post_agent_run_event(db, role=role, run=run)
@@ -764,6 +772,7 @@ def run_cycle(
         round_tool_count = 0
         round_error_count = 0
         control_aborted_during_tools = False
+        search_failure_incident: str | None = None
 
         # Persist the provider usage before isolating each tool in its own
         # transaction. This lets a failed tool roll back only its own partial
@@ -773,9 +782,7 @@ def run_cycle(
         db.refresh(run)
         db.refresh(role)
 
-        for block in assistant_blocks:
-            if block.get("type") != "tool_use":
-                continue
+        for block in candidate_search_tools_first(assistant_blocks):
             control_abort = _control_state_abort_reason(lock=True)
             if control_abort is not None:
                 run.status = "aborted"
@@ -788,6 +795,13 @@ def run_cycle(
             args = block.get("input") or {}
             round_tool_count += 1
             tools_called_summary[name] = tools_called_summary.get(name, 0) + 1
+            provider_capable_search = is_candidate_search_tool(name)
+            if provider_capable_search:
+                # The authority fence above uses FOR UPDATE. Paid search
+                # admission owns the same Organization/Role locks in an
+                # independent session, so release our fence before dispatch or
+                # the worker deadlocks itself waiting in both directions.
+                db.commit()
 
             try:
                 result = dispatch(name, args, db=db, agent_run=run, role=role)
@@ -799,9 +813,55 @@ def run_cycle(
                 if is_run_complete(result):
                     run_complete_payload = result
                 is_error = False
-            except Exception as exc:
-                logger.exception("agent_runtime: tool %s failed", name)
-                result = {"error": str(exc), "tool": name}
+                if candidate_search_result_failed(name, result):
+                    search_failure_incident = new_candidate_search_incident_id()
+                    logger.warning(
+                        "agent_runtime: candidate search unavailable tool=%s "
+                        "incident_id=%s",
+                        name,
+                        search_failure_incident,
+                    )
+                    db.rollback()
+                    db.refresh(run)
+                    db.refresh(role)
+                    run.status = "failed"
+                    run.error = (
+                        f"{CANDIDATE_SEARCH_UNAVAILABLE_CODE}:"
+                        f"{search_failure_incident}"
+                    )
+                    break
+                if provider_capable_search:
+                    # Make the verified report durable, then re-acquire the
+                    # authority fence. A recruiter may have paused/changed the
+                    # role while the paid read was in flight; never continue to
+                    # a later mutation from stale authority.
+                    db.commit()
+                    control_abort = _control_state_abort_reason(lock=True)
+                    if control_abort is not None:
+                        run.status = "aborted"
+                        run.error = control_abort
+                        control_aborted_during_tools = True
+                        db.commit()
+                        break
+            except Exception:
+                incident_id = new_candidate_search_incident_id()
+                logger.exception(
+                    "agent_runtime: tool %s failed incident_id=%s",
+                    name,
+                    incident_id,
+                )
+                if is_candidate_search_tool(name):
+                    db.rollback()
+                    db.refresh(run)
+                    db.refresh(role)
+                    search_failure_incident = incident_id
+                    run.status = "failed"
+                    run.error = f"{CANDIDATE_SEARCH_UNAVAILABLE_CODE}:{incident_id}"
+                    break
+                result = unexpected_tool_failure_result(
+                    tool=name,
+                    incident_id=incident_id,
+                )
                 is_error = True
             if is_error:
                 round_error_count += 1
@@ -824,6 +884,8 @@ def run_cycle(
             )
 
         if control_aborted_during_tools:
+            break
+        if search_failure_incident is not None:
             break
 
         messages.append({"role": "user", "content": tool_results})
@@ -866,8 +928,8 @@ def run_cycle(
                 f"did not reach a decision. Will retry on the next tick."
             ),
             "failed": (
-                f"Agent cycle failed with an error during deliberation. "
-                f"See agent_runs.error for details."
+                "Agent cycle failed with an error during deliberation. "
+                "See agent_runs.error for details."
             ),
             "budget_paused": (
                 f"Agent paused mid-cycle — {run.error or 'a spend guard was reached'}. "

@@ -253,8 +253,11 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
                 const isError =
                   payload.result &&
                   typeof payload.result === 'object' &&
-                  'error' in payload.result &&
-                  Object.keys(payload.result).length <= 3;
+                  (
+                    'error' in payload.result ||
+                    payload.result.code === 'candidate_search_unavailable' ||
+                    payload.result.search_completed === false
+                  );
                 updateAssistant((m) => {
                   const next = m.parts.slice();
                   const idx = next.findIndex(

@@ -112,6 +112,7 @@ def parse_nl_query(
     organization_id: int | None = None,
     role_id: int | None = None,
     metering: dict | None = None,
+    require_role_authority: bool = False,
 ) -> ParsedFilter:
     """Parse one NL query. Never raises; returns a best-effort ``ParsedFilter``.
 
@@ -180,6 +181,7 @@ def parse_nl_query(
                 else None
             ),
             base_metering=base_metering,
+            require_role_authority=bool(require_role_authority),
         )
     except Exception as exc:
         logger.warning("Parser blocked by usage admission: %s", exc)

@@ -172,6 +172,67 @@ def test_nl_search_candidates_caps_limit(db):
     assert out["total_matched"] == 5  # raw match count is unaffected
 
 
+def test_autonomous_authority_reaches_all_candidate_search_engines(db):
+    user, org = _make_user_and_org(db)
+    user.require_role_authority = True
+    role = Role(organization_id=org.id, name="Authority", source="manual")
+    db.add(role)
+    db.commit()
+    empty = SearchOutput(
+        application_ids=[],
+        parsed_filter=ParsedFilter(),
+        warnings=[],
+        rerank_applied=False,
+    )
+
+    with patch(
+        "app.candidate_search.runner.run_search", return_value=empty
+    ) as runner:
+        handlers.nl_search_candidates(
+            db,
+            user,
+            query="payments",
+            role_id=role.id,
+        )
+    assert runner.call_args.kwargs["require_role_authority"] is True
+
+    with (
+        patch(
+            "app.candidate_search.top_candidates.find_top_candidates",
+            return_value={"candidates": []},
+        ) as top_engine,
+        patch(
+            "app.mcp.handlers._attach_shareable_candidate_report",
+            side_effect=lambda _db, _user, **kwargs: kwargs["snapshot"],
+        ),
+    ):
+        handlers.find_top_candidates(
+            db,
+            user,
+            query="payments",
+            role_id=role.id,
+        )
+    assert top_engine.call_args.kwargs["require_role_authority"] is True
+
+    with (
+        patch(
+            "app.candidate_search.top_candidates.screen_pool_against_requirement",
+            return_value={"candidates": []},
+        ) as screen_engine,
+        patch(
+            "app.mcp.handlers._attach_shareable_candidate_report",
+            side_effect=lambda _db, _user, **kwargs: kwargs["snapshot"],
+        ),
+    ):
+        handlers.screen_pool_against_requirement(
+            db,
+            user,
+            requirement_text="payments",
+            role_id=role.id,
+        )
+    assert screen_engine.call_args.kwargs["require_role_authority"] is True
+
+
 def test_nl_search_candidates_supports_person_result_pagination(db):
     user, org = _make_user_and_org(db)
     role = Role(organization_id=org.id, name="X", source="manual")

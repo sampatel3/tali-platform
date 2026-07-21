@@ -12,11 +12,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-
-from app.models.taali_chat_conversation import TaaliChatConversation
-from app.models.taali_chat_message import TaaliChatMessage
-from app.platform.database import SessionLocal
 from tests.conftest import auth_headers
 
 
@@ -121,6 +116,27 @@ def test_post_turn_streams_aisdk_frames(client, db):
 
     # Streaming must end with a `d:` finish frame.
     assert any(line.startswith("d:") for line in body.splitlines())
+
+
+def test_post_turn_outer_failure_never_leaks_raw_exception(client, db):
+    headers, _email = auth_headers(client, organization_name="ChatRouteFailureOrg")
+    raw_marker = "SELECT secret FROM candidates"
+
+    def fail_turn(**_kwargs):
+        raise RuntimeError(raw_marker)
+
+    with patch("app.domains.taali_chat.routes.run_chat_turn", side_effect=fail_turn):
+        response = client.post(
+            "/api/v1/taali-chat/turn",
+            headers=headers,
+            json={"message": "find candidates"},
+        )
+
+    assert response.status_code == 200
+    assert raw_marker not in response.text
+    assert "the chat could not complete" in response.text
+    assert any(line.startswith("3:") for line in response.text.splitlines())
+    assert any(line.startswith("d:") for line in response.text.splitlines())
 
 
 def test_post_turn_persists_conversation_visible_via_list_endpoint(client, db):

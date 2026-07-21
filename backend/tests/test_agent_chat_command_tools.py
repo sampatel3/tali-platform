@@ -6,6 +6,12 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
+from app.candidate_search.tool_failure_contract import (
+    CANDIDATE_SEARCH_UNAVAILABLE_CODE,
+    CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE,
+)
 from app.agent_chat.engine import persist_user_message, run_agent_response
 from app.agent_chat.tools import AGENT_CHAT_TOOLS, dispatch_tool
 from app.models.agent_conversation import (
@@ -514,3 +520,222 @@ def test_model_round_cannot_batch_two_state_changes(db):
     assert len(tool_results.content) == 2
     assert all(block["is_error"] is True for block in tool_results.content)
     assert all("one state-changing command" in block["content"] for block in tool_results.content)
+
+
+def test_candidate_search_failure_is_terminal_sanitized_and_precedes_mutation(db):
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message="Set the threshold, then find the strongest PySpark candidates.",
+    )
+    tool_round = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="tool_use",
+                id="mutation-first-in-model-output",
+                name="set_threshold",
+                input={"threshold": 70},
+            ),
+            SimpleNamespace(
+                type="tool_use",
+                id="search-second-in-model-output",
+                name="find_top_candidates",
+                input={"query": "PySpark experience"},
+            ),
+        ],
+        stop_reason="tool_use",
+    )
+    raw_marker = str(organization.slug)
+    dispatched: list[str] = []
+
+    def fail_search(name, *_args, **_kwargs):
+        dispatched.append(name)
+        tool_db = _kwargs["db"]
+        tool_db.add(Organization(name="Duplicate", slug=raw_marker))
+        tool_db.flush()  # real IntegrityError leaves the Session rollback-only
+        raise AssertionError("duplicate organization flush should fail")
+
+    with (
+        patch("app.agent_chat.engine.get_client_for_org", return_value=object()),
+        patch("app.agent_chat.engine.reserve"),
+        patch("app.agent_chat.engine.one_call", return_value=tool_round) as model_call,
+        patch("app.agent_chat.engine.dispatch_tool", side_effect=fail_search),
+        patch.object(db, "rollback", wraps=db.rollback) as rollback,
+    ):
+        assistant = run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+    db.commit()  # proves the terminal transcript survives failed-transaction recovery
+
+    assert assistant.text == CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE
+    assert assistant.stop_reason == CANDIDATE_SEARCH_UNAVAILABLE_CODE
+    assert model_call.call_count == 1
+    assert dispatched == ["find_top_candidates"]
+    rollback.assert_called_once()
+
+    hidden_result = (
+        db.query(AgentConversationMessage)
+        .filter(
+            AgentConversationMessage.conversation_id == int(conversation.id),
+            AgentConversationMessage.kind == MESSAGE_KIND_TOOL,
+            AgentConversationMessage.author_role == AUTHOR_ROLE_USER,
+        )
+        .order_by(AgentConversationMessage.id.desc())
+        .first()
+    )
+    assert [block["tool_use_id"] for block in hidden_result.content] == [
+        "mutation-first-in-model-output",
+        "search-second-in-model-output",
+    ]
+    serialized = json.dumps(hidden_result.content)
+    assert raw_marker not in serialized
+    assert "not_executed_after_search_failure" in serialized
+    assert CANDIDATE_SEARCH_UNAVAILABLE_CODE in serialized
+
+
+@pytest.mark.parametrize(
+    "failure_shape",
+    [
+        {"warnings": [{"code": "rerank_skipped"}], "candidates": []},
+        {"warnings": [{"code": "search_plan_failed"}], "applications": []},
+        {
+            "warnings": [{"code": "evidence_incomplete"}],
+            "candidates": [],
+            "returned": 0,
+            "evidence_succeeded": 0,
+            "is_exact_empty": False,
+        },
+    ],
+)
+def test_warning_shaped_search_failure_is_terminal_and_discards_raw_message(
+    db, failure_shape
+):
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message="Find PySpark candidates.",
+    )
+    tool_round = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="tool_use",
+                id="warning-search",
+                name="find_top_candidates",
+                input={"query": "PySpark experience"},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    raw_marker = "raw reranker/provider exception"
+    failure_shape["warnings"][0]["message"] = raw_marker
+
+    with (
+        patch("app.agent_chat.engine.get_client_for_org", return_value=object()),
+        patch("app.agent_chat.engine.reserve"),
+        patch(
+            "app.agent_chat.engine.one_call",
+            side_effect=[tool_round],
+        ) as model_call,
+        patch(
+            "app.agent_chat.engine.dispatch_tool",
+            return_value=failure_shape,
+        ),
+    ):
+        assistant = run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+    db.commit()
+
+    assert assistant.text == CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE
+    assert model_call.call_count == 1
+    transcript = json.dumps(
+        [
+            row.content
+            for row in db.query(AgentConversationMessage)
+            .filter(AgentConversationMessage.conversation_id == conversation.id)
+            .all()
+        ]
+    )
+    assert CANDIDATE_SEARCH_UNAVAILABLE_CODE in transcript
+    assert raw_marker not in transcript
+
+
+def test_unexpected_non_search_tool_error_is_sanitized_before_model_followup(db):
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    raw_marker = str(organization.slug)
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message="Show the role overview.",
+    )
+    tool_round = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="tool_use",
+                id="overview",
+                name="get_role_overview",
+                input={},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    final_round = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="That tool could not be completed.")],
+        stop_reason="end_turn",
+    )
+
+    def fail_tool(_name, *_args, **kwargs):
+        tool_db = kwargs["db"]
+        tool_db.add(Organization(name="Duplicate", slug=raw_marker))
+        tool_db.flush()
+        raise AssertionError("duplicate organization flush should fail")
+
+    with (
+        patch("app.agent_chat.engine.get_client_for_org", return_value=object()),
+        patch("app.agent_chat.engine.reserve"),
+        patch(
+            "app.agent_chat.engine.one_call",
+            side_effect=[tool_round, final_round],
+        ) as model_call,
+        patch("app.agent_chat.engine.dispatch_tool", side_effect=fail_tool),
+    ):
+        assistant = run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+    db.commit()
+
+    assert assistant.text == "That tool could not be completed."
+    assert model_call.call_count == 2
+    model_visible = json.dumps(model_call.call_args_list[1].kwargs["messages"])
+    assert "tool_execution_failed" in model_visible
+    assert raw_marker not in model_visible
+    persisted = json.dumps(
+        [
+            row.content
+            for row in db.query(AgentConversationMessage)
+            .filter(AgentConversationMessage.conversation_id == conversation.id)
+            .all()
+        ]
+    )
+    assert "tool_execution_failed" in persisted
+    assert raw_marker not in persisted

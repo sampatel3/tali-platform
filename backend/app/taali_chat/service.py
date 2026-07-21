@@ -29,6 +29,9 @@ from typing import Any, Iterator
 
 from sqlalchemy.orm import Session
 
+from ..candidate_search.tool_failure_contract import (
+    CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE,
+)
 from ..models.organization import Organization
 from ..models.taali_chat_conversation import TaaliChatConversation
 from ..models.taali_chat_message import (
@@ -40,17 +43,19 @@ from ..models.user import User
 from ..platform.config import settings
 from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
-from ..services.usage_metering_service import record_event
+from ..services.usage_metering_service import record_event as record_event
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import streaming
-from .persistence import result_for_storage
 from .stream_round import (
     CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
     _RunningUsage,
     _stream_one_round,
 )
 from .system_prompt import build_system_blocks
-from .tool_registry import dispatch_tool
+from .tool_execution import (
+    _arguments_with_role_scope as _arguments_with_role_scope,
+    execute_tool_round,
+)
 
 logger = logging.getLogger("taali.taali_chat")
 
@@ -61,45 +66,6 @@ logger = logging.getLogger("taali.taali_chat")
 MAX_TOOL_ROUNDS = 8
 MAX_IDENTICAL_TOOL_ROUNDS = 2
 MAX_CONSECUTIVE_ERROR_ROUNDS = 2
-
-# Tools whose results must stay scoped to the conversation's role. The
-# system prompt tells the model it may omit role_id for these in a
-# role-scoped chat ("the conversation's role scope applies"); the handlers
-# only filter when role_id is not None, so we inject the conversation's
-# role_id here when the model leaves it out — otherwise an omitted role_id
-# leaks org-wide results.
-_ROLE_SCOPED_TOOLS = frozenset(
-    {
-        "search_applications",
-        "find_top_candidates",
-        "screen_pool_against_requirement",
-        "nl_search_candidates",
-        "graph_search_candidates",
-        "list_recent_agent_decisions",
-        "list_recent_agent_runs",
-        "get_recruiting_overview",
-        "list_assessments",
-        "preview_related_role",
-        "create_related_role",
-    }
-)
-
-
-def _arguments_with_role_scope(
-    name: str,
-    arguments: dict[str, Any],
-    *,
-    conversation_role_id: int | None,
-) -> dict[str, Any]:
-    """Apply a role-scoped conversation's default to optional-role tools."""
-
-    if (
-        name in _ROLE_SCOPED_TOOLS
-        and conversation_role_id is not None
-        and arguments.get("role_id") is None
-    ):
-        return {**arguments, "role_id": int(conversation_role_id)}
-    return arguments
 
 
 @dataclass
@@ -373,8 +339,9 @@ def run_chat_turn(
             )
             break
 
-        tool_results: list[dict[str, Any]] = []
-        stored_tool_results: list[dict[str, Any]] = []
+        tool_blocks = [
+            block for block in assistant_blocks if block.get("type") == "tool_use"
+        ]
         signature = json.dumps(
             [
                 {"name": b.get("name"), "input": b.get("input") or {}}
@@ -395,54 +362,19 @@ def run_chat_turn(
             final_stop_reason = "stop"
             break
 
-        tool_count = 0
-        error_count = 0
-        for block in assistant_blocks:
-            if block.get("type") != "tool_use":
-                continue
-            tool_call_id = str(block["id"])
-            name = str(block["name"])
-            args = block.get("input") or {}
-            tool_count += 1
-            # Apply the conversation's default role whenever an optional-role
-            # tool omits it. An explicitly supplied role remains valid so a
-            # recruiter can make a deliberate cross-role comparison without
-            # abandoning the conversation.
-            args = _arguments_with_role_scope(
-                name,
-                args,
-                conversation_role_id=conversation.role_id,
-            )
-            try:
-                result = dispatch_tool(
-                    name, args, db=db, user=user, conversation=conversation, messages=messages
-                )
-                is_error = False
-            except Exception as exc:
-                logger.exception("Tool %s failed: %s", name, exc)
-                result = {"error": str(exc), "tool": name}
-                is_error = True
-            if is_error:
-                error_count += 1
-            yield streaming.tool_result(tool_call_id=tool_call_id, result=result)
-            tool_results.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tool_call_id,
-                    "content": json.dumps(result, default=str),
-                    "is_error": is_error,
-                }
-            )
-            stored_tool_results.append(
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tool_call_id,
-                    "content": json.dumps(
-                        result if is_error else result_for_storage(name, result),
-                        default=str,
-                    ),
-                    "is_error": is_error,
-                }
+        round_result = execute_tool_round(
+            db=db,
+            user=user,
+            conversation=conversation,
+            assistant_blocks=assistant_blocks,
+            messages=messages,
+        )
+        tool_results = round_result.live_results
+        stored_tool_results = round_result.stored_results
+        for result in tool_results:
+            yield streaming.tool_result(
+                tool_call_id=str(result["tool_use_id"]),
+                result=json.loads(str(result["content"])),
             )
 
         # Persist the assistant turn (with tool_use blocks) and the
@@ -469,7 +401,22 @@ def run_chat_turn(
             content=stored_tool_results,
         )
         messages.append({"role": "user", "content": tool_results})
-        if tool_count > 0 and error_count == tool_count:
+        if round_result.search_failure_incident is not None:
+            safe_content = [
+                {"type": "text", "text": CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE}
+            ]
+            yield streaming.text_delta(CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE)
+            _persist_message(
+                db,
+                conversation=conversation,
+                role=ROLE_ASSISTANT,
+                content=safe_content,
+                model=model,
+                stop_reason="stop",
+            )
+            final_stop_reason = "stop"
+            break
+        if tool_blocks and round_result.error_count == len(tool_blocks):
             consecutive_error_rounds += 1
         else:
             consecutive_error_rounds = 0

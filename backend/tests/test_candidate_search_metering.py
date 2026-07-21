@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
+from app.candidate_search.metering import admitted_search_metering
 from app.candidate_search.parser import parse_nl_query
 from app.models.billing_credit_ledger import BillingCreditLedger
 from app.models.organization import Organization
@@ -14,6 +18,7 @@ from app.platform.config import settings
 from app.services.metered_anthropic_client import MeteredAnthropicClient
 from app.services.pricing_service import Feature
 from app.services.provider_usage_admission import reserve_provider_usage
+from app.services.provider_usage_admission import AutomaticProviderAuthorityError
 
 
 class _ParserMessages:
@@ -60,6 +65,7 @@ def _seed(db, *, balance: int, role_budget_cents: int | None = None):
             name="Search role",
             source="requisition",
             monthly_usd_budget_cents=int(role_budget_cents),
+            agentic_mode_enabled=True,
         )
         db.add(role)
     db.commit()
@@ -148,6 +154,33 @@ def test_role_search_enforces_role_cap_before_provider(db, monkeypatch):
         .count()
         == 1
     )
+
+
+@pytest.mark.parametrize("pause_scope", ("role", "workspace"))
+def test_autonomous_search_admission_rechecks_pause_before_reserving(
+    db, monkeypatch, pause_scope
+):
+    monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
+    org, role = _seed(db, balance=100_000, role_budget_cents=100)
+    assert role is not None
+    if pause_scope == "role":
+        role.agent_paused_at = datetime.now(timezone.utc)
+    else:
+        org.agent_workspace_paused_at = datetime.now(timezone.utc)
+    db.commit()
+
+    before = db.query(BillingCreditLedger).count()
+    with pytest.raises(AutomaticProviderAuthorityError, match="paused"):
+        admitted_search_metering(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            feature=Feature.SEARCH_PARSE,
+            entity_id=None,
+            sub_feature="candidate_search_parse",
+            require_role_authority=True,
+        )
+
+    assert db.query(BillingCreditLedger).count() == before
 
 
 def test_actual_overage_is_explicit_and_never_makes_balance_negative(

@@ -85,6 +85,7 @@ def run_hybrid_retrieval(
     graph_clause_ids: Iterable[str] = (),
     graph_requirements: Iterable[GraphEvidenceRequirement] = (),
     graph_limit: int = DEFAULT_SEARCH_LIMIT,
+    require_role_authority: bool = False,
     mode: RetrievalMode = RetrievalMode.HYBRID,
     graph_weight: float = 2.0,
     postgres_weight: float = 1.0,
@@ -122,7 +123,7 @@ def run_hybrid_retrieval(
     selected_graph = graph_result
     if mode in (RetrievalMode.GRAPH_ONLY, RetrievalMode.HYBRID):
         if selected_graph is None:
-            selected_graph = retrieve_graph_backend(
+            graph_kwargs = dict(
                 query=query,
                 organization_id=organization_id,
                 role_id=role_id,
@@ -133,6 +134,9 @@ def run_hybrid_retrieval(
                 graph_requirements=normalized_requirements,
                 graph_limit=graph_limit,
             )
+            if require_role_authority:
+                graph_kwargs["require_role_authority"] = True
+            selected_graph = retrieve_graph_backend(**graph_kwargs)
 
     return fuse_retrieval_results(
         mode=mode,
@@ -156,6 +160,7 @@ def retrieve_graph_backend(
     graph_clause_ids: Iterable[str] = (),
     graph_requirements: Iterable[GraphEvidenceRequirement] = (),
     graph_limit: int = DEFAULT_SEARCH_LIMIT,
+    require_role_authority: bool = False,
 ) -> BackendResult:
     """Execute one graph recall pass before PostgreSQL re-authorization."""
 
@@ -166,6 +171,8 @@ def retrieve_graph_backend(
         "queries": (normalized_query,),
         "limit_per_query": graph_limit,
     }
+    if require_role_authority:
+        search_kwargs["require_role_authority"] = True
     try:
         if graph_search_fn is None:
             cache_key = GraphRetrievalCacheKey(

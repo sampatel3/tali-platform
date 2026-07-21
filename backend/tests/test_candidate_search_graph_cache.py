@@ -17,6 +17,7 @@ from app.candidate_search.graph_retrieval_cache import (
     GraphRetrievalCacheKey,
 )
 from app.candidate_search.retrieval import BackendStatus
+from app.services.metered_async_anthropic_client import GraphProviderAdmissionError
 
 
 @pytest.fixture(autouse=True)
@@ -129,6 +130,28 @@ def test_injected_graph_search_is_never_cached():
         assert result.status is BackendStatus.UNAVAILABLE
 
     assert len(calls) == 2
+
+
+def test_authority_denial_is_not_cached_as_a_graph_result(monkeypatch):
+    calls = 0
+
+    def denied(**_kwargs):
+        nonlocal calls
+        calls += 1
+        raise GraphProviderAdmissionError("role agent is paused")
+
+    monkeypatch.setattr(hybrid, "_default_graph_search", denied)
+    for _ in range(2):
+        result = hybrid.retrieve_graph_backend(
+            query="payments",
+            organization_id=1,
+            role_id=2,
+            require_role_authority=True,
+        )
+        assert result.status is BackendStatus.ERROR
+
+    assert calls == 2
+    assert hybrid.graph_retrieval_cache.size == 0
 
 
 def test_cache_is_lru_bounded_and_entries_expire():
