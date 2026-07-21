@@ -50,13 +50,16 @@ const CandidateCard = ({ row }) => {
 
 // Renders candidate-grid results from search_applications /
 // nl_search_candidates / graph_search_candidates / compare_applications.
-const CandidateGrid = ({ rows }) => {
+const CandidateGrid = ({ rows, emptyMessage }) => {
   if (!rows?.length) {
     return (
       <ChatArtifact
         eyebrow="Candidate results"
-        title="No candidates matched"
-        summary="Try widening the filters or asking for a different signal."
+        title={emptyMessage?.title || 'No candidates matched'}
+        summary={
+          emptyMessage?.summary
+          || 'Try widening the filters or asking for a different signal.'
+        }
         icon={UsersRound}
       />
     );

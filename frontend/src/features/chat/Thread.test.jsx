@@ -49,8 +49,8 @@ describe('SearchCoverage', () => {
       />,
     );
     expect(screen.getByText('25 shown')).toBeInTheDocument();
-    expect(screen.getByText('1534 database matches')).toBeInTheDocument();
-    expect(screen.getByText(/full database search/)).toBeInTheDocument();
+    expect(screen.getByText('1534 retrieval matches')).toBeInTheDocument();
+    expect(screen.getByText(/complete retrieval/)).toBeInTheDocument();
   });
 
   it('discloses bounded verification', () => {
@@ -60,6 +60,25 @@ describe('SearchCoverage', () => {
       />,
     );
     expect(screen.getByText(/50 deep-checked · partial verification/)).toBeInTheDocument();
+  });
+
+  it('separates graph-rescued retrieval matches from PostgreSQL matches', () => {
+    render(
+      <SearchCoverage
+        data={{
+          total_matched: 1,
+          retrieval_matches: 1,
+          database_matches: 0,
+          returned: 1,
+          deep_checked: 0,
+          capped: false,
+          exhaustive: false,
+        }}
+      />,
+    );
+
+    expect(screen.getByText('1 retrieval match · 0 PostgreSQL')).toBeInTheDocument();
+    expect(screen.getByText(/partial retrieval/)).toBeInTheDocument();
   });
 
   it('separates completed evidence checks from verifier failures and shows warnings', () => {
@@ -88,6 +107,79 @@ describe('SearchCoverage', () => {
 });
 
 describe('grounded search results', () => {
+  it('shows graph-search coverage and does not claim an exact zero when partial', () => {
+    render(
+      <ToolResultRender
+        part={{
+          toolName: 'graph_search_candidates',
+          result: {
+            applications: [],
+            total_matched: 0,
+            returned: 0,
+            exhaustive: false,
+            capped: false,
+            is_exact_empty: false,
+            warnings: [{ message: 'Graph coverage is partial.' }],
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByLabelText('Partial candidate search coverage')).toBeInTheDocument();
+    expect(screen.getByText('No candidates retrieved')).toBeInTheDocument();
+    expect(screen.getByText(/not a confirmed zero/)).toBeInTheDocument();
+    expect(screen.queryByText('No candidates matched')).not.toBeInTheDocument();
+  });
+
+  it('keeps the definitive empty message only for an exact zero', () => {
+    render(
+      <ToolResultRender
+        part={{
+          toolName: 'nl_search_candidates',
+          result: {
+            applications: [],
+            total_matched: 0,
+            returned: 0,
+            exhaustive: true,
+            capped: false,
+            is_exact_empty: true,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('No candidates matched')).toBeInTheDocument();
+    expect(screen.queryByText('No candidates retrieved')).not.toBeInTheDocument();
+  });
+
+  it('distinguishes a complete verified zero from partial retrieval', () => {
+    render(
+      <ToolResultRender
+        part={{
+          toolName: 'nl_search_candidates',
+          result: {
+            applications: [],
+            total_matched: 2,
+            retrieval_matches: 2,
+            returned: 0,
+            deep_checked: 2,
+            evidence_succeeded: 2,
+            evidence_failed: 0,
+            qualified: 0,
+            exhaustive: true,
+            capped: false,
+            is_exact_empty: false,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText('No candidates met the verified requirements'))
+      .toBeInTheDocument();
+    expect(screen.getByText(/Every retrieved candidate was checked/)).toBeInTheDocument();
+    expect(screen.queryByText('No candidates retrieved')).not.toBeInTheDocument();
+  });
+
   it('renders evidence and the shareable report from a top-candidate tool result', () => {
     render(
       <ToolResultRender

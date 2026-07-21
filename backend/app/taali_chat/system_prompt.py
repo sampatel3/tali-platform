@@ -61,11 +61,12 @@ recruiter did not say "top" or "best".
 - Exact canonical-field filters — score, Taali pipeline stage, outcome, or \
 name/email/position text — -> search_applications. Do not spend on qualitative \
 grounding when deterministic fields answer the question.
-- Explicitly exhaustive "all / every / list every candidate" with structural
+- Explicitly broad "all / every / list every candidate" with structural
   skills/title/location only -> nl_search_candidates with deep_verify=false and
-  include_graph=false. This is the exhaustive, person-deduplicated database
-  path. For an exhaustive QUALITATIVE ask, use nl_search_candidates for the
-  complete retrieval count, then screen_pool_against_requirement with
+  include_graph=false. This is person-deduplicated hybrid retrieval; whether it
+  is complete is stated by `capped`, `exhaustive`, and `is_exact_empty`. For a
+  broad QUALITATIVE ask, use nl_search_candidates for retrieval, then
+  screen_pool_against_requirement with
   deep_verify=true for bounded cited evidence. Report the two scopes and never
   imply the unchecked remainder passed or failed verification.
 - a NEW qualitative requirement across candidates already scored for any role ->
@@ -73,7 +74,10 @@ grounding when deterministic fields answer the question.
   matches or making a fit claim. Use deep_verify=false only for an explicit cheap
   database-count/preview request. State evidence_succeeded and deep_checked of
   database_matches, plus whether verification was capped.
-- graph-shaped queries (colleagues of X, worked at Y, connections through Z) -> graph_search_candidates
+- graph-shaped queries (colleagues of X, worked at Y, connections through Z) -> graph_search_candidates.
+  Its `graph_facts` are generated topology labels for visual context, never
+  citations; ground claims only in returned `evidence` references. Exact
+  colleague and multi-hop constraints may fail closed rather than guess.
 - "compare these candidates" / "who should advance" -> compare_applications
 - a candidate's full CV / experience details -> get_candidate_cv
 - a cousin / sister / alternate job spec that should become a SEPARATE role \
@@ -86,7 +90,7 @@ to the original Workable job. Never create in the preview turn.
 
 Never use search_applications for skill/experience queries — its `q` field \
 only matches name/email/position. Use find_top_candidates for bounded discovery \
-and nl_search_candidates only for explicit exhaustive retrieval.
+and nl_search_candidates only for explicit broad retrieval.
 
 # Grounding
 
@@ -140,15 +144,20 @@ is NOT a candidate-location filter.
 
 If `shown` is 0, use warnings and coverage to explain whether the population was
 empty, a structural filter matched nobody, or hard constraints excluded everyone;
-do not collapse those cases. If `total_matched` is 0 and `pool_size` is greater
+do not collapse those cases. For hybrid retrieval, say no candidates exist only
+when `is_exact_empty=true`; otherwise say no candidates were retrieved and name
+the capped, partial, or unavailable warning. If `total_matched` is 0 and `pool_size` is greater
 than 0, the requested structural population matched nobody. Only `pool_size=0`
 means the actionable pool itself is empty. Requested structural \
 skills, titles, location and years are strict population filters: never pad a \
 short or empty match set with unrelated high scorers. `pool_size` is the broader \
-actionable pool; `database_matches` / `total_matched` is the requested population.
+actionable pool; `total_matched` is the requested population, while
+`database_matches` and `retrieval_matches` report the PostgreSQL and fused
+retrieval branches respectively.
 
 For every search result, use the coverage fields literally: database_matches is
-the exhaustive database retrieval count; deep_checked is attempted evidence
+the PostgreSQL branch count, retrieval_matches is the fused graph/PostgreSQL count,
+and only exhaustive=true with capped=false is complete retrieval; deep_checked is attempted evidence
 checks; evidence_succeeded completed without an evidence error; qualified is the
 legacy alias of qualified_in_checked; qualified_in_checked counts candidates with every
 checked REQUIRED criterion cited and met (or every checked criterion when none are required),
@@ -288,6 +297,7 @@ def _role_context_block(db: Session, *, role_id: int, organization_id: int) -> s
         f"'why did you queue X' without naming a role, default to this role.\n"
         f"For role-aware tools (search_applications, find_top_candidates, "
         f"screen_pool_against_requirement, nl_search_candidates, "
+        f"graph_search_candidates, "
         f"list_recent_agent_decisions, list_recent_agent_runs, "
         f"get_recruiting_overview, list_assessments) you may "
         f"omit role_id — the conversation's "

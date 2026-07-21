@@ -1,9 +1,9 @@
 """Search adapters: Graphiti -> the shapes the rest of Tali expects.
 
-Three public callables, signature-compatible with the previous Cypher
-implementation so callers (the search runner, the rerank step, the
-endpoint) need only re-import:
+Public callables preserve the previous Cypher adapters and add typed semantic
+candidate-evidence retrieval:
 
+- ``search_candidate_evidence(...) -> GraphEvidenceSearchResult``
 - ``candidate_ids_matching_all(organization_id, predicates, role_id=None) -> list[int]``
 - ``subgraph_for_candidates(organization_id, candidate_ids, db=None) -> GraphPayload``
 - ``colleague_neighbourhood(organization_id, candidate_id) -> dict``
@@ -21,9 +21,11 @@ All three are sync; they call Graphiti through ``client.run_async``.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from contextlib import contextmanager
-from typing import Any, Iterable
+from dataclasses import dataclass
+from typing import Any, Iterable, Literal
 
 from . import client as graph_client
 from ..candidate_search.schemas import (
@@ -44,6 +46,44 @@ DEFAULT_SEARCH_LIMIT = 50
 SUBGRAPH_LIMIT = 500
 NEIGHBOURHOOD_LIMIT = 60
 
+GraphEvidenceBackendStatus = Literal["ok", "unavailable", "error"]
+
+
+@dataclass(frozen=True, slots=True)
+class GraphEpisodeEvidence:
+    """Original Graphiti episode retained as the citeable source."""
+
+    uuid: str
+    name: str
+    content: str
+    source_description: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class GraphCandidateEvidenceHit:
+    """One ranked semantic edge mapped to a Tali candidate."""
+
+    candidate_id: int
+    query: str
+    query_index: int
+    rank: int
+    edge_uuid: str
+    fact: str
+    source_name: str | None
+    target_name: str | None
+    episodes: tuple[GraphEpisodeEvidence, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GraphEvidenceSearchResult:
+    """Typed graph result that never conflates failure with zero matches."""
+
+    status: GraphEvidenceBackendStatus
+    hits: tuple[GraphCandidateEvidenceHit, ...] = ()
+    capped: bool = False
+    exhaustive: bool = False
+    errors: tuple[str, ...] = ()
+
 
 @contextmanager
 def _attribute_search(
@@ -60,8 +100,10 @@ def _attribute_search(
 
     Tagged ``graph_search:<label>`` in metadata so search spend is
     distinguishable from graph_sync indexing in the usage breakdown. A caller
-    supplying ``role_id`` opts into role-cap admission; omitting it preserves
-    deliberate workspace-level, organization-only search.
+    Supplying ``role_id`` attributes spend to that role and applies its budget,
+    but ordinary recruiter search does not require autonomous-agent authority.
+    Automatic ingestion/agent workflows opt into that separate admission check
+    at their own call sites.
     """
     from ..services.metered_async_anthropic_client import (
         GraphMeteringContext,
@@ -78,10 +120,11 @@ def _attribute_search(
                 if role_id is not None
                 else f"graph-search:{int(organization_id)}:{label}"
             ),
-            # Workspace searches remain organization-only. A role-scoped agent
-            # search must also consume that role's monthly allowance.
+            # Workspace searches remain organization-only. A role-scoped search
+            # is budget-attributed to the role without requiring the role's
+            # autonomous agent to be enabled.
             require_hard_admission=True,
-            require_role_admission=role_id is not None,
+            require_role_admission=False,
         )
     )
     try:
@@ -102,6 +145,157 @@ def _query_for_predicate(predicate: GraphPredicate) -> str:
     if predicate.type == "n_hop_from":
         return f"candidates connected to candidate {value}"
     return value
+
+
+def search_candidate_evidence(
+    *,
+    organization_id: int,
+    queries: Iterable[str],
+    role_id: int | None = None,
+    limit_per_query: int = DEFAULT_SEARCH_LIMIT,
+) -> GraphEvidenceSearchResult:
+    """Semantic Graphiti retrieval with candidate and citation provenance.
+
+    Each non-empty query is sent to ``graphiti.search`` exactly once, in the
+    supplied order and under the existing organization/role metering context.
+    Graphiti's fact is kept as retrieval context; only the hydrated Episodic
+    content is an original source suitable for citation.
+
+    ``rank`` is zero-based within ``query_index``. A saturated top-k response is
+    conservatively reported as capped because Graphiti does not expose a total.
+    Backend failures are explicit and are never returned as a successful zero.
+    """
+    if limit_per_query < 1:
+        raise ValueError("limit_per_query must be positive")
+    limit = min(int(limit_per_query), DEFAULT_SEARCH_LIMIT)
+    raw_queries = [queries] if isinstance(queries, str) else queries
+    normalized_queries = [str(query).strip() for query in raw_queries if str(query).strip()]
+    if not normalized_queries:
+        return GraphEvidenceSearchResult(status="ok", exhaustive=True)
+    if not graph_client.is_configured():
+        return GraphEvidenceSearchResult(status="unavailable")
+
+    try:
+        graphiti = graph_client.get_graphiti()
+    except Exception as exc:
+        logger.warning("Graphiti candidate evidence search unavailable: %s", exc)
+        return GraphEvidenceSearchResult(
+            status="error",
+            errors=("graph backend initialization failed",),
+        )
+
+    group_id = graph_client.group_id_for_org(organization_id)
+    ranked_facts: list[tuple[int, str, int, dict[str, Any]]] = []
+    errors: list[str] = []
+    capped = limit < int(limit_per_query)
+
+    for query_index, query in enumerate(normalized_queries):
+        try:
+            with _attribute_search(
+                organization_id,
+                "candidate_evidence",
+                role_id=role_id,
+            ):
+                raw_results = graph_client.run_async(
+                    graphiti.search(
+                        query=query,
+                        group_ids=[group_id],
+                        num_results=limit,
+                    )
+                )
+        except Exception as exc:
+            logger.warning(
+                "Graphiti candidate evidence query %s failed: %s",
+                query_index,
+                exc,
+            )
+            errors.append(f"query {query_index} failed")
+            continue
+
+        facts = list(_iter_facts(raw_results))
+        capped = capped or len(facts) >= limit
+        missing_uuid = False
+        for rank, fact in enumerate(facts):
+            edge_uuid = str(fact.get("uuid") or "").strip()
+            if not edge_uuid:
+                missing_uuid = True
+                continue
+            ranked_facts.append((query_index, query, rank, fact))
+        if missing_uuid:
+            errors.append(f"query {query_index} returned evidence without an edge id")
+
+    if not ranked_facts:
+        status: GraphEvidenceBackendStatus = "error" if errors else "ok"
+        return GraphEvidenceSearchResult(
+            status=status,
+            capped=capped,
+            exhaustive=status == "ok" and not capped,
+            errors=tuple(errors),
+        )
+
+    edge_uuids = list(
+        dict.fromkeys(str(fact["uuid"]) for _, _, _, fact in ranked_facts)
+    )
+    try:
+        raw_hydration = graph_client.run_async(
+            _cypher_candidate_evidence_by_edge_uuids(
+                graphiti.driver,
+                group_id=group_id,
+                edge_uuids=edge_uuids,
+            ),
+            timeout=8.0,
+        )
+    except Exception as exc:
+        logger.warning("Graphiti candidate evidence hydration failed: %s", exc)
+        errors.append("evidence hydration failed")
+        return GraphEvidenceSearchResult(
+            status="error",
+            capped=capped,
+            errors=tuple(errors),
+        )
+
+    hydration = _candidate_evidence_hydration(raw_hydration)
+    missing_hydration = any(
+        str(fact["uuid"]) not in hydration for _, _, _, fact in ranked_facts
+    )
+    if missing_hydration:
+        errors.append("evidence hydration incomplete")
+
+    hits: list[GraphCandidateEvidenceHit] = []
+    for query_index, query, rank, fact in ranked_facts:
+        edge_uuid = str(fact["uuid"])
+        hydrated = hydration.get(edge_uuid)
+        if hydrated is None:
+            continue
+        episodes = _ordered_episode_evidence(fact, hydrated["episodes"])
+        owners = _candidate_evidence_owners(hydrated, episodes)
+        for candidate_id, candidate_episodes in owners:
+            hits.append(
+                GraphCandidateEvidenceHit(
+                    candidate_id=candidate_id,
+                    query=query,
+                    query_index=query_index,
+                    rank=rank,
+                    edge_uuid=edge_uuid,
+                    fact=str(fact.get("fact") or hydrated.get("fact") or ""),
+                    source_name=_optional_text(
+                        hydrated.get("source_name") or fact.get("source_name")
+                    ),
+                    target_name=_optional_text(
+                        hydrated.get("target_name") or fact.get("target_name")
+                    ),
+                    episodes=candidate_episodes,
+                )
+            )
+
+    status = "error" if errors else "ok"
+    return GraphEvidenceSearchResult(
+        status=status,
+        hits=tuple(hits),
+        capped=capped,
+        exhaustive=status == "ok" and not capped,
+        errors=tuple(errors),
+    )
 
 
 def candidate_ids_for_predicate(
@@ -334,6 +528,39 @@ def subgraph_for_query(*, organization_id: int, query: str) -> GraphPayload:
 # ---------------------------------------------------------------------------
 
 
+async def _cypher_candidate_evidence_by_edge_uuids(
+    driver,
+    *,
+    group_id: str,
+    edge_uuids: list[str],
+):
+    """Hydrate ranked edge ids and their original episodes in one safe query."""
+    return await driver.execute_query(
+        """
+        MATCH (source:Entity)-[edge:RELATES_TO]->(target:Entity)
+        WHERE edge.uuid IN $edge_uuids
+          AND edge.group_id = $group_id
+        OPTIONAL MATCH (episode:Episodic)
+        WHERE episode.uuid IN coalesce(edge.episodes, [])
+          AND (episode.group_id = $group_id OR episode.group_id IS NULL)
+        RETURN
+          edge.uuid AS edge_uuid,
+          edge.fact AS edge_fact,
+          source.name AS source_name,
+          properties(source) AS source_props,
+          target.name AS target_name,
+          properties(target) AS target_props,
+          episode.uuid AS episode_uuid,
+          episode.name AS episode_name,
+          episode.content AS episode_content,
+          episode.source_description AS episode_source_description
+        """,
+        edge_uuids=edge_uuids,
+        group_id=group_id,
+        routing_="r",
+    )
+
+
 async def _cypher_subgraph_by_query(
     driver, group_id: str, query: str, limit: int = 100
 ):
@@ -560,6 +787,139 @@ def colleague_neighbourhood(
 # ---------------------------------------------------------------------------
 
 
+_CANDIDATE_EPISODE_NAME = re.compile(r"^candidate-(\d+)(?:-|$)", re.IGNORECASE)
+_CANDIDATE_SUBJECT_HEADER = re.compile(
+    r"^\s*Subject\s+candidate\s*:.*?\(\s*taali_id\s*=\s*(\d+)\s*\)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _driver_records(result: Any) -> Iterable[dict[str, Any]]:
+    """Normalise Neo4j/Graphiti driver result variants to plain mappings."""
+    if result is None:
+        return
+    if isinstance(result, tuple):
+        records = result[0]
+    elif hasattr(result, "records"):
+        records = result.records
+    else:
+        records = result
+    for record in records or []:
+        if hasattr(record, "data"):
+            yield dict(record.data())
+        elif isinstance(record, dict):
+            yield dict(record)
+        else:
+            try:
+                yield dict(record)
+            except (TypeError, ValueError):
+                continue
+
+
+def _candidate_evidence_hydration(result: Any) -> dict[str, dict[str, Any]]:
+    """Group edge/episode hydration records without relying on record order."""
+    hydrated: dict[str, dict[str, Any]] = {}
+    for record in _driver_records(result):
+        edge_uuid = str(record.get("edge_uuid") or "").strip()
+        if not edge_uuid:
+            continue
+        edge = hydrated.setdefault(
+            edge_uuid,
+            {
+                "fact": record.get("edge_fact"),
+                "source_name": record.get("source_name"),
+                "source_props": dict(record.get("source_props") or {}),
+                "target_name": record.get("target_name"),
+                "target_props": dict(record.get("target_props") or {}),
+                "episodes": {},
+            },
+        )
+        episode_uuid = str(record.get("episode_uuid") or "").strip()
+        if not episode_uuid:
+            continue
+        edge["episodes"].setdefault(
+            episode_uuid,
+            GraphEpisodeEvidence(
+                uuid=episode_uuid,
+                name=str(record.get("episode_name") or ""),
+                content=str(record.get("episode_content") or ""),
+                source_description=_optional_text(
+                    record.get("episode_source_description")
+                ),
+            ),
+        )
+    return hydrated
+
+
+def _ordered_episode_evidence(
+    fact: dict[str, Any],
+    hydrated: dict[str, GraphEpisodeEvidence],
+) -> tuple[GraphEpisodeEvidence, ...]:
+    """Use Graphiti's edge episode order, then deterministically append extras."""
+    raw_episode_ids = fact.get("episodes") or []
+    if isinstance(raw_episode_ids, str):
+        raw_episode_ids = [item for item in raw_episode_ids.split(",") if item]
+    ordered: list[GraphEpisodeEvidence] = []
+    seen: set[str] = set()
+    for raw_uuid in raw_episode_ids:
+        episode_uuid = str(raw_uuid)
+        episode = hydrated.get(episode_uuid)
+        if episode is not None and episode_uuid not in seen:
+            ordered.append(episode)
+            seen.add(episode_uuid)
+    extras = sorted(
+        (episode for uuid, episode in hydrated.items() if uuid not in seen),
+        key=lambda episode: (episode.name, episode.uuid),
+    )
+    return tuple([*ordered, *extras])
+
+
+def _candidate_evidence_owners(
+    _hydrated: dict[str, Any],
+    episodes: tuple[GraphEpisodeEvidence, ...],
+) -> tuple[tuple[int, tuple[GraphEpisodeEvidence, ...]], ...]:
+    """Resolve one direct candidate owner and candidate-specific provenance.
+
+    A Graphiti edge can reference episodes from more than one candidate.  Such
+    an edge is attributable only when its entity-node ``taali_id`` identifies
+    one of those episode owners; otherwise it is ambiguous and is dropped.
+    """
+
+    episodes_by_candidate: dict[int, list[GraphEpisodeEvidence]] = {}
+    for episode in episodes:
+        candidate_id = _episode_candidate_id(episode)
+        if candidate_id is not None:
+            episodes_by_candidate.setdefault(candidate_id, []).append(episode)
+
+    if len(episodes_by_candidate) == 1:
+        candidate_id, owned = next(iter(episodes_by_candidate.items()))
+        # Never attach legacy/unowned episodes to a candidate merely because
+        # they share an edge. Source ownership must be explicit in the episode
+        # name or subject header before its text can ground a candidate claim.
+        return ((candidate_id, tuple(owned)),)
+
+    # A shared edge with multiple candidate owners is ambiguous, while node
+    # ``taali_id`` values are not table-qualified and may identify a Role or
+    # another entity with the same integer. Fail closed instead of guessing.
+    return ()
+
+
+def _episode_candidate_id(episode: GraphEpisodeEvidence) -> int | None:
+    name_match = _CANDIDATE_EPISODE_NAME.search(episode.name)
+    if name_match:
+        return int(name_match.group(1))
+    header_ids = {
+        int(match.group(1))
+        for match in _CANDIDATE_SUBJECT_HEADER.finditer(episode.content)
+    }
+    return next(iter(header_ids)) if len(header_ids) == 1 else None
+
+
+def _optional_text(value: Any) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
 def _iter_facts(results: Any) -> Iterable[dict]:
     """Yield Graphiti search results as plain dicts.
 
@@ -573,7 +933,12 @@ def _iter_facts(results: Any) -> Iterable[dict]:
     seq = results if isinstance(results, (list, tuple)) else getattr(results, "edges", None) or []
     for item in seq:
         if isinstance(item, dict):
-            yield item
+            normalized = dict(item)
+            normalized.setdefault("uuid", normalized.get("edge_uuid"))
+            normalized.setdefault("episodes", list(normalized.get("episode_uuids") or []))
+            normalized.setdefault("source_uuid", normalized.get("source_node_uuid"))
+            normalized.setdefault("target_uuid", normalized.get("target_node_uuid"))
+            yield normalized
             continue
         try:
             source = getattr(item, "source_node", None)
@@ -583,13 +948,22 @@ def _iter_facts(results: Any) -> Iterable[dict]:
                 "name": getattr(item, "name", None),
                 "fact": getattr(item, "fact", None),
                 "edge_label": getattr(item, "name", None),
+                "episodes": list(getattr(item, "episodes", []) or []),
                 "valid_at": getattr(item, "valid_at", None),
                 "invalid_at": getattr(item, "invalid_at", None),
-                "source_uuid": getattr(source, "uuid", None) if source is not None else None,
+                "source_uuid": (
+                    getattr(source, "uuid", None)
+                    if source is not None
+                    else getattr(item, "source_node_uuid", None)
+                ),
                 "source_name": getattr(source, "name", None) if source is not None else None,
                 "source_labels": list(getattr(source, "labels", []) or []) if source is not None else [],
                 "source_attributes": dict(getattr(source, "attributes", {}) or {}) if source is not None else {},
-                "target_uuid": getattr(target, "uuid", None) if target is not None else None,
+                "target_uuid": (
+                    getattr(target, "uuid", None)
+                    if target is not None
+                    else getattr(item, "target_node_uuid", None)
+                ),
                 "target_name": getattr(target, "name", None) if target is not None else None,
                 "target_labels": list(getattr(target, "labels", []) or []) if target is not None else [],
                 "target_attributes": dict(getattr(target, "attributes", {}) or {}) if target is not None else {},

@@ -114,6 +114,18 @@ jobs:
             tests/platform/test_release_safeguards.py \
             tests/platform/test_railway_deployment_contract.py \
             tests/platform/test_railway_worker_start.py \
+            tests/evals \
+            tests/test_agent_runtime_tools.py \
+            tests/test_api_nl_search.py \
+            tests/test_candidate_graph_evidence_search.py \
+            tests/test_candidate_search_evidence_matching.py \
+            tests/test_candidate_search_hybrid.py \
+            tests/test_candidate_search_population.py \
+            tests/test_candidate_search_runner_hybrid.py \
+            tests/test_grounded_top_candidates.py \
+            tests/test_mcp_catalog.py \
+            tests/test_taali_chat_handlers.py \
+            tests/test_taali_chat_role_scoped.py \
             tests/test_graph_episode_outbox.py \
             tests/test_graph_outbox_role_id_migration.py \
             tests/test_workable_stage_local_write_guard.py \
@@ -146,7 +158,8 @@ jobs:
         run: |
           npm test -- \
             src/features/jobs/JobsPage.test.jsx \
-            src/features/home/HomeNow.optimistic.test.jsx
+            src/features/home/HomeNow.optimistic.test.jsx \
+            src/features/chat/Thread.test.jsx
           npm test -- src/test/vercelCaching.test.js
       - name: Build frontend
         # Vite build will fail on import errors, type errors (where

@@ -169,6 +169,17 @@ def test_relevance_ranks_required_tokens_additively_before_optional_tokens(db):
     assert "candidates.position" in order_by
 
 
+def test_relevance_order_prefers_open_application_before_recency(db):
+    sql = _compile(
+        apply_relevance_order(_base_query(db), ParsedFilter(skills_all=["Python"]))
+    ).lower()
+    order_by = sql.split("order by", 1)[1]
+
+    assert "candidate_applications.application_outcome" in order_by
+    assert "case when" in order_by
+    assert order_by.index("application_outcome") < order_by.index("updated_at")
+
+
 def test_compound_filter_renders_all_clauses(db):
     parsed = ParsedFilter(
         skills_all=["Python"],
@@ -227,3 +238,48 @@ def test_string_with_double_quote_is_safely_passed(db):
     assert "jsonb_build_array" in sql
     assert "Foo" in sql
     assert "Bar" in sql
+
+
+def test_graph_employer_and_school_predicates_have_postgres_recall_fallback(db):
+    parsed = ParsedFilter(
+        graph_predicates=[
+            {"type": "worked_at", "value": "Google"},
+            {"type": "studied_at", "value": "Imperial College"},
+        ],
+        graph_predicate_operator="all",
+    )
+
+    sql = _compile(apply_parsed_filter(_base_query(db), parsed)).lower()
+
+    assert "experience_entries" in sql
+    assert "education_entries" in sql
+    assert "e->>'company'" in sql
+    assert "e->>'school'" in sql
+    assert "e->>'institution'" in sql
+    assert "%google%" in sql
+    assert "%imperial college%" in sql
+    assert " and " in sql.split("where", 1)[1]
+
+
+def test_graph_predicate_or_is_not_silently_compiled_as_and(db):
+    parsed = ParsedFilter(
+        graph_predicates=[
+            {"type": "worked_at", "value": "Google"},
+            {"type": "worked_at", "value": "Meta"},
+        ],
+        graph_predicate_operator="any",
+    )
+
+    sql = _compile(apply_parsed_filter(_base_query(db), parsed)).upper()
+
+    assert " OR " in sql.split("WHERE", 1)[1]
+
+
+def test_unsupported_exact_graph_relation_has_no_broad_postgres_match(db):
+    parsed = ParsedFilter(
+        graph_predicates=[{"type": "n_hop_from", "value": "42", "n_hops": 2}]
+    )
+
+    sql = _compile(apply_parsed_filter(_base_query(db), parsed)).lower()
+
+    assert "false" in sql

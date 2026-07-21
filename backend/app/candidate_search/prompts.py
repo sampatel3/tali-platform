@@ -88,6 +88,7 @@ SCHEMA (every field optional, omit if empty):
     "value": str,                 // company / school name, or candidate identifier
     "n_hops": int                 // only for n_hop_from
   }],
+  "graph_predicate_operator": "all" | "any", // relation between graph_predicates; use "any" for OR
   "soft_criteria":       [str],   // REQUIRED qualitative phrases that need evidence, e.g. "banking treasury experience"
   "preferred_criteria":  [str],   // OPTIONAL only when explicitly hedged: "ideally", "prefer", "nice to have", "bonus"
   "keywords":            [str],   // residual tokens that didn't fit elsewhere; will run as ILIKE on cv_text
@@ -101,12 +102,12 @@ NORMALISATION RULES:
 - IGNORE the requested count: a leading "top N" / "best N" / "first N" / "show me N candidates" only says how many to return — it is NOT a filter. Never put "top 5", a bare number, or "candidates" into keywords or soft_criteria; omit it entirely.
 - REQUIREMENT PRIORITY: unhedged qualities are REQUIRED. "with X", "has X", "experience in X", "must have X", and plain comma/AND lists go in soft_criteria. Put a phrase in preferred_criteria ONLY when the user explicitly says "ideally", "prefer/preferred", "nice to have", "bonus", "optional", or equivalent. Preserve the quality itself but remove the hedge from the criterion text. Never infer that a domain, skill, or experience is optional merely because it is qualitative.
 - COUPLED QUALITIES: preserve relationships and parenthetical domain qualifiers as ONE atomic criterion. "Treasury experience (Banking domain)", "Treasury banking experience", and "Treasury experience within banking" become "Treasury experience within the banking domain" — never split them into independent "Treasury" and "banking" checks. Likewise keep phrases such as "payments experience in fintech" together when the domain qualifies the experience.
-- Skills: keep technology names verbatim (case as given). Do not split multi-word skills ("AWS Glue", "Kubernetes Operators").
+- Skills: keep technology names verbatim (case as given). Do not split multi-word skills ("AWS Glue", "Kubernetes Operators"). A skills-array tag is retrieval metadata, not proof that the candidate applied the skill. When the user asks for experience/background/expertise with a skill, keep the skill in skills_all/skills_any AND preserve the complete experience phrase as one required soft_criteria item so evidence grounding verifies it.
 - Job titles / occupations: put role names such as "project manager", "scrum master", "data engineer" and "solutions architect" in titles_all/titles_any, NEVER in skills or soft_criteria. Use titles_all for "and" and titles_any for "or".
 - Years: "5 years" / "5+ years" / "five years" → min_years_experience: 5. "senior" alone is NOT a years number — route to soft_criteria.
 - Company-size phrases ("large enterprise", "Fortune 500", "FAANG", "startup", "scale-up") → soft_criteria unless explicitly hedged, then preferred_criteria.
 - Industry phrases ("fintech", "healthcare", "logistics") → soft_criteria unless explicitly hedged or a specific employer is named.
-- "Worked at <Company>" → graph_predicates: [{"type": "worked_at", "value": "<Company>"}]. Combine multiple "or" companies into multiple predicates.
+- "Worked at <Company>" → graph_predicates: [{"type": "worked_at", "value": "<Company>"}]. For multiple employers/schools preserve the user's Boolean relation: AND uses graph_predicate_operator="all"; OR uses graph_predicate_operator="any". Never encode OR as an implicit intersection.
 - "in production" / "in prod" / "running production systems" → soft_criteria: ["in production"].
 - Monetary / threshold constraints (salary or compensation expectation, day rate, notice period) → ONE soft_criteria phrase that keeps the subject, the operator, and the value TOGETHER, e.g. "salary expectation <= 30000 AED", "notice period <= 1 month". Normalise the operator: under / less than / below / at most / up to / max → "<="; over / more than / above / at least / min → ">=". NEVER split the number or currency from the label into separate entries, and NEVER drop the operator — a bare "salary" or a bare "30000 AED" is wrong.
 - If the query is gibberish or empty, return {"free_text": "<query>"} only.
@@ -114,7 +115,7 @@ NORMALISATION RULES:
 EXAMPLES
 
 Query: "candidates with AWS Glue experience"
-{"skills_all":["AWS Glue"],"free_text":"candidates with AWS Glue experience"}
+{"skills_all":["AWS Glue"],"soft_criteria":["AWS Glue experience"],"free_text":"candidates with AWS Glue experience"}
 
 Query: "project managers or scrum masters"
 {"titles_any":["project manager","scrum master"],"free_text":"project managers or scrum masters"}
@@ -126,7 +127,7 @@ Query: "candidates with 5 years experience, worked in Europe, large enterprise i
 {"min_years_experience":5,"locations_region":["europe"],"soft_criteria":["large enterprise","in production"],"free_text":"candidates with 5 years experience, worked in Europe, large enterprise in production"}
 
 Query: "Python and Kubernetes, worked at Google or Meta in last 3 years"
-{"skills_all":["Python","Kubernetes"],"graph_predicates":[{"type":"worked_at","value":"Google"},{"type":"worked_at","value":"Meta"}],"keywords":["last 3 years"],"free_text":"Python and Kubernetes, worked at Google or Meta in last 3 years"}
+{"skills_all":["Python","Kubernetes"],"graph_predicates":[{"type":"worked_at","value":"Google"},{"type":"worked_at","value":"Meta"}],"graph_predicate_operator":"any","keywords":["last 3 years"],"free_text":"Python and Kubernetes, worked at Google or Meta in last 3 years"}
 
 Query: "senior engineers from FAANG based in London or Dublin"
 {"locations_country":["United Kingdom","Ireland"],"soft_criteria":["senior","FAANG"],"keywords":["London","Dublin"],"free_text":"senior engineers from FAANG based in London or Dublin"}

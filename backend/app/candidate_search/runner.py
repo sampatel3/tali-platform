@@ -3,10 +3,10 @@
 Steps:
 1. Cache lookup on (org_id, normalised query, prompt_version).
 2. On miss: parse via Haiku → ``ParsedFilter`` → cache.
-3. Apply hard SQL filters to a base query already scoped to the org.
-4. Execute graph predicates against Neo4j (when configured) and AND-narrow
-   the SQL result set by candidate id.
-5. Optional deep verification: for ``soft_criteria``, ask Claude to assess a
+3. Compile a backend-independent ``SearchPlan``.
+4. Run semantic GraphDB recall plus ranked PostgreSQL retrieval, fused behind
+   the PostgreSQL tenant/role/lifecycle authorization boundary.
+5. Optional deep verification: assess a
    relevance-ordered, explicitly bounded candidate window.
 6. (When view=graph) fetch the subgraph for the matched candidate set.
 
@@ -19,17 +19,31 @@ from __future__ import annotations
 import logging
 from typing import Iterable
 
+from sqlalchemy import case
 from sqlalchemy.orm import Session
 
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from . import cache as cache_module
+from .criteria_policy import DEFAULT_MAX_CRITERIA, _collect_criteria, _required_criteria
+from .hybrid import retrieve_graph_backend, run_hybrid_retrieval
 from .parser import parse_nl_query
+from .person_retrieval import MAX_PERSON_RETRIEVAL_LIMIT, bounded_person_rows
+from .plan_adapter import parsed_filter_to_search_plan
+from .plan_evidence import graph_evidence_requirements
+from .population import (
+    apply_searchable_candidate_scope,
+    application_map_from_rows,
+    population_filter,
+)
 from .query_builder_sql import (
     apply_parsed_filter,
     apply_relevance_order,
     needs_candidate_join,
 )
+from .retrieval import BackendHit, BackendResult, BackendStatus, RetrievalMode
+from .retrieval_reporting import append_retrieval_warnings, retrieval_summary
+from .runtime_capabilities import unsupported_runtime_requirements
 from .schemas import (
     CandidateDeepVerification,
     GraphPayload,
@@ -42,20 +56,8 @@ logger = logging.getLogger("taali.candidate_search.runner")
 
 # How many candidates to rerank with Claude in the soft-criteria pass.
 RERANK_TOP_N = 50
-
-
-def _dedupe_person_rows(rows) -> list[int]:
-    """Choose the first relevance-ordered application for each person."""
-    seen: set[int] = set()
-    out: list[int] = []
-    for row in rows:
-        app_id = int(row[0])
-        candidate_id = int(row[1]) if len(row) > 1 and row[1] is not None else -app_id
-        if candidate_id in seen:
-            continue
-        seen.add(candidate_id)
-        out.append(app_id)
-    return out
+DEFAULT_RETRIEVAL_LIMIT = 200
+MAX_RETRIEVAL_LIMIT = MAX_PERSON_RETRIEVAL_LIMIT
 
 
 def _candidate_ids_for_application_ids(
@@ -87,6 +89,7 @@ def run_search(
     defer_qualitative: bool = False,
     inherited_titles_all: list[str] | None = None,
     inherited_titles_any: list[str] | None = None,
+    retrieval_limit: int = DEFAULT_RETRIEVAL_LIMIT,
 ) -> SearchOutput:
     """Execute one NL search pass.
 
@@ -97,6 +100,10 @@ def run_search(
 
     Never raises: on any failure we degrade and surface a warning.
     """
+    base_query = apply_searchable_candidate_scope(
+        base_query,
+        organization_id=organization_id,
+    )
     warnings: list[SearchWarning] = []
     cache_key = cache_module.compute_cache_key(
         organization_id=organization_id, query=nl_query
@@ -166,6 +173,45 @@ def run_search(
                 }
             )
 
+    plan = None
+    plan_failed = False
+    try:
+        safe_limit = max(1, min(int(retrieval_limit), MAX_RETRIEVAL_LIMIT))
+        plan = parsed_filter_to_search_plan(parsed, query=nl_query, limit=safe_limit)
+    except Exception as exc:
+        plan_failed = True
+        logger.warning("Search plan compilation failed: %s", exc)
+        warnings.append(
+            SearchWarning(
+                code="search_plan_failed",
+                message="Search planning failed; PostgreSQL fallback was used.",
+            )
+        )
+
+    unsupported = unsupported_runtime_requirements(parsed)
+    if unsupported:
+        warnings.append(
+            SearchWarning(
+                code="unsupported_search_constraint",
+                message=(
+                    "The request contains search semantics that cannot yet be "
+                    "verified exactly: " + "; ".join(unsupported) + ". No candidates "
+                    "were returned, and this is not an exact zero."
+                ),
+            )
+        )
+        return SearchOutput(
+            application_ids=[],
+            parsed_filter=parsed,
+            warnings=warnings,
+            database_matches=0,
+            retrieval_matches=0,
+            search_plan=plan.model_dump(mode="json") if plan is not None else None,
+            capped=True,
+            exhaustive=False,
+            is_exact_empty=False,
+        )
+
     # Apply hard SQL filters. ``defer_qualitative`` (the grounded top-N path,
     # which grounds qualitative criteria itself via CV citations) keeps the
     # SQL prefilter PURELY STRUCTURAL — it must not ILIKE-prefilter
@@ -193,40 +239,130 @@ def run_search(
             Candidate, Candidate.id == CandidateApplication.candidate_id
         )
 
-    # Execute graph predicates: AND-narrow by candidate id set.
-    cypher_candidate_ids = _execute_graph_predicates(
+    # Rank PostgreSQL recall first. Semantic/evidence clauses also get an
+    # independently scoped GraphDB recall pass; exact structured-only searches
+    # stay PostgreSQL-only and incur no graph embedding call.
+    sql_query = apply_relevance_order(sql_query, parsed)
+    safe_limit = plan.limit if plan is not None else DEFAULT_RETRIEVAL_LIMIT
+    postgres_rows, postgres_capped = bounded_person_rows(
+        sql_query,
+        application_id_column=CandidateApplication.id,
+        candidate_id_column=CandidateApplication.candidate_id,
+        person_limit=safe_limit,
+    )
+    semantic_recall = bool(
+        parsed.soft_criteria
+        or parsed.preferred_criteria
+        or parsed.keywords
+        or parsed.graph_predicates
+    )
+    mode = (
+        RetrievalMode.HYBRID
+        if semantic_recall and plan
+        else RetrievalMode.POSTGRES_ONLY
+    )
+    graph_backend = None
+    scoped_capped = False
+    if mode is RetrievalMode.HYBRID:
+        scoped_query = apply_parsed_filter(
+            base_query,
+            population_filter(parsed),
+            soft_criteria_as_keywords=False,
+        )
+        # A graph hit can never cross the canonical PostgreSQL authorization
+        # boundary. When both strict retrieval and the relaxed population are
+        # empty, that boundary proves the result is empty without an embedding
+        # or GraphDB call.
+        population_empty = not postgres_rows and (
+            scoped_query.with_entities(CandidateApplication.id)
+            .limit(1)
+            .first()
+            is None
+        )
+        if population_empty:
+            graph_backend = BackendResult(
+                backend="graph",
+                status=BackendStatus.OK,
+                exhaustive=True,
+            )
+        else:
+            graph_backend = retrieve_graph_backend(
+                query=nl_query,
+                organization_id=organization_id,
+                role_id=role_id,
+                graph_coverage=None,
+                graph_coverage_authoritative=False,
+                graph_requirements=graph_evidence_requirements(parsed, plan),
+                graph_limit=min(safe_limit, 50),
+            )
+        candidate_ids = {
+            *(
+                int(row[1])
+                for row in postgres_rows
+                if len(row) > 1 and row[1] is not None
+            ),
+            *(hit.candidate_id for hit in graph_backend.hits),
+        }
+        if candidate_ids:
+            scoped_query = scoped_query.filter(
+                CandidateApplication.candidate_id.in_(candidate_ids)
+            )
+            scoped_query = (
+                scoped_query.order_by(None)
+                .order_by(
+                    case(
+                        (CandidateApplication.application_outcome == "open", 0),
+                        else_=1,
+                    ).asc(),
+                    CandidateApplication.updated_at.desc().nullslast(),
+                    CandidateApplication.created_at.desc().nullslast(),
+                    CandidateApplication.id.desc(),
+                )
+            )
+            scoped_rows, scoped_capped = bounded_person_rows(
+                scoped_query,
+                application_id_column=CandidateApplication.id,
+                candidate_id_column=CandidateApplication.candidate_id,
+                person_limit=len(candidate_ids),
+            )
+        else:
+            scoped_rows = []
+    else:
+        scoped_rows = postgres_rows
+    postgres_capped = postgres_capped or scoped_capped
+    postgres_backend = BackendResult(
+        backend="postgres",
+        status=BackendStatus.OK,
+        hits=tuple(BackendHit(candidate_id=int(row[1])) for row in postgres_rows),
+        capped=postgres_capped,
+        # A planner failure means the fallback did not evaluate the complete
+        # request.  Keep any useful PostgreSQL hits, but never turn an empty
+        # fallback into a definitive zero.
+        exhaustive=not postgres_capped and not plan_failed,
+    )
+    # The independently scoped rows are ordered active-first. They choose the
+    # representative application for both PostgreSQL and graph-recalled people;
+    # ranked PostgreSQL rows remain a fallback if scoped hydration is partial.
+    allowed_applications = application_map_from_rows([*scoped_rows, *postgres_rows])
+    graph_coverage = None
+    retrieval_result = run_hybrid_retrieval(
+        query=nl_query,
         organization_id=organization_id,
         role_id=role_id,
-        parsed=parsed,
-        warnings=warnings,
+        allowed_applications=allowed_applications,
+        postgres=postgres_backend,
+        graph_result=graph_backend,
+        graph_coverage=graph_coverage,
+        # GraphSyncState is useful coverage telemetry, not an authoritative
+        # proof that every later note/event has been indexed.
+        graph_coverage_authoritative=False,
+        mode=mode,
     )
-    if cypher_candidate_ids is not None:
-        # cypher_candidate_ids == [] means "no graph match" → empty result set.
-        if not cypher_candidate_ids:
-            return SearchOutput(
-                application_ids=[],
-                parsed_filter=parsed,
-                warnings=warnings,
-                rerank_applied=False,
-                subgraph=None,
-                database_matches=0,
-                qualified=None,
-            )
-        sql_query = sql_query.filter(
-            CandidateApplication.candidate_id.in_(cypher_candidate_ids)
-        )
-
-    # Rank the COMPLETE deterministic retrieval set before selecting a bounded
-    # verification window, then collapse multiple role applications belonging
-    # to the same person. "All candidates" now means people, not application
-    # rows, and the first 50 are relevant/stable rather than DB-natural.
-    sql_query = apply_relevance_order(sql_query, parsed)
-    rows = sql_query.with_entities(
-        CandidateApplication.id,
-        CandidateApplication.candidate_id,
-    ).all()
-    application_ids = _dedupe_person_rows(rows)
-    database_matches = len(application_ids)
+    append_retrieval_warnings(warnings, retrieval_result, graph_coverage)
+    retrieval = retrieval_summary(retrieval_result, graph_coverage)
+    application_ids = list(retrieval_result.application_ids)
+    database_matches = len({hit.candidate_id for hit in postgres_backend.hits})
+    retrieval_matches = len(application_ids)
 
     rerank_applied = False
     deep_checked = 0
@@ -237,8 +373,26 @@ def run_search(
     # verification pass. Exact database matches are described separately by
     # `database_matches`; calling them qualified would overstate what ran.
     qualified = None
-    capped = False
-    if rerank_enabled and parsed.soft_criteria and application_ids:
+    capped = retrieval_result.capped
+    retrieval_exhaustive = retrieval_result.exhaustive
+    requested_rerank_criteria = _required_criteria(
+        parsed,
+        _collect_criteria(parsed, limit=None),
+    )
+    rerank_criteria = requested_rerank_criteria[:DEFAULT_MAX_CRITERIA]
+    if rerank_enabled and len(requested_rerank_criteria) > len(rerank_criteria):
+        capped = True
+        rerank_criteria = []
+        warnings.append(
+            SearchWarning(
+                code="verification_capped",
+                message=(
+                    "Required criteria exceed the verification limit; no "
+                    "candidate was marked qualified."
+                ),
+            )
+        )
+    if rerank_enabled and rerank_criteria and application_ids:
         try:
             from . import rerank as rerank_module
 
@@ -248,7 +402,7 @@ def run_search(
                 organization_id=organization_id,
                 role_id=role_id,
                 application_ids=checked_ids,
-                soft_criteria=parsed.soft_criteria,
+                soft_criteria=rerank_criteria,
                 client=rerank_client,
             )
             # Deep verification is an explicit qualified subset. Candidates
@@ -272,7 +426,7 @@ def run_search(
             # Evidence is exhaustive only when every deterministic match
             # completed successfully. Failed checks are retained as
             # unclassified rows and therefore also make coverage partial.
-            capped = evidence_succeeded < database_matches
+            capped = capped or evidence_succeeded < retrieval_matches
             if evidence_failed:
                 warnings.append(
                     SearchWarning(
@@ -284,13 +438,13 @@ def run_search(
                         ),
                     )
                 )
-            if database_matches > deep_checked:
+            if retrieval_matches > deep_checked:
                 warnings.append(
                     SearchWarning(
                         code="verification_capped",
                         message=(
                             f"Attempted evidence checks for {deep_checked} of "
-                            f"{database_matches} database matches; "
+                            f"{retrieval_matches} retrieval matches; "
                             f"{evidence_succeeded} completed successfully. "
                             "Unchecked candidates were not classified as failures."
                         ),
@@ -300,7 +454,7 @@ def run_search(
             logger.warning("Rerank failed; passing through SQL results: %s", exc)
             # The deterministic retrieval remains intact, but evidence coverage
             # is not exhaustive when a requested pass could not start.
-            capped = database_matches > 0
+            capped = capped or retrieval_matches > 0
             warnings.append(
                 SearchWarning(
                     code="rerank_skipped",
@@ -319,13 +473,18 @@ def run_search(
                 candidate_ids=candidate_ids,
                 db=db,
             )
-            # Fallback: if none of the matched candidates are in the graph yet
-            # (partial backfill), do a broad query so the graph view shows
-            # something useful rather than "No graph data".
+            # Never substitute a broad query graph when the matched candidates
+            # have not been indexed yet.  That legacy fallback could render
+            # unrelated people beside an otherwise grounded result set.
             if not subgraph.nodes:
-                subgraph = graph_search.subgraph_for_query(
-                    organization_id=organization_id,
-                    query=nl_query,
+                warnings.append(
+                    SearchWarning(
+                        code="graph_coverage_partial",
+                        message=(
+                            "Matched candidates have no indexed graph topology; "
+                            "no unrelated graph context was substituted."
+                        ),
+                    )
                 )
             if subgraph and subgraph.nodes:
                 _enrich_graph_scores(db, organization_id, subgraph)
@@ -345,63 +504,18 @@ def run_search(
         rerank_applied=rerank_applied,
         subgraph=subgraph,
         database_matches=database_matches,
+        retrieval_matches=retrieval_matches,
         deep_checked=deep_checked,
         evidence_succeeded=evidence_succeeded,
         evidence_failed=evidence_failed,
         qualified=qualified,
         verification_results=verification_results,
+        search_plan=plan.model_dump(mode="json") if plan is not None else None,
+        retrieval=retrieval,
         capped=capped,
-        exhaustive=not capped,
+        exhaustive=retrieval_exhaustive and not capped,
+        is_exact_empty=retrieval_result.is_exact_empty,
     )
-
-
-def _execute_graph_predicates(
-    *,
-    organization_id: int,
-    role_id: int | None,
-    parsed: ParsedFilter,
-    warnings: list[SearchWarning],
-) -> list[int] | None:
-    """Run graph predicates against Neo4j.
-
-    Returns:
-      - ``None`` when there are no graph predicates (no narrowing).
-      - ``[]`` when predicates ran but matched zero candidates.
-      - ``list[int]`` of candidate ids matching ALL predicates otherwise.
-
-    On Neo4j unavailability we surface a warning and drop the predicates
-    (returns ``None``) so the rest of the search still produces results.
-    """
-    if not parsed.graph_predicates:
-        return None
-
-    try:
-        from ..candidate_graph import client as graph_client
-        from ..candidate_graph import search as graph_search
-
-        if not graph_client.is_configured():
-            warnings.append(
-                SearchWarning(
-                    code="neo4j_unavailable",
-                    message="Neo4j is not configured; graph predicates ignored.",
-                )
-            )
-            return None
-
-        return graph_search.candidate_ids_matching_all(
-            organization_id=organization_id,
-            role_id=role_id,
-            predicates=parsed.graph_predicates,
-        )
-    except Exception as exc:
-        logger.warning("Graph predicate execution failed: %s", exc)
-        warnings.append(
-            SearchWarning(
-                code="graph_predicate_dropped",
-                message=f"Graph predicates failed: {exc}",
-            )
-        )
-        return None
 
 
 def _enrich_graph_scores(

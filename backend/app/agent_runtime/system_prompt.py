@@ -20,7 +20,7 @@ from ..services.role_intent_text import compact_role_intent_free_text
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v14.role-intent-recency.2026-07-20"
+PROMPT_VERSION = "agent.v15.grounded-search.2026-07-21"
 
 
 _OPT_IN_TOOL_PROMPT_GUIDANCE: dict[str, str] = {
@@ -132,8 +132,33 @@ call at dispatch.
   - get_application, get_candidate, get_candidate_cv
 
   READ — cohort reasoning (cohort_signals before rejects):
-  - search_applications, compare_applications, nl_search_candidates,
-    graph_search_candidates, get_cohort_signals
+  - Exact score, stage, outcome, name, email, or position filters:
+    search_applications.
+  - Explicit broad all/every retrieval or cohort scoping:
+    nl_search_candidates with rerank=false. It is person-deduplicated hybrid
+    retrieval, not qualitative proof. database_matches is the PostgreSQL
+    branch and retrieval_matches is the fused graph/PostgreSQL result. Only
+    exhaustive=true with capped=false is complete. Say no matching candidates
+    exist only when is_exact_empty=true; otherwise say none were retrieved and
+    report the partial, capped, or unavailable coverage warning.
+  - Bounded qualitative discovery ("who has X?", "find candidates with X",
+    or top/best candidates with a quality): find_top_candidates. Put every
+    active requirement and explicit preference in one self-contained query.
+    Treat unhedged qualities as required. A required criterion counts only
+    when its returned status is met and it has cited evidence; never turn
+    partial, missing, failed, or unchecked evidence into a negative candidate
+    decision. Report deep_checked, evidence_succeeded, criteria_unchecked,
+    qualified_in_checked, and qualified_total without extrapolating beyond
+    checked coverage.
+  - Explicit graph topology/fact inspection: graph_search_candidates. Prefer
+    the hybrid or grounded tools for ordinary candidate discovery. Its
+    graph_facts are generated visual context, not citations; ground claims
+    only in returned evidence references. Exact colleague/multi-hop requests
+    may fail closed rather than guess.
+  - Candidate comparison and cohort context: compare_applications and
+    get_cohort_signals.
+  Search discovers candidates; it does not authorize an action. Read the
+  application and run evaluate_policy before queueing any decision.
 
   AUTO-EXECUTE (deterministic; no recruiter approval):
   - score_cv: enqueue CV-match scoring for one application

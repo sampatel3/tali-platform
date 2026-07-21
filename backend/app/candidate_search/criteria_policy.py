@@ -18,8 +18,45 @@ DEFAULT_MAX_CRITERIA = 8
 DEFAULT_ROLE_EVIDENCE_LIMIT = 3
 
 
+def _graph_predicate_text(predicate) -> str:
+    """Render a legacy graph predicate as a source-verifiable statement."""
+
+    value = str(getattr(predicate, "value", "") or "").strip()
+    if not value:
+        return ""
+    predicate_type = str(getattr(predicate, "type", "") or "").strip()
+    if predicate_type == "worked_at":
+        return f"worked at {value}"
+    if predicate_type == "studied_at":
+        return f"studied at {value}"
+    if predicate_type == "colleague_of":
+        return f"was a colleague of {value}"
+    if predicate_type == "n_hop_from":
+        hops = getattr(predicate, "n_hops", None)
+        distance = f" within {int(hops)} hops" if hops else ""
+        return f"connected{distance} to candidate {value}"
+    return value
+
+
+def _graph_criterion_inputs(parsed) -> list[str]:
+    rendered = [
+        text
+        for predicate in (getattr(parsed, "graph_predicates", []) or [])
+        if (text := _graph_predicate_text(predicate))
+    ]
+    if len(rendered) > 1 and getattr(parsed, "graph_predicate_operator", "all") == "any":
+        # One verdict preserves the user's OR. Evaluating each branch as a
+        # separate required criterion would silently turn OR into AND.
+        return [" OR ".join(rendered)]
+    return rendered
+
+
 def _criterion_inputs(parsed) -> list[tuple[str, str]]:
-    required = [*list(parsed.soft_criteria), *list(parsed.keywords)]
+    required = [
+        *list(parsed.soft_criteria),
+        *list(parsed.keywords),
+        *_graph_criterion_inputs(parsed),
+    ]
     preferred = list(getattr(parsed, "preferred_criteria", []) or [])
     return [
         *((str(text or ""), "required") for text in required),

@@ -62,6 +62,7 @@ from .criteria_policy import (
     _stored_role_requirement_verdicts,
 )
 from .grounded_evidence import CriterionVerdict
+from .retrieval_reporting import search_output_metadata
 
 logger = logging.getLogger("taali.candidate_search.top_candidates")
 
@@ -561,7 +562,12 @@ def find_top_candidates(
     has_structural = _has_structural(parsed)
     matcher_ids = set(result.application_ids or []) if has_structural else None
     pool_count = _pool_count(base_query)
-    matched_count = len(matcher_ids) if matcher_ids is not None else pool_count
+    retrieval_count = (
+        int(result.retrieval_matches)
+        if result.retrieval_matches is not None
+        else len(result.application_ids or [])
+    )
+    matched_count = retrieval_count if matcher_ids is not None else pool_count
     candidate_pool = (
         base_query
         if matcher_ids is None
@@ -581,11 +587,11 @@ def find_top_candidates(
         )
     base_payload = {
         "spec": _build_spec(parsed, query=query, rank_by=rank_by, criteria=criteria),
+        **search_output_metadata(result, retrieval_matches=retrieval_count),
         # The population we ranked. With structural filters this is the exact
         # matched subset; without them it is the whole actionable pool. Use
         # `pool_size` to distinguish "no structural matches" from "empty pool".
         "total_matched": matched_count,
-        "database_matches": matched_count,
         "pool_size": pool_count,
         "structural_matches": len(matcher_ids) if matcher_ids is not None else None,
         "criteria_requested": requested_criteria,
@@ -610,7 +616,7 @@ def find_top_candidates(
             "qualified_total": None,
             "eligible_after_hard_constraints": 0,
             "search_status": "parser_failed",
-            "capped": matched_count > 0,
+            "capped": result.capped or not result.exhaustive or matched_count > 0,
             "candidates": [],
             "excluded": {
                 "required_total": 0,
@@ -630,6 +636,11 @@ def find_top_candidates(
     # criteria and presented them as PM results.  Fail closed and let the
     # caller explain/relax the structural constraint instead.
     if has_structural and not matcher_ids:
+        exact_structural_zero = bool(result.is_exact_empty)
+        zero_code = (
+            "no_structural_matches" if exact_structural_zero
+            else "structural_retrieval_incomplete"
+        )
         return {
             **base_payload,
             "evaluated": 0,
@@ -638,10 +649,10 @@ def find_top_candidates(
             "returned": 0,
             "qualified": None,
             "qualified_in_checked": 0,
-            "qualified_total": 0,
+            "qualified_total": 0 if exact_structural_zero else None,
             "eligible_after_hard_constraints": 0,
-            "search_status": "no_structural_matches",
-            "capped": False,
+            "search_status": zero_code,
+            "capped": not exact_structural_zero,
             "candidates": [],
             "excluded": {
                 "required_total": 0,
@@ -655,10 +666,14 @@ def find_top_candidates(
             "warnings": base_payload["warnings"]
             + [
                 {
-                    "code": "no_structural_matches",
+                    "code": zero_code,
                     "message": (
                         "No candidates matched the requested skills or titles; "
                         "unrelated candidates were not substituted."
+                        if exact_structural_zero
+                        else "No candidates were retrieved for the requested skills "
+                        "or titles, but retrieval was incomplete; this is not an "
+                        "exact zero and unrelated candidates were not substituted."
                     ),
                 }
             ],
@@ -681,7 +696,7 @@ def find_top_candidates(
             "qualified_total": None,
             "eligible_after_hard_constraints": 0,
             "search_status": "required_criteria_unchecked",
-            "capped": matched_count > 0,
+            "capped": result.capped or not result.exhaustive or matched_count > 0,
             "candidates": [],
             "excluded": {
                 "required_total": 0,
@@ -752,7 +767,7 @@ def find_top_candidates(
             ),
             "evidence_reused": reused,
             "evidence_succeeded": reused,
-            "capped": matched_count > len(shown),
+            "capped": result.capped or not result.exhaustive or matched_count > len(shown),
             "candidates": shown,
             "excluded": {
                 "required_total": 0,
@@ -792,7 +807,7 @@ def find_top_candidates(
                 "qualified_total": None,
                 "eligible_after_hard_constraints": 0,
                 "search_status": "verification_unavailable",
-                "capped": matched_count > 0,
+                "capped": result.capped or not result.exhaustive or matched_count > 0,
                 "candidates": [],
                 "excluded": {
                     "required_total": 0,
@@ -836,7 +851,7 @@ def find_top_candidates(
             "qualified_total": None,
             "eligible_after_hard_constraints": matched_count,
             "search_status": "verification_unavailable",
-            "capped": matched_count > len(shown),
+            "capped": result.capped or not result.exhaustive or matched_count > len(shown),
             "candidates": shown,
             "excluded": {
                 "required_total": 0,
@@ -947,7 +962,7 @@ def find_top_candidates(
     evidence_succeeded = _evidence_succeeded_count(grounded)
     qualification_criteria = checked_required or criteria
     qualified_in_checked = _fully_met_count(survivors, qualification_criteria)
-    population_capped = matched_count > len(grounded)
+    population_capped = result.capped or not result.exhaustive or matched_count > len(grounded)
     qualified_total = (
         qualified_in_checked
         if not population_capped and evidence_succeeded == len(grounded)
@@ -1080,7 +1095,9 @@ def screen_pool_against_requirement(
     matcher_ids = set(result_ids) if _has_structural(parsed) else None
     pool_count = _pool_count(base_query)
     matched_count = (
-        int(result.database_matches)
+        int(result.retrieval_matches)
+        if result.retrieval_matches is not None
+        else int(result.database_matches)
         if result.database_matches is not None
         else len(result_ids)
     )
@@ -1101,9 +1118,9 @@ def screen_pool_against_requirement(
         )
     base_payload = {
         "spec": _build_spec(parsed, query=requirement, rank_by="taali", criteria=criteria),
+        **search_output_metadata(result, retrieval_matches=matched_count),
         "mode": "rediscovery",
         "total_matched": matched_count,
-        "database_matches": matched_count,
         "pool_size": pool_count,
         "structural_matches": len(matcher_ids) if matcher_ids is not None else None,
         "criteria_requested": requested_criteria,
@@ -1132,7 +1149,7 @@ def screen_pool_against_requirement(
         return {
             **base_payload,
             "screened": 0,
-            "capped": matched_count > len(shown),
+            "capped": result.capped or not result.exhaustive or matched_count > len(shown),
             "screen_cap": SCREEN_GROUND_WINDOW,
             "evaluated": 0,
             "shown": len(shown),
@@ -1174,14 +1191,21 @@ def screen_pool_against_requirement(
     if not deep_verify:
         page_ids = result_ids[offset : offset + limit]
         apps = _load_candidates_by_ids(matched_pool, page_ids)
+        if result.exhaustive:
+            verification_message = (
+                "Returned complete retrieval matches; deep CV verification was "
+                "not requested."
+            )
+        else:
+            verification_message = (
+                "Returned available retrieval matches; retrieval was partial or "
+                "capped, and deep CV verification was not requested."
+            )
         return _degrade(
             apps,
             warning={
                 "code": "verification_not_requested",
-                "message": (
-                    "Returned exhaustive Postgres matches; deep CV verification "
-                    "was not requested."
-                ),
+                "message": verification_message,
             },
         )
 
@@ -1190,11 +1214,17 @@ def screen_pool_against_requirement(
     if not criteria:
         page_ids = result_ids[offset : offset + limit]
         apps = _load_candidates_by_ids(matched_pool, page_ids)
+        no_criteria_message = (
+            "No qualitative criteria parsed; returned complete database matches."
+            if result.exhaustive
+            else "No qualitative criteria parsed; returned available partial "
+            "retrieval matches."
+        )
         return _degrade(
             apps,
             warning={
                 "code": "no_criteria",
-                "message": "No qualitative criteria parsed; returned exact database matches.",
+                "message": no_criteria_message,
             },
         )
 
@@ -1323,7 +1353,7 @@ def screen_pool_against_requirement(
     evidence_succeeded = _evidence_succeeded_count(grounded)
     qualification_criteria = checked_required or criteria
     qualified_in_checked = _fully_met_count(survivors, qualification_criteria)
-    population_capped = matched_count > len(grounded)
+    population_capped = result.capped or not result.exhaustive or matched_count > len(grounded)
     qualified_total = (
         qualified_in_checked
         if not population_capped and evidence_succeeded == len(grounded)

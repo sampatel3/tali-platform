@@ -89,7 +89,27 @@ def test_parses_skill_only_query():
         ),
     )
     assert parsed.skills_all == ["AWS Glue"]
+    # A request for experience is not satisfied by a skills-array tag alone.
+    # Keep the structured term for retrieval, but also preserve the evidence
+    # criterion so the grounded search path must verify applied experience.
+    assert parsed.soft_criteria == ["AWS Glue experience"]
     assert parsed.free_text == "candidates with AWS Glue experience"
+
+
+def test_unknown_product_experience_stays_a_generic_required_claim():
+    parsed = parse_common_query("Agentforce experience")
+
+    assert parsed is not None
+    assert parsed.skills_all == []
+    assert parsed.soft_criteria == ["Agentforce experience"]
+
+
+def test_any_skill_experience_keeps_one_boolean_evidence_criterion():
+    parsed = parse_common_query("Python or Kubernetes experience")
+
+    assert parsed is not None
+    assert parsed.skills_any == ["Python", "Kubernetes"]
+    assert parsed.soft_criteria == ["Python or Kubernetes experience"]
 
 
 def test_parses_country_query_with_alias_normalisation():
@@ -99,6 +119,33 @@ def test_parses_country_query_with_alias_normalisation():
         organization_id=1,
     )
     assert parsed.locations_country == ["United Kingdom"]
+
+
+def test_graph_predicate_boolean_operator_survives_parsing():
+    parsed = parse_nl_query(
+        "candidates who worked at Google or Meta",
+        client=_client_for(
+            {
+                "graph_predicates": [
+                    {"type": "worked_at", "value": "Google"},
+                    {"type": "worked_at", "value": "Meta"},
+                ],
+                "graph_predicate_operator": "any",
+            }
+        ),
+        organization_id=1,
+    )
+
+    assert parsed.graph_predicate_operator == "any"
+    assert [item.value for item in parsed.graph_predicates] == ["Google", "Meta"]
+
+
+def test_graph_predicates_default_to_all_for_backward_compatibility():
+    parsed = ParsedFilter(
+        graph_predicates=[{"type": "worked_at", "value": "Google"}]
+    )
+
+    assert parsed.graph_predicate_operator == "all"
 
 
 def test_parses_compound_query_with_region_and_soft_criteria():
@@ -266,6 +313,19 @@ def test_text_instead_of_tool_use_falls_back_to_keywords():
     assert parsed.keywords == ["anything"]
     assert parsed.free_text == "anything"
     assert parsed.parse_degraded is True
+
+
+def test_valid_but_empty_tool_output_is_an_explicit_degraded_fallback():
+    parsed = parse_nl_query(
+        "anything",
+        client=_client_for({}),
+        organization_id=1,
+    )
+
+    assert parsed.keywords == ["anything"]
+    assert parsed.free_text == "anything"
+    assert parsed.parse_degraded is True
+    assert parsed.is_empty() is False
 
 
 def test_invalid_schema_falls_back_to_keywords():

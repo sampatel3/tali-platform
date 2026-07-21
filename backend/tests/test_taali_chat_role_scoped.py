@@ -137,6 +137,7 @@ def test_ensure_conversation_unscoped_when_role_id_is_none(db):
         "find_top_candidates",
         "screen_pool_against_requirement",
         "nl_search_candidates",
+        "graph_search_candidates",
         "list_recent_agent_decisions",
         "list_recent_agent_runs",
         "get_recruiting_overview",

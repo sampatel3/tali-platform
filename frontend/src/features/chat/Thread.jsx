@@ -20,8 +20,9 @@ import { AssessmentQueueCard, RecruitingOverviewCard } from './OperationsCards';
 const GraphView = lazy(() => import('./GraphView'));
 
 export const SearchCoverage = ({ data }) => {
-  const databaseMatches = data?.database_matches ?? data?.total_matched;
-  if (typeof databaseMatches !== 'number') return null;
+  const totalMatches = data?.total_matched ?? data?.retrieval_matches ?? data?.database_matches;
+  if (typeof totalMatches !== 'number') return null;
+  const postgresMatches = data?.database_matches;
   const returned = data.returned ?? data.applications?.length ?? 0;
   const deepChecked = Number(data.deep_checked || 0);
   const hasEvidenceSplit =
@@ -34,7 +35,9 @@ export const SearchCoverage = ({ data }) => {
       .map((warning) => (typeof warning === 'string' ? warning : warning?.message))
       .filter(Boolean)
     : [];
-  const isPartial = Boolean(data.capped || evidenceFailed > 0 || warnings.length);
+  const isPartial = Boolean(
+    data.capped || data.exhaustive === false || evidenceFailed > 0 || warnings.length
+  );
   return (
     <ChatActivity
       severity={isPartial ? 'warning' : 'info'}
@@ -44,13 +47,21 @@ export const SearchCoverage = ({ data }) => {
       icon={Database}
       summary={(
         <span className="cp-search-coverage-summary">
-          <span>{databaseMatches} database matches</span>
+          <span>
+            {totalMatches} retrieval {totalMatches === 1 ? 'match' : 'matches'}
+            {typeof postgresMatches === 'number' && postgresMatches !== totalMatches
+              ? ` · ${postgresMatches} PostgreSQL`
+              : ''}
+          </span>
           {deepChecked > 0 ? (
             <span>
               {deepChecked} deep-checked{data.capped ? ' · partial verification' : ''}
             </span>
           ) : (
-            <span>full database search · no deep verification</span>
+            <span>
+              {data.exhaustive === false ? 'partial retrieval' : 'complete retrieval'}
+              {' · no deep verification'}
+            </span>
           )}
           {hasEvidenceSplit ? (
             <span>
@@ -103,13 +114,35 @@ export const ToolResultRender = ({ part }) => {
     part.toolName === 'nl_search_candidates' ||
     part.toolName === 'graph_search_candidates'
   ) {
+    const completedVerification = (
+      part.result.exhaustive === true
+      && part.result.capped !== true
+      && Number(part.result.deep_checked || 0) > 0
+      && Number(part.result.evidence_succeeded || 0)
+        === Number(part.result.deep_checked || 0)
+      && Number(part.result.evidence_failed || 0) === 0
+      && Number(part.result.qualified || 0) === 0
+    );
+    let emptyMessage;
+    if (completedVerification) {
+      emptyMessage = {
+        title: 'No candidates met the verified requirements',
+        summary: 'Every retrieved candidate was checked against the requested evidence.',
+      };
+    } else if (part.result.is_exact_empty !== true) {
+      emptyMessage = {
+        title: 'No candidates retrieved',
+        summary: 'Search coverage is partial, so this is not a confirmed zero.',
+      };
+    }
     return (
       <>
-        {part.toolName === 'nl_search_candidates' ? (
-          <SearchCoverage data={part.result} />
-        ) : null}
+        <SearchCoverage data={part.result} />
         {Array.isArray(part.result.applications) ? (
-          <CandidateGrid rows={part.result.applications} />
+          <CandidateGrid
+            rows={part.result.applications}
+            emptyMessage={emptyMessage}
+          />
         ) : null}
         {part.result.graph ? (
           <Suspense fallback={null}>

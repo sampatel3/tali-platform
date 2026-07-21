@@ -118,6 +118,7 @@ from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
     revert_candidate_disqualification_in_workable,
 )
+from .application_search_support import page_retrieval_payload, preferred_application_order
 from .role_support import (
     application_list_payload,
     application_detail_payload,
@@ -1608,111 +1609,14 @@ def list_applications_global(
 ):
     started_at = perf_counter()
 
-    # Parse role scope before any natural-language provider work. Besides
-    # failing malformed filters without spend, this lets a single-role search
-    # consume that role's budget instead of falling through to workspace-only
-    # admission.
+    # Parse role scope before provider work and meter unambiguous single roles.
     requested_role_ids = _parse_int_csv_filter(role_ids, field_name="role_ids")
     if role_id is not None:
         requested_role_ids = [int(role_id), *requested_role_ids]
     unique_role_ids = sorted(set(requested_role_ids))
 
-    # Natural-language search: when nl_query is set, the parser drives
-    # filtering. The legacy `search` param is ignored (chips are
-    # authoritative — see UI). We compute a parsed filter, narrow the
-    # base query to its candidate-id set, then carry on with the existing
-    # outcome / stage / sort / pagination path.
-    nl_query_clean = (nl_query or "").strip()
-    parsed_filter_payload = None
-    nl_warnings: list[dict] = []
-    nl_subgraph_payload = None
-    nl_rerank_applied = False
-    nl_coverage_payload = None
-    nl_verification_payload: list[dict] = []
-    if nl_query_clean:
-        from ...candidate_search import rate_limit as nl_rate_limit
-        from ...candidate_search.runner import run_search
-
-        if not nl_rate_limit.check_and_record(int(current_user.organization_id)):
-            raise HTTPException(
-                status_code=429,
-                detail="Too many natural-language queries — try again in a minute.",
-            )
-
-        nl_base = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.organization_id == current_user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-            )
-        )
-        if len(unique_role_ids) == 1:
-            nl_base = nl_base.filter(
-                CandidateApplication.role_id == unique_role_ids[0]
-            )
-        elif unique_role_ids:
-            nl_base = nl_base.filter(
-                CandidateApplication.role_id.in_(unique_role_ids)
-            )
-        nl_result = run_search(
-            db=db,
-            organization_id=int(current_user.organization_id),
-            # Only an unambiguous role scope may consume a role allowance.
-            # Multi-role and workspace searches remain workspace-metered.
-            role_id=unique_role_ids[0] if len(unique_role_ids) == 1 else None,
-            nl_query=nl_query_clean,
-            base_query=nl_base,
-            rerank_enabled=bool(rerank),
-            include_subgraph=(view == "graph"),
-        )
-        parsed_filter_payload = nl_result.parsed_filter.model_dump(mode="json")
-        nl_warnings = [w.model_dump(mode="json") for w in nl_result.warnings]
-        nl_rerank_applied = nl_result.rerank_applied
-        nl_verification_payload = [
-            item.model_dump(mode="json")
-            for item in nl_result.verification_results
-        ]
-        nl_coverage_payload = {
-            "database_matches": (
-                nl_result.database_matches
-                if nl_result.database_matches is not None
-                else len(nl_result.application_ids)
-            ),
-            "deep_checked": nl_result.deep_checked,
-            "evidence_succeeded": nl_result.evidence_succeeded,
-            "evidence_failed": nl_result.evidence_failed,
-            "qualified": nl_result.qualified,
-            "capped": nl_result.capped,
-            "exhaustive": nl_result.exhaustive,
-        }
-        nl_subgraph_payload = (
-            nl_result.subgraph.model_dump(mode="json")
-            if nl_result.subgraph is not None
-            else None
-        )
-
-    base_query = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-    )
-    # When NL filtering returned a (possibly empty) id set, narrow the
-    # primary query before the standard filters apply.
-    if nl_query_clean:
-        nl_ids = nl_result.application_ids
-        if not nl_ids:
-            base_query = base_query.filter(CandidateApplication.id.in_([-1]))
-        else:
-            base_query = base_query.filter(CandidateApplication.id.in_(nl_ids))
-    if unique_role_ids:
-        if len(unique_role_ids) == 1:
-            base_query = base_query.filter(CandidateApplication.role_id == unique_role_ids[0])
-        else:
-            base_query = base_query.filter(CandidateApplication.role_id.in_(unique_role_ids))
-    base_query = _apply_application_source_filter(base_query, source)
-
+    # Parse deterministic scope before provider work, then reuse the same SQL
+    # boundary for retrieval and the response so graph recall cannot widen it.
     requested_outcomes = _parse_choice_csv_filter(
         application_outcomes,
         allowed=APPLICATION_OUTCOME_VALUES,
@@ -1729,17 +1633,62 @@ def list_applications_global(
             )
         if single_outcome not in requested_outcomes:
             requested_outcomes.append(single_outcome)
+
+    requested_stages = _parse_choice_csv_filter(
+        pipeline_stages,
+        allowed=PIPELINE_STAGE_VALUES,
+        field_name="pipeline_stages",
+    )
+    single_stage = str(pipeline_stage or "").strip().lower()
+    if single_stage and single_stage != "all":
+        if single_stage not in PIPELINE_STAGE_VALUES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid pipeline_stage value '{single_stage}'",
+            )
+        if single_stage not in requested_stages:
+            requested_stages.append(single_stage)
+
+    threshold = _normalize_taali_score_for_filter(min_taali_score)
+    pre_screen_threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
+    requested_assessment_statuses = _parse_choice_csv_filter(
+        assessment_status,
+        allowed={"pending", "in_progress", "completed", "expired"},
+        field_name="assessment_status",
+    )
+    status_by_value = {item.value: item for item in AssessmentStatus}
+    wanted_assessment_statuses = [
+        status_by_value[item]
+        for item in requested_assessment_statuses
+        if item in status_by_value
+    ]
+    if "completed" in requested_assessment_statuses:
+        wanted_assessment_statuses.append(AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT)
+
+    base_scope_query = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == current_user.organization_id,
+        CandidateApplication.deleted_at.is_(None),
+    )
+    if len(unique_role_ids) == 1:
+        base_scope_query = base_scope_query.filter(
+            CandidateApplication.role_id == unique_role_ids[0]
+        )
+    elif unique_role_ids:
+        base_scope_query = base_scope_query.filter(
+            CandidateApplication.role_id.in_(unique_role_ids)
+        )
+    base_scope_query = _apply_application_source_filter(base_scope_query, source)
     if requested_outcomes:
-        base_query = base_query.filter(CandidateApplication.application_outcome.in_(requested_outcomes))
-    if search and not nl_query_clean:
+        base_scope_query = base_scope_query.filter(
+            CandidateApplication.application_outcome.in_(requested_outcomes)
+        )
+    if search and not (nl_query or "").strip():
         term = f"%{search.strip()}%"
-        # Match across candidate name/email/position AND the role name —
-        # the search box placeholder ("name, email, or role") had been
-        # lying since v1; recruiters typing a job title saw zero results.
-        # When nl_query is set the parsed filter is authoritative and the
-        # legacy `search` param is ignored.
-        base_query = (
-            base_query.join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        base_scope_query = (
+            base_scope_query.join(
+                Candidate,
+                Candidate.id == CandidateApplication.candidate_id,
+            )
             .outerjoin(Role, Role.id == CandidateApplication.role_id)
             .filter(
                 Candidate.full_name.ilike(term)
@@ -1748,17 +1697,136 @@ def list_applications_global(
                 | Role.name.ilike(term)
             )
         )
-    threshold = _normalize_taali_score_for_filter(min_taali_score)
     if threshold is not None:
-        base_query = base_query.filter(
+        base_scope_query = base_scope_query.filter(
             CandidateApplication.taali_score_cache_100.is_not(None),
             CandidateApplication.taali_score_cache_100 >= threshold,
         )
-    pre_screen_threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
     if pre_screen_threshold is not None:
-        base_query = base_query.filter(
+        base_scope_query = base_scope_query.filter(
             CandidateApplication.pre_screen_score_100.is_not(None),
             CandidateApplication.pre_screen_score_100 >= pre_screen_threshold,
+        )
+
+    filtered_scope_query = base_scope_query
+    if requested_stages:
+        filtered_scope_query = filtered_scope_query.filter(
+            CandidateApplication.pipeline_stage.in_(requested_stages)
+        )
+    if wanted_assessment_statuses:
+        # max(id) selects the latest non-voided assessment across both DBs.
+        latest_assessment_id = (
+            db.query(func.max(Assessment.id))
+            .filter(
+                Assessment.application_id == CandidateApplication.id,
+                Assessment.is_voided.isnot(True),
+            )
+            .correlate(CandidateApplication)
+            .scalar_subquery()
+        )
+        filtered_scope_query = filtered_scope_query.filter(
+            db.query(Assessment.id)
+            .filter(
+                Assessment.id == latest_assessment_id,
+                Assessment.status.in_(wanted_assessment_statuses),
+            )
+            .correlate(CandidateApplication)
+            .exists()
+        )
+
+    # With nl_query, parsed filters are authoritative and legacy search text is
+    # ignored; deterministic chips remain part of the SQL scope above.
+    nl_query_clean = (nl_query or "").strip()
+    parsed_filter_payload = None
+    nl_warnings: list[dict] = []
+    nl_subgraph_payload = None
+    nl_rerank_applied = False
+    nl_coverage_payload = None
+    nl_retrieval_payload = None
+    nl_search_plan_payload = None
+    nl_verification_payload: list[dict] = []
+    nl_ids: list[int] = []
+    if nl_query_clean:
+        from ...candidate_search import rate_limit as nl_rate_limit
+        from ...candidate_search.runner import MAX_RETRIEVAL_LIMIT, run_search
+
+        if not nl_rate_limit.check_and_record(int(current_user.organization_id)):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many natural-language queries — try again in a minute.",
+            )
+
+        # Prefer an active scoped application; recency breaks fallback ties.
+        nl_base = filtered_scope_query.order_by(*preferred_application_order())
+        nl_result = run_search(
+            db=db,
+            organization_id=int(current_user.organization_id),
+            # Multi-role/workspace searches remain workspace-metered.
+            role_id=unique_role_ids[0] if len(unique_role_ids) == 1 else None,
+            nl_query=nl_query_clean,
+            base_query=nl_base,
+            rerank_enabled=bool(rerank),
+            include_subgraph=(view == "graph"),
+            # Every page searches the same bounded person window so totals and
+            # rank order do not grow merely because the caller changed offset.
+            retrieval_limit=MAX_RETRIEVAL_LIMIT,
+        )
+        nl_ids = list(
+            dict.fromkeys(
+                int(application_id)
+                for application_id in nl_result.application_ids
+                if int(application_id) > 0
+            )
+        )
+        parsed_filter_payload = nl_result.parsed_filter.model_dump(mode="json")
+        nl_warnings = [w.model_dump(mode="json") for w in nl_result.warnings]
+        nl_rerank_applied = nl_result.rerank_applied
+        nl_verification_payload = [
+            item.model_dump(mode="json")
+            for item in nl_result.verification_results
+        ]
+        nl_coverage_payload = {
+            "database_matches": (
+                nl_result.database_matches
+                if nl_result.database_matches is not None
+                else len(nl_result.application_ids)
+            ),
+            "retrieval_matches": (
+                nl_result.retrieval_matches
+                if nl_result.retrieval_matches is not None
+                else len(nl_result.application_ids)
+            ),
+            "deep_checked": nl_result.deep_checked,
+            "evidence_succeeded": nl_result.evidence_succeeded,
+            "evidence_failed": nl_result.evidence_failed,
+            "qualified": nl_result.qualified,
+            "capped": nl_result.capped,
+            "exhaustive": nl_result.exhaustive,
+        }
+        if getattr(nl_result, "is_exact_empty", None) is not None:
+            nl_coverage_payload["is_exact_empty"] = bool(nl_result.is_exact_empty)
+        nl_retrieval_payload = (
+            nl_result.retrieval.model_dump(mode="json")
+            if nl_result.retrieval is not None
+            else None
+        )
+        nl_search_plan_payload = nl_result.search_plan
+        nl_subgraph_payload = (
+            nl_result.subgraph.model_dump(mode="json")
+            if nl_result.subgraph is not None
+            else None
+        )
+
+    # Applying result ids to the same scope is a second authorization check.
+    base_query = base_scope_query
+    filtered_query = filtered_scope_query
+    if nl_query_clean:
+        constrained_ids = nl_ids or [-1]
+        base_query = base_query.filter(
+            CandidateApplication.id.in_(constrained_ids)
+        )
+        filtered_query = filtered_query.filter(
+            CandidateApplication.id.in_(constrained_ids)
         )
 
     stage_counts = _empty_stage_counts()
@@ -1773,61 +1841,8 @@ def list_applications_global(
         )
         stage_counts = _build_stage_counts(stage_rows)
 
-    requested_stages = _parse_choice_csv_filter(
-        pipeline_stages,
-        allowed=PIPELINE_STAGE_VALUES,
-        field_name="pipeline_stages",
-    )
-    single_stage = str(pipeline_stage or "").strip().lower()
-    if single_stage and single_stage != "all":
-        if single_stage not in PIPELINE_STAGE_VALUES:
-            raise HTTPException(status_code=422, detail=f"Invalid pipeline_stage value '{single_stage}'")
-        if single_stage not in requested_stages:
-            requested_stages.append(single_stage)
-
-    filtered_query = base_query
-    if requested_stages:
-        filtered_query = filtered_query.filter(CandidateApplication.pipeline_stage.in_(requested_stages))
-
-    # Latest-assessment-status filter (Home "Assessment pending" tracker).
-    # Applied before count/pagination so totals stay accurate.
-    requested_assessment_statuses = _parse_choice_csv_filter(
-        assessment_status,
-        allowed={"pending", "in_progress", "completed", "expired"},
-        field_name="assessment_status",
-    )
-    if requested_assessment_statuses:
-        status_by_value = {s.value: s for s in AssessmentStatus}
-        wanted = [status_by_value[s] for s in requested_assessment_statuses if s in status_by_value]
-        if "completed" in requested_assessment_statuses:
-            wanted.append(AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT)
-        if wanted:
-            # Keep apps whose LATEST non-voided assessment is in the set.
-            # Correlated subquery, cross-DB safe (no DISTINCT ON): "latest" is
-            # max(id), monotonic with creation.
-            latest_assessment_id = (
-                db.query(func.max(Assessment.id))
-                .filter(
-                    Assessment.application_id == CandidateApplication.id,
-                    Assessment.is_voided.isnot(True),
-                )
-                .correlate(CandidateApplication)
-                .scalar_subquery()
-            )
-            filtered_query = filtered_query.filter(
-                db.query(Assessment.id)
-                .filter(
-                    Assessment.id == latest_assessment_id,
-                    Assessment.status.in_(wanted),
-                )
-                .correlate(CandidateApplication)
-                .exists()
-            )
-
     if nl_query_clean:
-        # Preserve the full-text/structural relevance order produced by the
-        # search runner after applying the standard pipeline filters. This is
-        # also person-deduplicated; do not re-sort it by a stale role-fit score.
+        # Preserve person-deduplicated runner relevance after pipeline filters.
         eligible_ids = {
             int(row_id)
             for (row_id,) in filtered_query.with_entities(CandidateApplication.id).all()
@@ -1835,8 +1850,23 @@ def list_applications_global(
         ordered_ids = [app_id for app_id in nl_ids if app_id in eligible_ids]
         total = len(ordered_ids)
         page_ids = ordered_ids[offset : offset + limit]
+        page_id_set = set(page_ids)
+        nl_verification_payload = [
+            item
+            for item in nl_verification_payload
+            if int(item["application_id"]) in page_id_set
+        ]
         if nl_coverage_payload is not None:
             nl_coverage_payload["filtered_matches"] = total
+        if nl_retrieval_payload is not None:
+            nl_retrieval_payload = page_retrieval_payload(
+                nl_retrieval_payload,
+                eligible_application_ids=ordered_ids,
+                page_application_ids=page_ids,
+                retrieval_matches=int(
+                    (nl_coverage_payload or {}).get("retrieval_matches") or 0
+                ),
+            )
     else:
         total = filtered_query.order_by(None).count()
         page_ids = [
@@ -1920,6 +1950,10 @@ def list_applications_global(
         response_payload["nl_warnings"] = nl_warnings
         response_payload["nl_rerank_applied"] = nl_rerank_applied
         response_payload["nl_coverage"] = nl_coverage_payload
+        if nl_retrieval_payload is not None:
+            response_payload["nl_retrieval"] = nl_retrieval_payload
+        if nl_search_plan_payload is not None:
+            response_payload["nl_search_plan"] = nl_search_plan_payload
         response_payload["nl_verification"] = nl_verification_payload
         if view == "graph" and nl_subgraph_payload is not None:
             response_payload["subgraph"] = nl_subgraph_payload
