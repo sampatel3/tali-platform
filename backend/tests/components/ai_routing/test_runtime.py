@@ -110,14 +110,14 @@ def test_legacy_settings_and_search_environment_preserve_parity() -> None:
     grounding = plan_route(
         TaskKey.SEARCH_GROUNDING,
         settings_obj=configured,
-        environ={"CLAUDE_GROUNDING_MODEL": "sonnet"},
+        environ={"CLAUDE_GROUNDING_MODEL": "claude-sonnet-4-5"},
     )
 
     assert role.selected_deployment_id == ANTHROPIC_SONNET_4_5
     assert autonomous.selected_deployment_id == ANTHROPIC_SONNET_4_6
     assert parser.selected_deployment_id == ANTHROPIC_SONNET_4_6
     assert parser.reason_codes == (ReasonCode.VALIDATED_OVERRIDE,)
-    assert grounding.selected_deployment_id == ANTHROPIC_SONNET_4_6
+    assert grounding.selected_deployment_id == ANTHROPIC_SONNET_4_5
     assert grounding.reason_codes == (ReasonCode.VALIDATED_OVERRIDE,)
 
 

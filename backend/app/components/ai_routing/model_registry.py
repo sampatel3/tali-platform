@@ -22,7 +22,7 @@ from .contracts import (
     TokenPricing,
 )
 
-MODEL_REGISTRY_VERSION = "anthropic-direct-2026-07-22.v1"
+MODEL_REGISTRY_VERSION = "anthropic-direct-2026-07-22.v2"
 
 # Stable application IDs.  These are not provider model IDs and are safe to
 # persist in policy/config records.
@@ -333,7 +333,12 @@ DEFAULT_MODEL_REGISTRY = ModelRegistry(
             credential_strategy="organization_or_platform_api_key",
             max_risk=RiskClass.CRITICAL,
             evaluated_tasks=_CHAT_AGENT_TASKS
-            | frozenset({TaskKey.ASSESSMENT_AGENT_CHAT}),
+            | frozenset(
+                {
+                    TaskKey.ASSESSMENT_AGENT_CHAT,
+                    TaskKey.SEARCH_GROUNDING,
+                }
+            ),
             quality_tier=2,
             latency_rank=2,
         ),
