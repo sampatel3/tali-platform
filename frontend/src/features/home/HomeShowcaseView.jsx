@@ -28,6 +28,7 @@ import './home.css';
 import './agentchat/agentchat.css';
 
 const _NOW = Date.now();
+const SHOWCASE_DOCK_ROLE_ID = 109;
 
 // Score-provenance line the live feed + detail panel render under each score
 // ("Scored {date} · v2.1.0 · Sonnet" in the detail panel; a version pill in the
@@ -472,6 +473,7 @@ export const HomeShowcaseView = () => {
   const [rows, setRows] = useState(INITIAL_FEED_ROWS);
   const [selectedId, setSelectedId] = useState(INITIAL_FEED_ROWS[0].id);
   const [activeRoleId, setActiveRoleId] = useState(null);
+  const showDock = activeRoleId === SHOWCASE_DOCK_ROLE_ID;
 
   const visibleRows = useMemo(
     () => (activeRoleId == null ? rows : rows.filter((row) => row.role_id === activeRoleId)),
@@ -523,7 +525,7 @@ export const HomeShowcaseView = () => {
         agent={SHOWCASE_AGENT}
       />
 
-      <div className={`ac-shell ${activeRoleId == null ? 'ac-dock-collapsed' : ''}`}>
+      <div className={`ac-shell ${showDock ? '' : 'ac-dock-collapsed'}`}>
         <AgentSidebar
           agents={SHOWCASE_AGENTS}
           activeRoleId={activeRoleId}
@@ -565,7 +567,7 @@ export const HomeShowcaseView = () => {
           </div>
         </div>
 
-        {activeRoleId != null ? (
+        {showDock ? (
           <ShowcaseDock onAct={(msg) => showToast(msg, 'info')} />
         ) : null}
       </div>
