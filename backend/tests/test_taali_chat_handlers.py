@@ -25,7 +25,8 @@ from app.mcp import handlers
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 
 
@@ -68,6 +69,136 @@ def _make_app(db, *, org_id, role, candidate_name, email, taali=None, pre_screen
     db.add(app)
     db.commit()
     return app
+
+
+def _seed_sister_top_candidate_world(db, *, org: Organization) -> dict:
+    """Build a role-local truth set whose owner and sister signals disagree.
+
+    The canonical ATS rows deliberately cannot answer the sister-role query:
+    the best sister candidate is the owner's below-threshold candidate, while
+    the owner's strongest candidate has already advanced in the sister funnel.
+    This catches both accidental owner-role filtering and owner-score leakage.
+    """
+
+    owner = Role(organization_id=org.id, name="ATS owner", source="manual")
+    db.add(owner)
+    db.flush()
+    sister = Role(
+        organization_id=org.id,
+        name="Related AI Engineer",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add(sister)
+    db.flush()
+    specs = (
+        # key, display name, owner score, owner verdict/stage, sister score/stage
+        ("best", "Sister Best", 12.0, "Below threshold", "review", 96.0, "applied"),
+        ("second", "Sister Second", 92.0, "Advance recommended", "applied", 61.0, "review"),
+        (
+            "sister_advanced",
+            "Owner Best But Sister Advanced",
+            99.0,
+            "Advance recommended",
+            "applied",
+            30.0,
+            "advanced",
+        ),
+        # A stale local stage must not revive a globally advanced ATS row.
+        ("globally_advanced", "Globally Advanced", 8.0, None, "advanced", 98.0, "applied"),
+    )
+    applications: dict[str, CandidateApplication] = {}
+    for key, name, owner_score, owner_verdict, owner_stage, sister_score, sister_stage in specs:
+        application = _make_app(
+            db,
+            org_id=org.id,
+            role=owner,
+            candidate_name=name,
+            email=f"{key.replace('_', '-')}@x.test",
+            taali=owner_score,
+            pre_screen=owner_score,
+        )
+        application.pre_screen_recommendation = owner_verdict
+        application.pipeline_stage = owner_stage
+        applications[key] = application
+        db.add(
+            SisterRoleEvaluation(
+                organization_id=org.id,
+                role_id=sister.id,
+                source_application_id=application.id,
+                status="done",
+                pipeline_stage=sister_stage,
+                spec_fingerprint="sister-spec",
+                role_fit_score=sister_score,
+                summary=f"{name} related-role evidence.",
+                # A completed score remains valid even when the optional JSON
+                # details blob was not produced.
+                details=(
+                    None
+                    if key == "second"
+                    else {"summary": f"{name} related-role evidence."}
+                ),
+            )
+        )
+    db.commit()
+    return {"owner": owner, "sister": sister, **applications}
+
+
+# ---------------------------------------------------------------------------
+# search_applications role projection
+# ---------------------------------------------------------------------------
+
+
+def test_search_applications_uses_sister_score_stage_and_safe_projection(db):
+    """The generic application list must use selected-role truth.
+
+    The sister role intentionally owns no ``CandidateApplication`` rows.  Its
+    strongest result is below threshold on the ATS owner role, so either a
+    direct sister-id filter or an owner-score filter makes this oracle fail.
+    """
+
+    user, org = _make_user_and_org(db)
+    case = _seed_sister_top_candidate_world(db, org=org)
+    assert (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.role_id == int(case["sister"].id))
+        .count()
+        == 0
+    )
+
+    rows = handlers.search_applications(
+        db,
+        user,
+        role_id=int(case["sister"].id),
+        min_score=70,
+        score_type="taali",
+        pipeline_stage="applied",
+        sort_by="taali_score",
+    )
+
+    assert [row["application_id"] for row in rows] == [int(case["best"].id)]
+    row = rows[0]
+    assert row["role_id"] == int(case["sister"].id)
+    assert row["role_name"] == case["sister"].name
+    assert row["pipeline_stage"] == "applied"
+    assert row["taali_score"] == 96.0
+    assert row["pre_screen_score"] == 96.0
+    assert row["rank_score"] == 96.0
+    assert row["cv_match_score"] == 96.0
+    assert row["role_fit_score"] == 96.0
+    assert row["assessment_score"] is None
+    assert row["auto_reject_state"] is None
+    assert row["score_mode"] == "sister_role"
+    assert row["frontend_url"].endswith(
+        f"/candidates/{case['best'].id}?from=jobs/{case['sister'].id}"
+    )
+    # The owner truth is deliberately the opposite and never surfaces as the
+    # selected role's score, stage, or pre-screen verdict.
+    assert case["best"].taali_score_cache_100 == 12.0
+    assert case["best"].pipeline_stage == "review"
+    assert case["best"].pre_screen_recommendation == "Below threshold"
+    assert "pre_screen_recommendation" not in row
 
 
 # ---------------------------------------------------------------------------
@@ -365,10 +496,79 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
     assert unscored.id not in captured["ids"]           # un-evaluated excluded
     assert captured["limit"] == 5
     assert captured["rank_by"] == "taali"
-    assert captured["context"] == {
-        "inherited_titles_all": ["project manager"],
-        "inherited_titles_any": [],
-    }
+    assert captured["context"]["inherited_titles_all"] == ["project manager"]
+    assert captured["context"]["inherited_titles_any"] == []
+    assert captured["context"]["score_expression"] is (
+        CandidateApplication.taali_score_cache_100
+    )
+    assert captured["context"]["row_adapter"] is None
+    assert captured["context"]["payload_transform"] is None
+    assert captured["context"]["authoritative_pool_size"] == 5
+
+
+def test_find_top_candidates_uses_sister_scope_score_stage_and_projection(db):
+    """Related-role search must rank the related projection, not its ATS owner.
+
+    This is deliberately a fully local eval: parsing is fixed, no qualitative
+    criterion triggers evidence extraction, and the graph is never consulted.
+    """
+
+    user, org = _make_user_and_org(db)
+    case = _seed_sister_top_candidate_world(db, org=org)
+    runner_calls: list[dict] = []
+
+    def _local_runner(**kwargs):
+        runner_calls.append(kwargs)
+        return SearchOutput(
+            application_ids=[],
+            parsed_filter=ParsedFilter(),
+            warnings=[],
+            rerank_applied=False,
+            exhaustive=True,
+            is_exact_empty=False,
+        )
+
+    with (
+        patch("app.candidate_search.runner.run_search", side_effect=_local_runner),
+        patch(
+            "app.mcp.handlers._attach_shareable_candidate_report",
+            side_effect=lambda _db, _user, **kwargs: kwargs["snapshot"],
+        ),
+    ):
+        result = handlers.find_top_candidates(
+            db,
+            user,
+            query="candidates",
+            role_id=int(case["sister"].id),
+            limit=10,
+        )
+
+    assert len(runner_calls) == 1
+    assert runner_calls[0]["role_id"] == int(case["sister"].id)
+    assert result["pool_size"] == 2
+    assert [row["application_id"] for row in result["candidates"]] == [
+        int(case["best"].id),
+        int(case["second"].id),
+    ]
+
+    best, second = result["candidates"]
+    assert [best["taali_score"], second["taali_score"]] == [96.0, 61.0]
+    assert [best["pipeline_stage"], second["pipeline_stage"]] == [
+        "applied",
+        "review",
+    ]
+    assert best["role_id"] == int(case["sister"].id)
+    assert best["role_name"] == case["sister"].name
+    assert best["operational_role_id"] == int(case["owner"].id)
+    assert best["source_role_score"] == 12.0
+    assert best["score_mode"] == "sister_role"
+
+    returned_ids = {int(row["application_id"]) for row in result["candidates"]}
+    assert int(case["sister_advanced"].id) not in returned_ids
+    assert int(case["globally_advanced"].id) not in returned_ids
+    # The winning related candidate is explicitly below threshold on the owner
+    # role. That owner-only verdict must neither exclude nor relabel it here.
+    assert case["best"].pre_screen_recommendation == "Below threshold"
 
 
 def test_find_top_candidates_rejects_a_foreign_role_before_search_or_report(db):
@@ -509,6 +709,92 @@ def test_find_top_candidates_does_not_swallow_caller_flush_failure(db):
 # ---------------------------------------------------------------------------
 # screen_pool_against_requirement (rediscovery)
 # ---------------------------------------------------------------------------
+
+
+def test_screen_pool_uses_sister_scored_history_and_strips_owner_verdicts(db):
+    """Rediscovery admits local evaluations and returns only local role truth."""
+
+    user, org = _make_user_and_org(db)
+    case = _seed_sister_top_candidate_world(db, org=org)
+    assert case["best"].cv_match_details is None
+    assert (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.role_id == int(case["sister"].id))
+        .count()
+        == 0
+    )
+    captured: dict[str, object] = {}
+
+    def _local_runner(**kwargs):
+        captured["ids"] = {
+            int(app.id) for app in kwargs["base_query"].all()
+        }
+        captured["role_id"] = kwargs["role_id"]
+        return SearchOutput(
+            application_ids=[int(case["best"].id), int(case["second"].id)],
+            parsed_filter=ParsedFilter(skills_all=["payments"]),
+            warnings=[],
+            database_matches=2,
+            retrieval_matches=2,
+            exhaustive=True,
+            is_exact_empty=False,
+        )
+
+    with (
+        patch(
+            "app.candidate_search.runner.run_search",
+            side_effect=_local_runner,
+        ),
+        patch(
+            "app.mcp.handlers._attach_shareable_candidate_report",
+            side_effect=lambda _db, _user, **kwargs: kwargs["snapshot"],
+        ),
+    ):
+        result = handlers.screen_pool_against_requirement(
+            db,
+            user,
+            requirement_text="payments experience",
+            role_id=int(case["sister"].id),
+        )
+
+    assert captured["role_id"] == int(case["sister"].id)
+    assert captured["ids"] == {
+        int(case["best"].id),
+        int(case["second"].id),
+        int(case["sister_advanced"].id),
+        int(case["globally_advanced"].id),
+    }
+    assert result["role_id"] == int(case["sister"].id)
+    assert result["role_name"] == case["sister"].name
+    assert [row["application_id"] for row in result["candidates"]] == [
+        int(case["best"].id),
+        int(case["second"].id),
+    ]
+    assert [row["taali_score"] for row in result["candidates"]] == [96.0, 61.0]
+    row = result["candidates"][0]
+    assert row["role_id"] == int(case["sister"].id)
+    assert row["role_name"] == case["sister"].name
+    assert row["pipeline_stage"] == "applied"
+    assert row["taali_score"] == 96.0
+    assert row["pre_screen_score"] == 96.0
+    assert row["rank_score"] == 96.0
+    assert row["cv_match_score"] == 96.0
+    assert row["role_fit_score"] == 96.0
+    assert row["assessment_score"] is None
+    assert row["auto_reject_state"] is None
+    assert row["score_mode"] == "sister_role"
+    assert row["candidate_headline"] == "Sister Best related-role evidence."
+    assert row["candidate_summary"] is None
+    assert row["candidate_years"] is None
+    for owner_only_field in (
+        "source_role_score",
+        "operational_role_id",
+        "operational_role_name",
+        "pre_screen_recommendation",
+        "pre_screen_evidence",
+        "auto_reject_reason",
+    ):
+        assert owner_only_field not in row
 
 
 def test_screen_pool_handler_scopes_scored_nonhired(db):

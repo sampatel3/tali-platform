@@ -1018,6 +1018,60 @@ def test_find_top_candidates_does_not_claim_zero_when_retrieval_is_partial(
     assert out["warnings"][-1]["code"] == "structural_retrieval_incomplete"
 
 
+def test_find_top_candidates_does_not_claim_structural_zero_for_narrowed_actionable_pool(
+    monkeypatch,
+):
+    """A complete query over a slice is not complete over the role roster.
+
+    The retrieval layer can truthfully report an exact empty result for the
+    actionable base query it received.  When that base query contains fewer
+    candidates than the authoritative role roster, the user-facing result must
+    remain inexact so an agent cannot turn the slice into "checked everyone".
+    """
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **_kw: SearchOutput(
+            application_ids=[],
+            parsed_filter=ParsedFilter(skills_all=["PySpark"]),
+            warnings=[],
+            capped=False,
+            exhaustive=True,
+            is_exact_empty=True,
+            retrieval_matches=0,
+        ),
+    )
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: 2)
+    monkeypatch.setattr(
+        tc,
+        "_load_candidates",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unrelated candidates must not be loaded")
+        ),
+    )
+
+    out = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="PySpark experience",
+        base_query=MagicMock(),
+        authoritative_pool_size=5,
+        limit=10,
+    )
+
+    assert out["pool_size"] == 2
+    assert out["role_roster_size"] == 5
+    assert out["structural_matches"] == 0
+    assert out["qualified_total"] is None
+    assert out["search_status"] == "structural_retrieval_incomplete"
+    assert out["exhaustive"] is False
+    assert out["capped"] is True
+    assert out["is_exact_empty"] is False
+    assert out["warnings"][-1]["code"] == "structural_retrieval_incomplete"
+
+
 def test_find_top_candidates_does_not_claim_complete_total_for_partial_nonzero(
     monkeypatch,
 ):

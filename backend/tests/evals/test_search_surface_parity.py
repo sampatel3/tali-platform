@@ -46,7 +46,8 @@ from app.candidate_search.search_plan import (
 from app.mcp import handlers
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.taali_chat import tool_registry as taali_tools
 from app.taali_chat.service import _arguments_with_role_scope
@@ -163,6 +164,69 @@ def _seed_candidate(db, *, role: Role, entity_id: str) -> CandidateApplication:
     db.add(application)
     db.flush()
     return application
+
+
+def _sister_role_truth_case(db, client) -> dict:
+    """Construct a role-local oracle where owner and sister rankings invert."""
+
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    owner = Role(
+        organization_id=user.organization_id,
+        name="Canonical ATS role",
+        source="manual",
+    )
+    db.add(owner)
+    db.flush()
+    sister = Role(
+        organization_id=user.organization_id,
+        name="Related PySpark role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add(sister)
+    db.flush()
+    specs = (
+        # key, owner score, owner verdict/stage, sister score/stage
+        ("best", 12.0, "Below threshold", "review", 96.0, "applied"),
+        ("second", 92.0, "Advance recommended", "applied", 61.0, "review"),
+        ("local_advanced", 99.0, "Advance recommended", "applied", 30.0, "advanced"),
+        # A stale local stage must not revive a globally advanced ATS row.
+        ("globally_advanced", 8.0, None, "advanced", 98.0, "applied"),
+    )
+    applications: dict[str, CandidateApplication] = {}
+    for key, owner_score, owner_verdict, owner_stage, sister_score, sister_stage in specs:
+        application = _seed_candidate(
+            db,
+            role=owner,
+            entity_id=key.replace("_", "-"),
+        )
+        application.taali_score_cache_100 = owner_score
+        application.pre_screen_score_100 = owner_score
+        application.pre_screen_recommendation = owner_verdict
+        application.pipeline_stage = owner_stage
+        applications[key] = application
+        db.add(
+            SisterRoleEvaluation(
+                organization_id=user.organization_id,
+                role_id=sister.id,
+                source_application_id=application.id,
+                status="done",
+                pipeline_stage=sister_stage,
+                spec_fingerprint="related-spec",
+                role_fit_score=sister_score,
+                details={"summary": f"{key} related-role evidence."},
+            )
+        )
+    db.commit()
+    return {
+        "headers": headers,
+        "user": user,
+        "owner": owner,
+        "sister": sister,
+        **applications,
+    }
 
 
 def _oracle_case(db, client):
@@ -349,6 +413,154 @@ def test_oracle_truth_and_role_scope_are_identical_across_unified_search_surface
     assert len(calls) == 5
     assert {int(call["role_id"]) for call in calls} == {int(case["role"].id)}
     assert all("candidate_applications.role_id" in str(call["base_query"]) for call in calls)
+
+
+def test_related_role_top_candidates_preserve_local_truth_across_agent_surfaces(
+    db, client, monkeypatch
+) -> None:
+    """Both chats and the autonomous agent must use the sister-role projection.
+
+    This regression is deterministic and free: the parser result is local, the
+    query has no qualitative criterion, and neither graph nor evidence clients
+    can be reached.
+    """
+
+    case = _sister_role_truth_case(db, client)
+    calls: list[dict] = []
+
+    def local_runner(**kwargs):
+        calls.append(kwargs)
+        return SearchOutput(
+            application_ids=[],
+            parsed_filter=ParsedFilter(),
+            warnings=[],
+            rerank_applied=False,
+            exhaustive=True,
+            is_exact_empty=False,
+        )
+
+    monkeypatch.setattr("app.candidate_search.runner.run_search", local_runner)
+    monkeypatch.setattr(
+        handlers,
+        "_attach_shareable_candidate_report",
+        lambda _db, _user, **kwargs: kwargs["snapshot"],
+    )
+    args = {"query": "candidates", "limit": 10, "rank_by": "taali"}
+
+    shared = handlers.find_top_candidates(
+        db,
+        case["user"],
+        role_id=int(case["sister"].id),
+        **args,
+    )
+    taali = taali_tools.dispatch_tool(
+        "find_top_candidates",
+        _arguments_with_role_scope(
+            "find_top_candidates",
+            args,
+            conversation_role_id=int(case["sister"].id),
+        ),
+        db=db,
+        user=case["user"],
+    )
+    role_agent = role_agent_tools.dispatch_tool(
+        "find_top_candidates",
+        args,
+        db=db,
+        role=case["sister"],
+        user=case["user"],
+    )
+    with patch.object(autonomous_tools, "_governance_block_reason", return_value=None):
+        autonomous = autonomous_tools.dispatch(
+            "find_top_candidates",
+            args,
+            db=db,
+            agent_run=MagicMock(decisions_emitted=0),
+            role=case["sister"],
+        )
+
+    expected_ids = [int(case["best"].id), int(case["second"].id)]
+    for payload in (shared, taali, role_agent, autonomous):
+        rows = payload["candidates"]
+        assert payload["pool_size"] == 2
+        assert [int(row["application_id"]) for row in rows] == expected_ids
+        assert [row["taali_score"] for row in rows] == [96.0, 61.0]
+        assert [row["pipeline_stage"] for row in rows] == ["applied", "review"]
+        assert all(int(row["role_id"]) == int(case["sister"].id) for row in rows)
+        assert all(row["role_name"] == case["sister"].name for row in rows)
+        assert all(row["score_mode"] == "sister_role" for row in rows)
+        assert rows[0]["operational_role_id"] == int(case["owner"].id)
+        assert rows[0]["source_role_score"] == 12.0
+
+        returned = {int(row["application_id"]) for row in rows}
+        assert int(case["local_advanced"].id) not in returned
+        assert int(case["globally_advanced"].id) not in returned
+
+    assert case["best"].pre_screen_recommendation == "Below threshold"
+    assert len(calls) == 4
+    assert {int(call["role_id"]) for call in calls} == {int(case["sister"].id)}
+    assert all(call["include_subgraph"] is False for call in calls)
+
+
+def test_related_role_application_filter_preserves_local_truth_across_surfaces(
+    db, client
+) -> None:
+    """Application filtering shares sister truth in Chat and autonomous runs.
+
+    Agent Chat's candidate-search tool delegates to the already-covered
+    natural-language path; ``search_applications`` itself is exposed by Taali
+    Chat and the autonomous agent runtime.
+    """
+
+    case = _sister_role_truth_case(db, client)
+    args = {
+        "min_score": 70,
+        "score_type": "taali",
+        "pipeline_stage": "applied",
+        "sort_by": "taali_score",
+        "limit": 10,
+    }
+    shared = handlers.search_applications(
+        db,
+        case["user"],
+        role_id=int(case["sister"].id),
+        **args,
+    )
+    taali = taali_tools.dispatch_tool(
+        "search_applications",
+        _arguments_with_role_scope(
+            "search_applications",
+            args,
+            conversation_role_id=int(case["sister"].id),
+        ),
+        db=db,
+        user=case["user"],
+    )
+    with patch.object(autonomous_tools, "_governance_block_reason", return_value=None):
+        autonomous = autonomous_tools.dispatch(
+            "search_applications",
+            {**args, "role_id": int(case["owner"].id)},
+            db=db,
+            agent_run=MagicMock(decisions_emitted=0),
+            role=case["sister"],
+        )
+
+    for rows in (shared, taali, autonomous):
+        assert [int(row["application_id"]) for row in rows] == [
+            int(case["best"].id)
+        ]
+        row = rows[0]
+        assert int(row["role_id"]) == int(case["sister"].id)
+        assert row["role_name"] == case["sister"].name
+        assert row["pipeline_stage"] == "applied"
+        assert row["taali_score"] == 96.0
+        assert row["pre_screen_score"] == 96.0
+        assert row["assessment_score"] is None
+        assert row["score_mode"] == "sister_role"
+
+    assert case["best"].taali_score_cache_100 == 12.0
+    assert case["best"].pipeline_stage == "review"
+    assert case["best"].pre_screen_recommendation == "Below threshold"
 
 
 def test_graph_compatibility_surfaces_delegate_to_role_scoped_grounded_search(
