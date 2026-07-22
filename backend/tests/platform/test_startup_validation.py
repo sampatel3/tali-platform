@@ -221,6 +221,22 @@ def test_collect_startup_failures_validates_legacy_selector_for_each_task(
     )
 
 
+def test_collect_startup_failures_accepts_production_grounding_selector(monkeypatch):
+    monkeypatch.setenv("CLAUDE_GROUNDING_MODEL", "claude-sonnet-4-5")
+
+    failures = collect_startup_failures(
+        _settings(
+            DEPLOYMENT_ENV="production",
+            SECRET_KEY="real-secret",
+            USAGE_METER_LIVE=True,
+            CLAUDE_MODEL="claude-sonnet-4-5",
+            CLAUDE_AGENT_AUTONOMOUS_MODEL="claude-haiku-4-5-20251001",
+        )
+    )
+
+    assert failures == []
+
+
 def test_collect_startup_failures_checks_masked_legacy_selector():
     failures = collect_startup_failures(
         _settings(
