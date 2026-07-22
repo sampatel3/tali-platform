@@ -195,6 +195,31 @@ export const SHOWCASE_AGENTS = [
   { role_id: 114, role_name: 'DataOps Engineer', group: 'active', agent_enabled: false, pending_decisions: 0, last_message_preview: 'Agent off — tap to set up' },
 ];
 
+const SHOWCASE_FUNNEL_ALL = {
+  stageCounts: { applied: 312, scored: 184, invited: 9, completed: 4, advanced: 61, rejected: 1905, in_assessment: 6, invited_opened: 7, invited_delivered: 8 },
+  decisionsByType: { send_assessment: 20, reject: 80, advance_to_interview: 3, skip_assessment_reject: 0 },
+};
+
+const SHOWCASE_FUNNEL_BY_ROLE = {
+  109: {
+    stageCounts: { applied: 180, scored: 112, invited: 5, completed: 2, advanced: 39, rejected: 1102, in_assessment: 3, invited_opened: 4, invited_delivered: 5 },
+    decisionsByType: { send_assessment: 13, reject: 53, advance_to_interview: 2, skip_assessment_reject: 0 },
+  },
+  110: {
+    stageCounts: { applied: 95, scored: 47, invited: 2, completed: 1, advanced: 15, rejected: 671, in_assessment: 2, invited_opened: 2, invited_delivered: 2 },
+    decisionsByType: { send_assessment: 5, reject: 25, advance_to_interview: 1, skip_assessment_reject: 0 },
+  },
+  111: {
+    stageCounts: { applied: 37, scored: 25, invited: 2, completed: 1, advanced: 7, rejected: 132, in_assessment: 1, invited_opened: 1, invited_delivered: 1 },
+    decisionsByType: { send_assessment: 2, reject: 2, advance_to_interview: 0, skip_assessment_reject: 0 },
+  },
+};
+
+const SHOWCASE_FUNNEL_EMPTY = {
+  stageCounts: {},
+  decisionsByType: {},
+};
+
 // Mock impact cards in the live shapes ImpactCard / DraftTaskCard render.
 const CONSTRAINT_CARD = {
   type: 'constraint_change',
@@ -474,6 +499,12 @@ export const HomeShowcaseView = () => {
   const [selectedId, setSelectedId] = useState(INITIAL_FEED_ROWS[0].id);
   const [activeRoleId, setActiveRoleId] = useState(null);
   const showDock = activeRoleId === SHOWCASE_DOCK_ROLE_ID;
+  const activeAgent = activeRoleId == null
+    ? null
+    : SHOWCASE_AGENTS.find((agent) => agent.role_id === activeRoleId) || null;
+  const funnelScope = activeRoleId == null
+    ? SHOWCASE_FUNNEL_ALL
+    : SHOWCASE_FUNNEL_BY_ROLE[activeRoleId] || SHOWCASE_FUNNEL_EMPTY;
 
   const visibleRows = useMemo(
     () => (activeRoleId == null ? rows : rows.filter((row) => row.role_id === activeRoleId)),
@@ -536,9 +567,9 @@ export const HomeShowcaseView = () => {
           <div className="home-body">
             <FunnelBoard
               variant="flat"
-              scopeLabel="all roles"
-              stageCounts={{ applied: 312, scored: 184, invited: 9, completed: 4, advanced: 61, rejected: 1905, in_assessment: 6, invited_opened: 7, invited_delivered: 8 }}
-              decisionsByType={{ send_assessment: 20, reject: 80, advance_to_interview: 3, skip_assessment_reject: 0 }}
+              scopeLabel={activeAgent?.role_name || 'all roles'}
+              stageCounts={funnelScope.stageCounts}
+              decisionsByType={funnelScope.decisionsByType}
             />
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">

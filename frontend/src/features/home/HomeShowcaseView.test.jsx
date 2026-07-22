@@ -65,5 +65,7 @@ describe('ShowcaseDock agent lanes', () => {
 
     expect(screen.queryByRole('tab', { name: 'Chat' })).not.toBeInTheDocument();
     expect(screen.getAllByText('Jordan Patel').length).toBeGreaterThan(0);
+    expect(screen.getByText('95')).toBeInTheDocument();
+    expect(screen.queryByText('312')).not.toBeInTheDocument();
   });
 });
