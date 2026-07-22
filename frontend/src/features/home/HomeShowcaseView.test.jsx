@@ -2,7 +2,7 @@ import React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ShowcaseDock } from './HomeShowcaseView';
+import { HomeShowcaseView, ShowcaseDock } from './HomeShowcaseView';
 
 describe('ShowcaseDock agent lanes', () => {
   beforeEach(() => {
@@ -46,5 +46,19 @@ describe('ShowcaseDock agent lanes', () => {
     expect(screen.getByRole('textbox', { name: 'Chat message' })).toHaveValue(
       'Keep this draft while I check the feed',
     );
+  });
+
+  it('mirrors the current Home Hub hierarchy and opens chat only for a selected role', () => {
+    render(<HomeShowcaseView />);
+
+    expect(screen.queryByText('DECISIONS TODAY')).not.toBeInTheDocument();
+    expect(screen.getByText('Review queue', { selector: 'h3' })).toBeInTheDocument();
+    expect(screen.getByText("Approve, override, or teach the agent's calls — this is where you keep the loop honest.")).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Chat' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Senior Backend Engineer — Capped salary at AED 25k · re-screened 4'));
+
+    expect(screen.getByRole('tab', { name: 'Chat' })).toBeInTheDocument();
+    expect(screen.queryByText('Jordan Patel')).not.toBeInTheDocument();
   });
 });

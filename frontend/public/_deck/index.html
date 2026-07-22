@@ -890,6 +890,114 @@
     background: #fff;
   }
   .way.hero .way-li { border-color: rgba(255,255,255,.14); background: rgba(255,255,255,.06); }
+
+  /* ---- revised main story ---- */
+  .governed-summary .governed-card { justify-content: center; padding: 42px 38px; }
+  .governed-summary .governed-title { margin-top: 26px; font-size: 42px; }
+  .governed-summary .governed-copy {
+    margin-top: 28px; padding-top: 0; font-size: 19px; line-height: 1.48; color: var(--ink-2);
+  }
+  .governed-summary .governed-card.agent .governed-copy { color: rgba(255,255,255,.8); }
+
+  .proof-layer-grid {
+    flex: 1; min-height: 0; display: grid; grid-template-columns: 1.08fr .92fr; gap: 22px;
+  }
+  .proof-layer-card {
+    min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line);
+    border-radius: 20px; overflow: hidden; background: var(--bg-2);
+  }
+  .proof-layer-card.dark { background: var(--ink); border-color: var(--ink); }
+  .proof-layer-top {
+    display: flex; justify-content: space-between; align-items: center; gap: 18px;
+    padding: 17px 21px; border-bottom: 1px solid var(--line); background: #fff;
+  }
+  .proof-layer-card.dark .proof-layer-top {
+    border-color: rgba(255,255,255,.14); background: rgba(255,255,255,.06);
+  }
+  .proof-layer-tag {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .proof-layer-card.dark .proof-layer-tag { color: var(--purple-lav); }
+  .proof-layer-name { font-size: 14px; color: var(--ink-2); text-align: right; }
+  .proof-layer-card.dark .proof-layer-name { color: rgba(255,255,255,.72); }
+  .proof-layer-image { flex: 1; min-height: 0; background-repeat: no-repeat; background-color: #f7f3fb; }
+  .proof-layer-image.assessment {
+    background-image: url('img/surf-assess.png'); background-size: 150%; background-position: center 76%;
+  }
+  .proof-layer-image.report {
+    background-image: url('img/surf-report.png'); background-size: cover; background-position: top center;
+  }
+  .proof-layer-copy {
+    min-height: 88px; padding: 15px 20px 17px; font-size: 15px; line-height: 1.42;
+    color: var(--ink-2); background: #fff; border-top: 1px solid var(--line);
+  }
+  .proof-layer-card.dark .proof-layer-copy {
+    color: rgba(255,255,255,.8); background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.14);
+  }
+  .proof-layer-copy b { color: var(--ink); }
+  .proof-layer-card.dark .proof-layer-copy b { color: #fff; }
+  .proof-layer-strip {
+    margin-top: 17px; padding: 16px 22px; border-radius: 14px; background: var(--purple-soft);
+    border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line));
+    display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center;
+    font-size: 15px; line-height: 1.4; color: var(--ink-2);
+  }
+  .proof-layer-strip b { color: var(--ink); }
+  .proof-layer-strip span:last-child { font-family: var(--font-mono); font-size: 11px; color: var(--purple); }
+
+  .value-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .value-card {
+    padding: 38px 40px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg-2);
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .value-card.dark { color: #fff; background: var(--ink); border-color: var(--ink); }
+  .value-label {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .value-card.dark .value-label { color: var(--purple-lav); }
+  .value-card h3 {
+    margin: 32px 0 18px; font-family: var(--font-display); font-size: 45px;
+    line-height: 1.02; letter-spacing: -.035em;
+  }
+  .value-card p { margin: 0; font-size: 19px; line-height: 1.5; color: var(--ink-2); }
+  .value-card.dark p { color: rgba(255,255,255,.78); }
+  .value-proof {
+    margin-top: 30px; padding-top: 18px; border-top: 1px dashed var(--line);
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.5; color: var(--purple);
+  }
+  .value-card.dark .value-proof { color: var(--purple-lav); border-color: rgba(255,255,255,.18); }
+
+  .pilot-expansion {
+    display: grid; gap: 9px; padding: 18px 20px; border: 1px solid var(--line);
+    border-radius: 18px; background: var(--bg-2);
+  }
+  .pilot-expansion .lbl {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .pilot-expansion-row {
+    display: grid; grid-template-columns: 165px 1fr; gap: 13px; align-items: start;
+    padding-top: 9px; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.4; color: var(--ink-2);
+  }
+  .pilot-expansion-row b { color: var(--ink); }
+  .founder-fit {
+    padding: 18px 20px; border: 1px solid var(--line); border-radius: 18px; background: var(--bg-2);
+    font-size: 14px; line-height: 1.48; color: var(--ink-2);
+  }
+  .founder-fit .lbl {
+    display: block; margin-bottom: 9px; font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .founder-fit b { color: var(--ink); }
+  .founder-fit em { color: var(--purple); font-style: normal; font-weight: 700; }
+
+  .pipe-card .badge.available {
+    color: #7c3aed; background: color-mix(in oklab, #7c3aed 11%, #fff);
+    border: 1px solid color-mix(in oklab, #7c3aed 32%, var(--line));
+  }
+  .pipe-legend .sw.available { background: color-mix(in oklab, #7c3aed 16%, #fff); border: 1px solid #7c3aed; }
 </style>
 </head>
 <body>
@@ -940,7 +1048,7 @@
       </div>
     </div>
     <div class="h71-takeaway"><b>The new hiring stack needs both.</b><span>Automation to run the funnel — and trustworthy evidence to support the decision.</span></div>
-    <div class="slide-foot"><span>02 / 15 · The problem</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>02 / 10 · The problem</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
   <!-- 03 · PRODUCT -->
@@ -965,74 +1073,40 @@
       </div>
     </div>
     <div class="h71-control-line"><span>The team sets the boundaries</span><b>Role policy and budget · approval gates · evidence review · pause or override</b></div>
-    <div class="slide-foot"><span>03 / 15 · Two products, one decision loop</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>03 / 10 · Two products, one decision loop</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
   <!-- 04 · GOVERNED ROLE AGENT -->
   <section data-slide="agent-control" data-screen-label="04 Governed role agent">
     <div class="slide-head tight-head">
-      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The product · governed automation</span></div>
-      <h2 class="slide-title" style="font-size:56px;">The role agent works inside <em>the guardrails your team sets.</em></h2>
+      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>Governed automation</span></div>
+      <h2 class="slide-title" style="font-size:56px;">The role agent runs the repeatable work. <em>Your team sets the rules.</em></h2>
     </div>
-    <div class="governed-grid">
+    <div class="governed-grid governed-summary">
       <div class="governed-card">
         <div class="governed-kicker">01 · Set</div>
-        <div class="governed-title">Define the role and the rules.</div>
-        <div class="governed-list">
-          <div class="governed-item"><span class="n">01</span><span><b>Requirements</b> and must-haves</span></div>
-          <div class="governed-item"><span class="n">02</span><span><b>Budget</b> and score thresholds</span></div>
-          <div class="governed-item"><span class="n">03</span><span><b>Autonomy</b> and approval gates</span></div>
-        </div>
+        <div class="governed-title">Define the role and its boundaries.</div>
+        <div class="governed-copy"><b>Requirements, budget and approval gates</b> become the operating policy for that mandate.</div>
       </div>
       <div class="governed-card agent">
         <div class="governed-kicker">02 · Run</div>
-        <div class="governed-title">Work every candidate against the same policy.</div>
-        <div class="governed-list">
-          <div class="governed-item"><span class="n">01</span><span><b>Ingest, parse and deduplicate</b></span></div>
-          <div class="governed-item"><span class="n">02</span><span><b>Search, screen, score and rank</b></span></div>
-          <div class="governed-item"><span class="n">03</span><span><b>Assess and surface exceptions</b></span></div>
-        </div>
+        <div class="governed-title">Work every candidate against one role policy.</div>
+        <div class="governed-copy"><b>Search, screen, score and assess</b> consistently, then surface the evidence or exception that matters.</div>
       </div>
       <div class="governed-card">
         <div class="governed-kicker">03 · Review</div>
         <div class="governed-title">Make the call with the evidence in view.</div>
-        <div class="governed-list">
-          <div class="governed-item"><span class="n">01</span><span><b>Approve or override</b> recommendations</span></div>
-          <div class="governed-item"><span class="n">02</span><span><b>Inspect</b> evidence and policy path</span></div>
-          <div class="governed-item"><span class="n">03</span><span><b>Pause, disable or revise</b> the agent</span></div>
-        </div>
+        <div class="governed-copy"><b>Inspect, approve or override</b> — then pause or revise the agent whenever the role changes.</div>
       </div>
     </div>
     <div class="governed-rule"><span>How autonomy works</span><b>Configured on-policy actions may run automatically; off-policy and low-confidence cases are held for review.</b></div>
-    <div class="slide-foot"><span>04 / 15 · Governed role agent</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>04 / 10 · Governed role agent</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
-  <!-- 05 · HOME HUB -->
-  <section class="product-preview" data-slide="home-hub" data-screen-label="05 Home Hub">
-    <div class="slide-head surf-head">
-      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>The product · command centre</span></div>
-      <h2 class="surf-title" style="font-size:34px;">The Home Hub — <em>every role, agent and decision in one command centre.</em></h2>
-    </div>
-    <div class="surf">
-      <div class="surf-frame hub-frame">
-        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/home · hiring command centre</span><span class="surf-badge">Product UI · representative data</span></div>
-        <iframe src="/showcase/home" title="Taali — Home Hub" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
-        <img class="surf-shot" src="img/surf-hub.png" alt="Taali Home Hub — representative product data" />
-      </div>
-      <div class="surf-out hub-out">
-        <span><b>Role rail:</b> switch between active mandates and see each agent's status.</span>
-        <span><b>Pipeline:</b> view funnel health, spend and the work completed on every role.</span>
-        <span><b>Decision queue:</b> inspect evidence, approve, override or pause from one place.</span>
-        <span><b>Chat:</b> search the existing Taali and ATS-synced candidate pool in plain English.</span>
-      </div>
-    </div>
-    <div class="slide-foot"><span>05 / 15 · Home Hub · product preview</span><span class="brand">taali<span class="p">.</span></span></div>
-  </section>
-
-  <!-- 06 · AGENTIC ATS -->
-  <section data-slide="ats-workflow" data-screen-label="06 Agentic ATS">
+  <!-- 05 · AGENTIC ATS -->
+  <section data-slide="ats-workflow" data-screen-label="05 Agentic ATS">
     <div class="slide-head tight-head">
-      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>How Taali works</span></div>
+      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>How Taali works</span></div>
       <h2 class="slide-title" style="font-size:51px;">Run Taali as the agentic ATS — <em>or connect Workable / Bullhorn.</em></h2>
       <p class="slide-sub">One governed operating flow from role brief to evidence-backed handoff.</p>
     </div>
@@ -1041,16 +1115,16 @@
         <div class="ats-entry-icon">T</div>
         <div>
           <div class="ats-entry-label">Native ATS</div>
-          <div class="ats-entry-title">One workspace for the hiring flow.</div>
-          <div class="ats-entry-copy">Role setup, careers pages and public apply, candidate records, search, screening, assessment, decisions and reporting.</div>
+          <div class="ats-entry-title">One workspace for the full hiring flow.</div>
+          <div class="ats-entry-copy">Role setup, public apply, candidate records, search, screening, assessment, decisions and reporting.</div>
         </div>
       </div>
       <div class="ats-entry-card">
         <div class="ats-entry-icon">↔</div>
         <div>
           <div class="ats-entry-label">ATS integrations</div>
-          <div class="ats-entry-title">Workable and Bullhorn connect into the same loop.</div>
-          <div class="ats-entry-copy">Roles and candidates sync in; mapped stages, statuses and recruiter-safe notes write back.</div>
+          <div class="ats-entry-title">Keep the system of record you already run.</div>
+          <div class="ats-entry-copy">Role and candidate sync with mapped stages, statuses and note write-back.</div>
         </div>
       </div>
     </div>
@@ -1064,109 +1138,146 @@
       <div class="ats-step"><div class="ats-step-num">06 · DECIDE</div><div class="ats-step-title">Review &amp; share</div><div class="ats-step-copy">Approve or override, then share a secure report and tailored interview pack.</div></div>
     </div>
     <div class="ats-one-line">One candidate record · one evidence trail · one governed decision path</div>
-    <div class="slide-foot"><span>06 / 15 · Native or integrated ATS</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>05 / 10 · Native or integrated ATS</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
-  <!-- 07 · DATA PROTECTION -->
-  <section data-slide="data-protection" data-screen-label="07 UK &amp; EU data protection">
+  <!-- 06 · PROOF LAYER -->
+  <section data-slide="proof-layer" data-screen-label="06 The proof layer">
     <div class="slide-head tight-head">
-      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>Data protection &amp; accountable automation</span></div>
-      <h2 class="slide-title" style="font-size:52px;">Built to support <em>human oversight and traceable hiring decisions.</em></h2>
-      <p class="slide-sub">Practical controls for UK/EU deployments — paired with a documented customer compliance process.</p>
+      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>The proof layer</span></div>
+      <h2 class="slide-title" style="font-size:53px;">Real work becomes evidence <em>every reviewer can inspect.</em></h2>
+      <p class="slide-sub">The assessment captures how the candidate works with AI; the report links the score back to the trace.</p>
+    </div>
+    <div class="proof-layer-grid">
+      <div class="proof-layer-card dark">
+        <div class="proof-layer-top">
+          <span class="proof-layer-tag">Candidate workspace</span>
+          <span class="proof-layer-name">Role-specific work with AI in the loop</span>
+        </div>
+        <div class="proof-layer-image assessment" role="img" aria-label="Taali assessment workspace with AI assistant, editor and sandboxed runtime"></div>
+        <div class="proof-layer-copy"><b>Observe the work:</b> AI assistant, editor and sandboxed runtime on a task derived from the role.</div>
+      </div>
+      <div class="proof-layer-card">
+        <div class="proof-layer-top">
+          <span class="proof-layer-tag">Recruiter report</span>
+          <span class="proof-layer-name">Score → criteria → raw evidence</span>
+        </div>
+        <div class="proof-layer-image report" role="img" aria-label="Taali candidate report Assessment tab with evidence-linked scores"></div>
+        <div class="proof-layer-copy"><b>Inspect the recommendation:</b> Five-D scores open to rubric criteria, prompts, code, replay and the final deliverable.</div>
+      </div>
+    </div>
+    <div class="proof-layer-strip">
+      <span><b>Captured:</b> prompts · responses · edits · validation runs · final artifact</span>
+      <span>Client-safe sharing remains separate from recruiter-only detail</span>
+    </div>
+    <div class="slide-foot"><span>06 / 10 · Assessment to evidence-linked report</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 07 · VALUE -->
+  <section data-slide="buyer-value" data-screen-label="07 What changes">
+    <div class="slide-head tight-head">
+      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>What changes</span></div>
+      <h2 class="slide-title" style="font-size:56px;">More recruiter capacity. <em>Stronger evidence at the decision.</em></h2>
+    </div>
+    <div class="value-grid">
+      <div class="value-card dark">
+        <div class="value-label">01 · Run more roles</div>
+        <h3>Give the repeatable work to the role agent.</h3>
+        <p>Intake, existing-pool search, screening and assessment orchestration run against one role policy — so recruiters spend less time rebuilding the same process.</p>
+        <div class="value-proof">Brief → intake → search → screen → assess</div>
+      </div>
+      <div class="value-card">
+        <div class="value-label">02 · Make a stronger handoff</div>
+        <h3>Show the work behind the recommendation.</h3>
+        <p>Recruiters, hiring managers and clients can inspect the work sample and evidence behind the shortlist instead of accepting a score at face value.</p>
+        <div class="value-proof">Candidate record → evidence trail → reviewer decision</div>
+      </div>
+    </div>
+    <div class="takeaway-band"><span class="lbl">One operating model</span><span>One candidate record and one evidence trail, whether Taali runs natively or connects to your ATS.</span></div>
+    <div class="slide-foot"><span>07 / 10 · Buyer value</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 08 · DATA PROTECTION -->
+  <section data-slide="data-protection" data-screen-label="08 UK &amp; EU data protection">
+    <div class="slide-head tight-head">
+      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>UK &amp; EU deployment</span></div>
+      <h2 class="slide-title" style="font-size:52px;">Candidate data stays controlled. <em>Decisions stay explainable.</em></h2>
+      <p class="slide-sub">Product controls support the customer's documented legal process.</p>
     </div>
     <div class="compliance-grid">
       <div class="compliance-card dark">
-        <div class="compliance-label">Product controls today</div>
-        <h3>Control who acts, what runs and what leaves the system.</h3>
+        <div class="compliance-label">Built into Taali</div>
+        <h3>Control access, sharing and the decision record.</h3>
         <div class="compliance-list">
-          <div class="compliance-item"><span class="ic">01</span><span>Tenant-scoped access, with per-role permissions for edits, agent controls and team management.</span></div>
-          <div class="compliance-item"><span class="ic">02</span><span>Role-level autonomy and review holds for off-policy or low-confidence actions.</span></div>
-          <div class="compliance-item"><span class="ic">03</span><span>Exportable decision provenance: reasoning, evidence, model/prompt versions and human resolution.</span></div>
-          <div class="compliance-item"><span class="ic">04</span><span>Separate client-safe views with time-limited, revocable or single-view bearer links.</span></div>
+          <div class="compliance-item"><span class="ic">01</span><span>Tenant-scoped access and role-based permissions.</span></div>
+          <div class="compliance-item"><span class="ic">02</span><span>Time-limited, revocable links tailored to each audience.</span></div>
+          <div class="compliance-item"><span class="ic">03</span><span>Recorded evidence, policy/model context and human outcome.</span></div>
+          <div class="compliance-item"><span class="ic">04</span><span>Logged access and erasure workflows for candidate data.</span></div>
         </div>
       </div>
       <div class="compliance-card">
-        <div class="compliance-label">Deployment controls with each customer</div>
-        <h3>Document the lawful process around the product.</h3>
+        <div class="compliance-label">Agreed for each deployment</div>
+        <h3>Document the lawful process around the workflow.</h3>
         <div class="compliance-list">
-          <div class="compliance-item"><span class="ic">01</span><span>Controller/processor roles, purpose, lawful basis and candidate privacy notice.</span></div>
-          <div class="compliance-item"><span class="ic">02</span><span>DPIA, retention/deletion schedule and data-subject request map.</span></div>
-          <div class="compliance-item"><span class="ic">03</span><span>Candidate explanation, representation, human-intervention and contest route.</span></div>
-          <div class="compliance-item"><span class="ic">04</span><span>DPA, subprocessors, transfer mechanisms and EU AI Act readiness plan.</span></div>
+          <div class="compliance-item"><span class="ic">01</span><span>Controller/processor roles, purpose and lawful basis.</span></div>
+          <div class="compliance-item"><span class="ic">02</span><span>Privacy notice, DPIA, retention and deletion schedule.</span></div>
+          <div class="compliance-item"><span class="ic">03</span><span>Human-intervention, representation and challenge route.</span></div>
+          <div class="compliance-item"><span class="ic">04</span><span>DPA, subprocessors and international-transfer mechanism.</span></div>
         </div>
       </div>
     </div>
     <div class="legal-line">
-      <span><b>Regulatory frame:</b> UK GDPR + DPA 2018 as amended by the Data (Use and Access) Act 2025. EU recruitment AI is a high-risk category; the current employment-system timetable is 2 December 2027.</span>
-      <span><a href="https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/employment/recruitment-and-selection/">ICO guidance ↗</a> · <a href="https://digital-strategy.ec.europa.eu/en/policies/guidelines-ai-high-risk-systems">EU AI Act timetable ↗</a></span>
+      <span><b>Positioning:</b> supports accountable deployment and customer compliance work; this is not a blanket legal or certification claim.</span>
+      <span><a href="https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/employment/recruitment-and-selection/">ICO recruitment guidance ↗</a> · <a href="https://digital-strategy.ec.europa.eu/en/policies/regulatory-framework-ai">EU AI Act ↗</a></span>
     </div>
-    <div class="slide-foot"><span>07 / 15 · Supports compliance; not a certification claim</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>08 / 10 · UK &amp; EU deployment</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
-  <!-- 08 · WHY TAALI -->
-  <section data-slide="wedge" data-screen-label="08 Why Taali">
-    <div class="slide-head tight-head">
-      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>Why Taali</span></div>
-      <h2 class="slide-title" style="font-size:55px;">Designed around the agent and the work sample — <em>not added as an AI sidebar.</em></h2>
-    </div>
-    <div class="why-cards">
-      <div class="why-card dark">
-        <div class="why-num">01 · AGENTIC BY DESIGN</div>
-        <h3>The agent works the role.</h3>
-        <p>It operates against one role's requirements, budget and autonomy policy, then surfaces the evidence or exception the team needs.</p>
-        <div class="why-proof">Role brief → search → screen → assess → review</div>
-      </div>
-      <div class="why-card">
-        <div class="why-num">02 · PROOF FROM REAL WORK</div>
-        <h3>The evidence is the product.</h3>
-        <p>Candidates use AI on role-specific work. Every score links back to prompts, edits, validation runs and the deliverable itself.</p>
-        <div class="why-proof">Work trace → rubric evidence → inspectable report</div>
-      </div>
-      <div class="why-card">
-        <div class="why-num">03 · CONTROLLED OPERATIONS</div>
-        <h3>Automation stays reviewable.</h3>
-        <p>Teams set role-level autonomy, inspect the rule path and evidence, approve or override recommendations, and pause the agent.</p>
-        <div class="why-proof">Policy + provenance + human resolution</div>
-      </div>
-    </div>
-    <div class="takeaway-band"><span class="lbl">The wedge</span><span>A governed agentic ATS and an AI-native work sample in <em>one evidence loop</em>.</span></div>
-    <div class="slide-foot"><span>08 / 15 · Why Taali</span><span class="brand">taali<span class="p">.</span></span></div>
-  </section>
-
-  <!-- 09 · PILOTS -->
-  <section data-slide="pilots" data-screen-label="09 Pilot traction">
+  <!-- 09 · PROOF -->
+  <section data-slide="proof" data-screen-label="09 Live proof &amp; pilot expansion">
     <div class="tally-grid tg-tr"></div>
-    <div class="slide-head tight-head">
-      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>Pilot traction</span></div>
-      <h2 class="slide-title" style="font-size:55px;">Two consultancy and staffing pilots — <em>one in the UAE, one in Europe.</em></h2>
-      <p class="slide-sub">The same product is being shaped around two specialist hiring environments and one clear outcome: faster, evidence-backed shortlists.</p>
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>Proof &amp; pilot expansion</span></div>
+      <h2 class="slide-title" style="font-size:54px;">Not a demo — it runs a <em>real hiring operation</em> every day.</h2>
     </div>
-    <div class="pilot-grid">
-      <div class="pilot-card dark">
-        <div class="pilot-region">UAE · consultancy &amp; staffing</div>
-        <h3>High-volume specialist hiring.</h3>
-        <p>Apply the role agent across technical mandates, reduce repetitive screening and give consultants evidence they can take into the client conversation.</p>
-        <div class="pilot-focus">
-          <div class="pilot-focus-row"><b>Mandate setup</b><span>Turn each brief into one governed role workflow.</span></div>
-          <div class="pilot-focus-row"><b>Consultant capacity</b><span>Automate consistent search, screening and assessment orchestration.</span></div>
-          <div class="pilot-focus-row"><b>Client handoff</b><span>Pair the shortlist with an evidence-backed, client-safe report.</span></div>
+    <div class="market-grid" style="grid-template-columns: 0.92fr 1.18fr;">
+      <div class="traction" style="gap:12px;">
+        <div class="th">// Live · production · design-partner workspace</div>
+        <div class="pilot" style="grid-template-columns: 1fr; gap:12px;">
+          <span class="nm">DeepLight AI · live design partner</span>
+          <span class="ds">A Dubai-based <b style="color:#1a1228;">data &amp; AI consultancy</b> using Taali across live technical hiring in data engineering, AI, cloud, product and governance.</span>
+          <div>
+            <div style="font-family:var(--font-mono); font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--mute); margin-bottom:8px;">// Roles hired through Taali</div>
+            <div class="role-chips">
+              <span>Data Engineer</span><span>AI Engineer</span><span>GenAI Engineer</span><span>AI/ML Architect</span><span>AWS Architect</span><span>AI Product Owner</span><span>Platform Engineer</span><span>AI Governance</span>
+            </div>
+          </div>
+          <span class="live"><span class="blip"></span>Live · production</span>
         </div>
-        <div class="pilot-scope"><span>Role setup</span><span>Screening</span><span>AI assessment</span><span>Client-safe reports</span></div>
+        <div class="pilot-expansion">
+          <div class="lbl">// Two consultancy pilots expanding the model</div>
+          <div class="pilot-expansion-row"><b>UAE · consultancy &amp; staffing</b><span>High-volume specialist hiring, AI assessment and client-safe handoff.</span></div>
+          <div class="pilot-expansion-row"><b>Europe · consultancy &amp; staffing</b><span>Native + connected ATS delivery with human review and data-protection diligence.</span></div>
+        </div>
+        <div class="founder-fit">
+          <span class="lbl">// Founder–market fit</span>
+          Built by <b>Sam Patel</b> — a data scientist who spent a decade hiring and growing data teams. He built Taali from the ground up, then proved it running DeepLight's hiring. <em>A product proven on a live operation.</em>
+        </div>
       </div>
-      <div class="pilot-card">
-        <div class="pilot-region">Europe · consultancy &amp; staffing</div>
-        <h3>Controlled, auditable delivery.</h3>
-        <p>Test the native and integrated ATS paths with UK/EU data-protection diligence, clear human oversight and evidence-linked candidate decisions.</p>
-        <div class="pilot-focus">
-          <div class="pilot-focus-row"><b>ATS operation</b><span>Run native and integrated paths against the same evidence loop.</span></div>
-          <div class="pilot-focus-row"><b>Human oversight</b><span>Test role autonomy, review holds, overrides and decision provenance.</span></div>
-          <div class="pilot-focus-row"><b>Deployment diligence</b><span>Document privacy, DPIA, retention and candidate challenge processes.</span></div>
+      <div class="proof-right">
+        <div class="th">// On Taali at DeepLight, to date</div>
+        <div class="proof-stats">
+          <div class="s"><div class="n">100+</div><div class="l">Roles run on Taali</div></div>
+          <div class="s"><div class="n">58k+</div><div class="l">Applications screened · 42k+ candidates</div></div>
+          <div class="s"><div class="n">16k+</div><div class="l">Agent decisions, human-approved</div></div>
+          <div class="s"><div class="n">70+</div><div class="l">AI-native assessments sent</div></div>
+          <div class="s accent"><div class="n">24</div><div class="l">Offers extended from Taali shortlists</div></div>
+          <div class="s accent"><div class="n">18</div><div class="l">Hires made</div></div>
         </div>
-        <div class="pilot-scope"><span>ATS workflow</span><span>Human review</span><span>Decision provenance</span><span>Data protection</span></div>
+        <div class="outcome-band">A <b>58,000-application flood</b> screened down to an evidence-backed shortlist — with a <b>human signing off on every advance and reject</b>.</div>
       </div>
     </div>
-    <div class="pilot-measure"><span>Shared success measures</span><b>Recruiter time per role · time to evidence-backed shortlist · assessment completion · recruiter acceptance of recommendations</b></div>
-    <div class="slide-foot"><span>09 / 15 · Pilot traction</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>09 / 10 · Live proof &amp; pilot expansion</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
   <!-- 10 · OFFERING -->
@@ -1179,44 +1290,66 @@
     <div class="ways">
       <div class="way">
         <div class="way-num">01</div>
-        <div class="way-tag">Recruitment &amp; staffing firms</div>
+        <div class="way-tag">Recruitment, staffing &amp; consultancy firms</div>
         <div class="way-h">Place faster, with proof.</div>
         <div class="way-list">
-          <div class="way-li"><span class="ic">→</span><span>Automate repetitive screening and evidence collation across live mandates.</span></div>
-          <div class="way-li"><span class="ic">→</span><span>Attach a role-specific work sample and client-safe evidence report to each submission.</span></div>
-          <div class="way-li"><span class="ic">→</span><span>Keep the consultant accountable for the relationship and final recommendation.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>The agent handles repetitive screening and evidence collation on each mandate — <b>more capacity across live roles</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Every submission can include a role-specific work sample and client-safe report — <b>evidence clients can inspect</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Your consultant owns the relationship and final recommendation — <b>Taali supplies the decision trail</b>.</span></div>
         </div>
-        <div class="way-foot">More mandate capacity · stronger client handoff</div>
+        <div class="way-foot">Faster screening · evidence-backed submissions</div>
       </div>
       <div class="way hero">
         <div class="way-num">02</div>
         <div class="way-tag">In-house hiring teams</div>
-        <div class="way-h">Hire with one controlled bar.</div>
+        <div class="way-h">Build your teams, with control.</div>
         <div class="way-list">
-          <div class="way-li"><span class="ic">→</span><span>Add screening capacity without fragmenting the candidate record.</span></div>
-          <div class="way-li"><span class="ic">→</span><span>Bring CV, assessment and interview evidence into one recruiter and hiring-manager view.</span></div>
-          <div class="way-li"><span class="ic">→</span><span>Keep role budgets, autonomy, approval gates and overrides with the hiring team.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>The agent handles repetitive top-of-funnel work for each active role — <b>more recruiter capacity without lowering the bar</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>One candidate report brings CV, assessment and interview evidence together — <b>one view for recruiters and hiring managers</b>.</span></div>
+          <div class="way-li"><span class="ic">→</span><span>Role budgets, autonomy, approval gates and overrides stay with your team — <b>automation with accountable human decisions</b>.</span></div>
         </div>
         <div class="way-foot">More recruiter capacity · one inspectable hiring bar</div>
       </div>
     </div>
     <div class="offer-foot">
       <div class="offer-cell credits">
-        <span class="oc-tag">// Commercial model</span>
-        <span class="oc-body"><b>Usage-based credits.</b> Set a budget per role and pay for the workflow you run — without a large upfront commitment.</span>
+        <span class="oc-tag">// How you pay</span>
+        <span class="oc-body"><b>Credits — pay only for what you use.</b> One usage-based model across your roles and workflows. No large upfront commitment; set a budget for each role.</span>
       </div>
       <div class="offer-cell pilot">
-        <span class="oc-tag">// Start with a live role</span>
-        <span class="oc-body"><b>No-cost proof-of-value pilot.</b> Use internal roles, a client mandate or both. Walk the product at <a href="https://www.taali.ai/demo">taali.ai/demo</a> · <a href="mailto:hello@taali.ai">hello@taali.ai →</a></span>
+        <span class="oc-tag">// How to start — free</span>
+        <span class="oc-body"><b>A no-cost proof-of-value pilot</b> on a few live roles — for your own team, a client mandate, or both — or walk the product first at <a href="https://www.taali.ai/demo">taali.ai/demo</a>. &nbsp;<a href="mailto:hello@taali.ai">hello@taali.ai →</a></span>
       </div>
     </div>
-    <div class="slide-foot"><span>10 / 15 · The offering · end of main story</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>10 / 10 · The offering · thank you</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
-  <!-- A1 · JOBS BOARD -->
-  <section class="product-preview" data-slide="surf-triage" data-screen-label="A1 Agentic triage">
+  <!-- A1 · HOME HUB -->
+  <section class="product-preview" data-slide="home-hub" data-screen-label="A1 Home Hub">
     <div class="slide-head surf-head">
-      <div class="eyebrow"><span class="num">A1</span><span class="dot">·</span><span>Appendix · jobs &amp; role agents</span></div>
+      <div class="eyebrow"><span class="num">A1</span><span class="dot">·</span><span>Appendix · Home Hub</span></div>
+      <h2 class="surf-title" style="font-size:34px;">The Home Hub — <em>pipeline, review queue and role agents in one operating view.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame hub-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/home · hiring command centre</span><span class="surf-badge">Product UI · representative data</span></div>
+        <iframe src="/showcase/home" title="Taali — Home Hub" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-hub.png" alt="Taali Home Hub — representative product data" />
+      </div>
+      <div class="surf-out hub-out">
+        <span><b>Role rail:</b> move from the all-roles queue into a specific mandate and its agent.</span>
+        <span><b>Pipeline:</b> see funnel health, pending work and role budgets without a separate dashboard.</span>
+        <span><b>Review queue:</b> inspect evidence, approve, override, teach or re-evaluate.</span>
+        <span><b>Agent chat:</b> steer the selected role's agent; its chat and feed stay tied to that mandate.</span>
+      </div>
+    </div>
+    <div class="slide-foot"><span>A1 / A6 · Appendix · Home Hub</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- A2 · JOBS BOARD -->
+  <section class="product-preview" data-slide="surf-triage" data-screen-label="A2 Agentic triage">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">A2</span><span class="dot">·</span><span>Appendix · jobs &amp; role agents</span></div>
       <h2 class="surf-title">The Jobs board the agent works against — <em>one governed agent per role.</em></h2>
     </div>
     <div class="surf">
@@ -1231,13 +1364,13 @@
         <span><b>Operational view:</b> open the role straight into the pipeline your team works each morning.</span>
       </div>
     </div>
-    <div class="slide-foot"><span>11 / 15 · Appendix · agentic triage</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A2 / A6 · Appendix · agentic triage</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
-  <!-- A2 · ASSESSMENT -->
-  <section class="product-preview" data-slide="surf-assess" data-screen-label="A2 AI assessment">
+  <!-- A3 · ASSESSMENT -->
+  <section class="product-preview" data-slide="surf-assess" data-screen-label="A3 AI assessment">
     <div class="slide-head surf-head">
-      <div class="eyebrow"><span class="num">A2</span><span class="dot">·</span><span>Appendix · AI-native work sample</span></div>
+      <div class="eyebrow"><span class="num">A3</span><span class="dot">·</span><span>Appendix · AI-native work sample</span></div>
       <h2 class="surf-title">The candidate drives the workspace — <em>pairing with AI is part of the work.</em></h2>
     </div>
     <div class="surf">
@@ -1252,13 +1385,13 @@
         <span><b>Transparent session:</b> no webcam or lockdown browser; candidates are told what activity is recorded.</span>
       </div>
     </div>
-    <div class="slide-foot"><span>12 / 15 · Appendix · AI assessment</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A3 / A6 · Appendix · AI assessment</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
-  <!-- A3 · CANDIDATE REPORT -->
-  <section class="product-preview" data-slide="surf-report" data-screen-label="A3 Candidate report">
+  <!-- A4 · CANDIDATE REPORT -->
+  <section class="product-preview" data-slide="surf-report" data-screen-label="A4 Candidate report">
     <div class="slide-head surf-head">
-      <div class="eyebrow"><span class="num">A3</span><span class="dot">·</span><span>Appendix · internal recruiter report</span></div>
+      <div class="eyebrow"><span class="num">A4</span><span class="dot">·</span><span>Appendix · internal recruiter report</span></div>
       <h2 class="surf-title">The Assessment tab keeps the work in view — <em>every score opens to evidence.</em></h2>
     </div>
     <div class="surf">
@@ -1273,13 +1406,13 @@
         <span><b>Separate audience views:</b> client-safe links omit internal notes and detailed evaluation material.</span>
       </div>
     </div>
-    <div class="slide-foot"><span>13 / 15 · Appendix · candidate report</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A4 / A6 · Appendix · candidate report</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
-  <!-- A4 · CHAT & SEARCH -->
-  <section class="product-preview" data-slide="surf-chat" data-screen-label="A4 Search &amp; agents">
+  <!-- A5 · CHAT & SEARCH -->
+  <section class="product-preview" data-slide="surf-chat" data-screen-label="A5 Search &amp; agents">
     <div class="slide-head surf-head">
-      <div class="eyebrow"><span class="num">A4</span><span class="dot">·</span><span>Appendix · candidate search</span></div>
+      <div class="eyebrow"><span class="num">A5</span><span class="dot">·</span><span>Appendix · candidate search</span></div>
       <h2 class="surf-title">Search the candidate pool you already own — <em>in plain English, with citations.</em></h2>
     </div>
     <div class="surf">
@@ -1294,21 +1427,21 @@
         <span><b>Per-role agents:</b> reason over the authorised pool and act within the role budget and policy.</span>
       </div>
     </div>
-    <div class="slide-foot"><span>14 / 15 · Appendix · search &amp; agents</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A5 / A6 · Appendix · search &amp; agents</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
-  <!-- A5 · CAPABILITY MAP -->
-  <section data-slide="capability-map" data-screen-label="A5 Capability map">
+  <!-- A6 · CAPABILITY MAP -->
+  <section data-slide="capability-map" data-screen-label="A6 Capability map">
     <div class="slide-head" style="margin-bottom:8px;">
-      <div class="eyebrow"><span class="num">A5</span><span class="dot">·</span><span>Appendix · detailed feature map</span></div>
+      <div class="eyebrow"><span class="num">A6</span><span class="dot">·</span><span>Appendix · detailed feature map</span></div>
       <h2 class="slide-title" style="font-size:46px;">Live hiring coverage today — <em>plus the six-month growth layer.</em></h2>
     </div>
     <div class="pipeline">
       <div class="pipe-col">
         <div class="pipe-head"><span class="n">01</span><span>Brief &amp; attract</span></div>
-        <div class="pipe-card"><span class="badge">Live</span><span class="ti">Native role + public apply</span><span class="bd">Conversational requisition, careers page, public job page, questions and intake.</span></div>
-        <div class="pipe-card"><span class="badge">Live</span><span class="ti">Share + careers feed</span><span class="bd">LinkedIn share copy and a pull-based XML feed for supported job aggregators.</span></div>
-        <div class="pipe-card"><span class="badge integrated">Integrated</span><span class="ti">Workable + Bullhorn</span><span class="bd">Role and candidate sync with mapped status/stage and note write-back.</span></div>
+        <div class="pipe-card"><span class="badge">Live</span><span class="ti">Native role + public apply</span><span class="bd">Conversational requisition, public job page, application intake, LinkedIn share copy and careers feed.</span></div>
+        <div class="pipe-card"><span class="badge">Live</span><span class="ti">Workable</span><span class="bd">Role and candidate sync with mapped stage/status and note write-back.</span></div>
+        <div class="pipe-card"><span class="badge available">Available</span><span class="ti">Bullhorn</span><span class="bd">Shipped sync, mapping and durable write-back; activated through onboarding.</span></div>
       </div>
       <div class="pipe-col">
         <div class="pipe-head"><span class="n">02</span><span>Screen</span></div>
@@ -1349,12 +1482,12 @@
     </div>
     <div class="pipe-legend">
       <span><span class="sw live"></span>Live</span>
-      <span><span class="sw integrated"></span>Integrated</span>
+      <span><span class="sw available"></span>Available with onboarding</span>
       <span><span class="sw rollout"></span>Controlled pilot</span>
       <span><span class="sw roadmap"></span>Next 6 months</span>
       <span style="margin-left:auto;text-transform:none;letter-spacing:0;font-family:var(--font-display);color:rgba(20,15,40,.7);font-size:14px;"><b style="color:#1a1228;">Search today is limited to the customer's existing authorised pool.</b></span>
     </div>
-    <div class="slide-foot"><span>15 / 15 · Appendix · capability map</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A6 / A6 · Appendix · capability map</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
 </deck-stage>
@@ -1366,18 +1499,19 @@
   "Taali is for recruitment and staffing firms as well as in-house hiring teams. The promise is deliberately simple: let a governed agent run repetitive workflow, assess real work with AI in the loop, and give decision-makers evidence they can inspect.",
   "AI has increased applicant volume while weakening the signals recruiters traditionally rely on. The response is not more keyword filtering. It is an operating system that can handle volume consistently and a proof layer that shows how someone actually performs.",
   "Taali combines an agentic ATS with an AI-native assessment. The ATS handles intake, existing-pool search, screening, ranking and orchestration. The assessment captures the work trace and links every score to evidence. Recruiters remain responsible for role policy, autonomy and review.",
-  "The operating model has three clear beats: the team sets requirements, budget and approval gates; the role agent searches, screens, scores and assesses; the team reviews evidence and exceptions. Configured on-policy actions can run automatically, while off-policy and low-confidence cases are held.",
-  "This is the Home Hub with representative data. It is the command centre for roles, pipeline health, agent activity, decision holds and candidate search. The point is not a collection of separate AI widgets; it is one place to operate the hiring desk.",
-  "Taali can be the native agentic ATS or connect into Workable and Bullhorn. Native distribution currently includes a public job page, LinkedIn share copy and a pull-based careers feed; this slide does not imply direct LinkedIn API posting. Candidate search covers the customer's authorised native, uploaded and ATS-synced pool.",
-  "This is compliance-supporting product design, not a blanket claim that Taali or a customer deployment is GDPR or EU AI Act compliant. The product provides narrow controls for access, autonomy, decision provenance and controlled sharing. A customer deployment still needs documented lawful basis, notices, DPIA, retention, data-subject rights, agreements, transfers and an effective human contest route.",
-  "Taali's differentiation is structural: one role agent works the hiring workflow, the assessment observes real work with AI, and recommendations remain tied to policy and evidence. This avoids an unsupported categorical competitor matrix.",
-  "We are presenting two consultancy and staffing pilots: one in the UAE and one in Europe. Until measured outcomes are available, the proof point is the pilot scope and the success framework—not fabricated traction metrics. Both pilots should be measured on recruiter time, shortlist speed, completion and recruiter acceptance.",
-  "The same platform supports two business models. Staffing firms can add capacity and send stronger client handoffs; in-house teams can add screening capacity and apply one controlled evidence bar. The commercial model is usage-based credits, starting with a no-cost proof-of-value pilot.",
+  "The operating model has three beats: set the requirements, budget and approval gates; let the role agent run repeatable work against that policy; review the evidence and exception. Configured on-policy actions can run automatically, while off-policy and low-confidence cases are held.",
+  "Taali can run as the full agentic ATS or connect to Workable and Bullhorn. In either mode, role and candidate data enter the same governed workflow, with mapped status and note write-back for connected systems.",
+  "The proof layer starts with a role-specific work sample where AI is part of the task. Taali captures prompts, responses, edits, validation and the final artifact. The recruiter report then opens each score back to the criteria and raw evidence; the external client-safe view remains separate.",
+  "The buyer outcome is the answer to slide two: more volume can be processed consistently, while the decision is supported by stronger evidence. One record and one evidence trail work whether Taali is the system of record or connects into the ATS the customer already uses.",
+  "This is compliance-supporting product design, not a blanket claim that Taali or a customer deployment is GDPR or EU AI Act compliant. Taali supports tenant-scoped access, controlled sharing and recorded provenance; each deployment still needs documented roles, lawful basis, notice, DPIA, retention, agreements, transfers and a human challenge route.",
+  "DeepLight is the operating proof: more than 100 roles, 58,000 applications, 16,000 agent decisions, 70 assessments, 24 offers and 18 hires have run through the workflow. These are operating figures, not a claim that Taali alone caused each outcome. The same model is now expanding through consultancy and staffing pilots in the UAE and Europe.",
+  "The same platform supports two business models. Recruitment, staffing and consultancy firms gain screening capacity and a stronger client handoff; in-house teams gain capacity while retaining one controlled evidence bar. The commercial model is usage-based credits, beginning with a no-cost proof-of-value pilot.",
+  "Appendix: the Home Hub now mirrors the current operating view. It starts at all roles with the chat dock closed, leads with the pipeline and review queue, and opens a role-scoped agent chat only when a mandate is selected. Representative data is used throughout.",
   "Appendix: the Jobs board shows one governed agent per role, with visible policy, budget and activity. Representative data is used throughout the product previews.",
   "Appendix: candidates complete role-specific work with AI, an editor and a sandboxed runtime. The trace records the work rather than relying on webcam proctoring or a sealed test that bans the tools people use on the job.",
   "Appendix: the internal candidate report includes an Assessment tab when completed assessment evidence is linked. Client-safe sharing is a separate view so internal notes and detailed evaluation do not leak into the external handoff.",
   "Appendix: natural-language search is live across the customer's existing Taali and ATS-synced candidate pool, and qualitative results carry CV citations. Automated external talent discovery is not represented as live.",
-  "Appendix: the detailed map separates live, integrated, pilot and six-month expansion. Workable and Bullhorn are integrations, not roadmap items. External talent discovery, direct job-board multiposting and multichannel sourcing are the next growth layer."
+  "Appendix: the detailed map separates live capabilities, Bullhorn availability through onboarding, controlled pilots and the six-month expansion. External discovery, direct job-board multiposting and multichannel sourcing remain the adjacent growth layer."
 ]
 </script>
 

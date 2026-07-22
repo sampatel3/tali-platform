@@ -10,7 +10,6 @@ import React, { useId, useMemo, useState } from 'react';
 import { MessageSquare } from 'lucide-react';
 
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { KpiStrip } from '../../shared/ui/KpiStrip';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -472,6 +471,12 @@ export const HomeShowcaseView = () => {
   const { showToast } = useToast() || { showToast: () => {} };
   const [rows, setRows] = useState(INITIAL_FEED_ROWS);
   const [selectedId, setSelectedId] = useState(INITIAL_FEED_ROWS[0].id);
+  const [activeRoleId, setActiveRoleId] = useState(null);
+
+  const visibleRows = useMemo(
+    () => (activeRoleId == null ? rows : rows.filter((row) => row.role_id === activeRoleId)),
+    [activeRoleId, rows],
+  );
 
   const selected = useMemo(
     () => rows.find((row) => row.id === selectedId) || null,
@@ -499,22 +504,34 @@ export const HomeShowcaseView = () => {
 
   const handleSnooze = () => showToast('Snoozed 1h — it drops back into your queue later.', 'info');
 
+  const handleSelectRole = (roleId) => {
+    const nextRoleId = roleId != null && activeRoleId === roleId ? null : roleId;
+    setActiveRoleId(nextRoleId);
+    const nextRows = nextRoleId == null
+      ? rows
+      : rows.filter((row) => row.role_id === nextRoleId);
+    setSelectedId(nextRows[0]?.id ?? null);
+  };
+
   return (
     <div className="home-app" style={{ height: '100vh' }}>
       <AgentHeader
+        breadcrumbs={[{ label: 'Home' }]}
         kicker="HUB · 103 AWAITING YOU · 4 ACTIVE ROLES"
         title="Good morning"
-        subtitle="Steer each role's agent in plain English, then approve, override, or teach its calls — this is where you keep the loop honest."
+        subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."
         agent={SHOWCASE_AGENT}
       />
 
-      <div className="ac-shell">
-        <AgentSidebar agents={SHOWCASE_AGENTS} activeRoleId={109} onSelect={() => {}} />
+      <div className={`ac-shell ${activeRoleId == null ? 'ac-dock-collapsed' : ''}`}>
+        <AgentSidebar
+          agents={SHOWCASE_AGENTS}
+          activeRoleId={activeRoleId}
+          onSelect={handleSelectRole}
+        />
 
         <div className="ac-main">
           <div className="home-body">
-            <KpiStrip columns={4} tiles={SHOWCASE_KPIS} />
-
             <FunnelBoard
               variant="flat"
               scopeLabel="all roles"
@@ -524,11 +541,13 @@ export const HomeShowcaseView = () => {
 
             <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] lg:items-start">
               <ActivityFeed
-                rows={rows}
+                rows={visibleRows}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 onNavigate={() => {}}
-                subtitle="Click any pending decision to review it on the right — approve, override, or send it back to teach the agent."
+                title="Review queue"
+                kicker="AWAITING YOUR DECISION"
+                subtitle="Click a pending recommendation to inspect the evidence, then approve, override, or send it back with feedback."
               />
               <div className="min-w-0 lg:sticky lg:top-4">
                 <DecisionDetail
@@ -546,7 +565,9 @@ export const HomeShowcaseView = () => {
           </div>
         </div>
 
-        <ShowcaseDock onAct={(msg) => showToast(msg, 'info')} />
+        {activeRoleId != null ? (
+          <ShowcaseDock onAct={(msg) => showToast(msg, 'info')} />
+        ) : null}
       </div>
     </div>
   );
