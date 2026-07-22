@@ -17,9 +17,20 @@ from typing import Any, Iterable
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
+from ..candidate_search.application_role_scope import (
+    build_role_local_projection,
+    pipeline_stage_expression,
+    scope_with_evaluations,
+    score_expression,
+)
+from ..candidate_search.role_scope import (
+    build_top_candidate_role_scope,
+    resolve_candidate_role_scope,
+)
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from ..models.sister_role_evaluation import SISTER_EVAL_DONE, SisterRoleEvaluation
 from ..models.user import User
 from .payloads import (
     SCORE_FIELDS,
@@ -268,6 +279,12 @@ def search_applications(
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
 
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(user.organization_id),
+        role_id=int(role_id) if role_id is not None else None,
+    )
+
     query = (
         db.query(CandidateApplication)
         .options(
@@ -279,15 +296,15 @@ def search_applications(
             CandidateApplication.deleted_at.is_(None),
         )
     )
-    if role_id is not None:
-        query = query.filter(CandidateApplication.role_id == role_id)
+    query = scope_with_evaluations(role_scope, query)
+    stage_expression = pipeline_stage_expression(role_scope)
     if pipeline_stage:
-        query = query.filter(CandidateApplication.pipeline_stage == pipeline_stage)
+        query = query.filter(stage_expression == pipeline_stage)
     if application_outcome:
         query = query.filter(CandidateApplication.application_outcome == application_outcome)
     threshold = _normalize_score_input(min_score, score_type=score_type)
     if threshold is not None:
-        score_col = getattr(CandidateApplication, SCORE_FIELDS[score_type])
+        score_col = score_expression(role_scope, SCORE_FIELDS[score_type])
         query = query.filter(score_col >= threshold)
     if q:
         like = f"%{q.strip()}%"
@@ -311,7 +328,7 @@ def search_applications(
     }
     if sort_by not in sort_column_map:
         raise ValueError(f"sort_by must be one of {sorted(sort_column_map)}, got {sort_by!r}")
-    sort_col = getattr(CandidateApplication, sort_column_map[sort_by])
+    sort_col = score_expression(role_scope, sort_column_map[sort_by])
     ascending = sort_order == "asc"
 
     # Agent should evaluate candidates the recruiter has already moved
@@ -321,7 +338,7 @@ def search_applications(
     # "is advanced" flag first, then the chosen sort column — so we can
     # push .limit() to the DB instead of materializing the whole org's
     # filtered set and slicing in Python.
-    is_advanced = func.lower(func.coalesce(CandidateApplication.pipeline_stage, "")) == "advanced"
+    is_advanced = func.lower(func.coalesce(stage_expression, "")) == "advanced"
     # NULL scores sort as the smallest value (matches the previous
     # float("-inf") key): last on desc, first on asc.
     score_order = sort_col.asc().nullsfirst() if ascending else sort_col.desc().nullslast()
@@ -335,7 +352,17 @@ def search_applications(
     )
 
     apps = query.offset(offset).limit(limit).all()
-    return [application_summary(a) for a in apps]
+    adapter = role_scope.row_adapter(
+        role_scope.evaluation_map(
+            db,
+            application_ids=[int(application.id) for application in apps],
+        )
+    )
+    rows = [application_summary(adapter(app) if adapter is not None else app) for app in apps]
+    if role_scope.is_related:
+        for row in rows:
+            row["score_mode"] = "sister_role"
+    return rows
 
 
 def get_application(
@@ -442,27 +469,18 @@ def nl_search_candidates(
     from ..candidate_search.retrieval_reporting import page_retrieval_payload
     from ..candidate_search.runner import MAX_RETRIEVAL_LIMIT, run_search
 
-    base = (
-        db.query(CandidateApplication)
-        .filter(
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(user.organization_id),
+        role_id=role_id,
+    )
+    scoped_role = role_scope.requested_role
+    base = role_scope.scope_roster(
+        db.query(CandidateApplication).filter(
             CandidateApplication.organization_id == user.organization_id,
             CandidateApplication.deleted_at.is_(None),
         )
     )
-    scoped_role: Role | None = None
-    if role_id is not None:
-        scoped_role = (
-            db.query(Role)
-            .filter(
-                Role.id == int(role_id),
-                Role.organization_id == user.organization_id,
-                Role.deleted_at.is_(None),
-            )
-            .first()
-        )
-        if scoped_role is None:
-            raise ValueError(f"role {role_id} not found")
-        base = base.filter(CandidateApplication.role_id == int(role_id))
 
     verify = bool(deep_verify if rerank is None else rerank)
     search_kwargs: dict[str, Any] = {}
@@ -498,8 +516,18 @@ def nl_search_candidates(
     verification_by_id = {
         int(item["application_id"]): item for item in verification_payload
     }
+    evaluation_map = role_scope.evaluation_map(
+        db,
+        application_ids=[int(app.id) for app in ordered],
+    )
+    row_adapter = role_scope.row_adapter(evaluation_map)
+    presented = (
+        [row_adapter(app) for app in ordered]
+        if row_adapter is not None
+        else ordered
+    )
     application_rows: list[dict[str, Any]] = []
-    for app in ordered:
+    for app in presented:
         row = application_summary(app)
         verification = verification_by_id.get(int(app.id))
         if verification is not None:
@@ -581,50 +609,34 @@ def find_top_candidates(
 
     from ..candidate_search.top_candidates import find_top_candidates as _engine
 
-    base = db.query(CandidateApplication).filter(
-        CandidateApplication.organization_id == user.organization_id,
-        CandidateApplication.deleted_at.is_(None),
-        # Only rank candidates still actionable in the pool. Don't recommend
-        # ones a decision was already made on: exclude rejected/withdrawn/hired
-        # (outcome != open) and ones already advanced out of the funnel.
-        CandidateApplication.application_outcome == "open",
-        func.lower(func.coalesce(CandidateApplication.pipeline_stage, "")) != "advanced",
-        # IN THE RUNNING only. A "top candidates" answer must rank candidates
-        # who are genuinely still in play — not the engine's reject verdicts.
-        # (a) Scored: you can't call an unevaluated candidate a "top" one, and
-        #     an unscored candidate would otherwise sort last and waste the
-        #     grounding window. (b) Not below the role's reject cutoff — the
-        #     "Below threshold" recommendation is the threshold-aware reject
-        #     signal (it tracks the role's actual cutoff, and a definitive
-        #     pre-screen "no"/fraud flag also lands here). Normalise the label
-        #     (lower/trim) to match how the reject policy stores it elsewhere —
-        #     non-canonical rows like 'below threshold ' must still be excluded.
-        getattr(CandidateApplication, SCORE_FIELDS.get(str(rank_by or "taali"), "taali_score_cache_100")).isnot(None),
-        func.lower(func.trim(func.coalesce(CandidateApplication.pre_screen_recommendation, ""))) != "below threshold",
+    rank_key = str(rank_by or "taali")
+    if rank_key not in SCORE_FIELDS:
+        rank_key = "taali"
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(user.organization_id),
+        role_id=role_id,
     )
-    scoped_role: Role | None = None
-    if role_id is not None:
-        scoped_role = (
-            db.query(Role)
-            .filter(
-                Role.id == int(role_id),
-                Role.organization_id == user.organization_id,
-                Role.deleted_at.is_(None),
-            )
-            .first()
-        )
-        if scoped_role is None:
-            raise ValueError(f"role {role_id} not found")
-        base = base.filter(CandidateApplication.role_id == int(role_id))
+    scoped_role = role_scope.requested_role
+    top_scope = build_top_candidate_role_scope(
+        db,
+        scope=role_scope,
+        rank_by=rank_key,
+        score_field=SCORE_FIELDS[rank_key],
+    )
 
     engine_args = {
         "db": db,
         "organization_id": int(user.organization_id),
         "role_id": int(role_id) if role_id is not None else None,
         "query": text,
-        "base_query": base,
+        "base_query": top_scope.base_query,
         "limit": int(limit),
-        "rank_by": str(rank_by or "taali"),
+        "rank_by": rank_key,
+        "score_expression": top_scope.score_expression,
+        "row_adapter": top_scope.row_adapter,
+        "payload_transform": top_scope.payload_transform,
+        "authoritative_pool_size": top_scope.roster_size,
     }
     if _search_context:
         engine_args.update(
@@ -680,6 +692,13 @@ def screen_pool_against_requirement(
     """
     text = _bounded_search_text(requirement_text, field_name="requirement_text")
 
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(user.organization_id),
+        role_id=int(role_id) if role_id is not None else None,
+    )
+    scoped_role = role_scope.requested_role
+
     from ..candidate_search.top_candidates import (
         screen_pool_against_requirement as _engine,
     )
@@ -707,24 +726,21 @@ def screen_pool_against_requirement(
     base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == user.organization_id,
         CandidateApplication.deleted_at.is_(None),
-        CandidateApplication.cv_match_details.isnot(None),
     )
     if hired_candidate_ids:
         base = base.filter(CandidateApplication.candidate_id.notin_(hired_candidate_ids))
-    scoped_role: Role | None = None
-    if role_id is not None:
-        scoped_role = (
-            db.query(Role)
-            .filter(
-                Role.id == int(role_id),
-                Role.organization_id == user.organization_id,
-                Role.deleted_at.is_(None),
-            )
-            .first()
+    if role_scope.is_related:
+        # A related role's scored history lives entirely in its evaluation
+        # rows.  Owner ``cv_match_details`` is neither admission evidence nor a
+        # safe role-local verdict for this search.
+        base = scope_with_evaluations(role_scope, base, required=True).filter(
+            SisterRoleEvaluation.status == SISTER_EVAL_DONE,
+            SisterRoleEvaluation.role_fit_score.isnot(None),
         )
-        if scoped_role is None:
-            raise ValueError(f"role {role_id} not found")
-        base = base.filter(CandidateApplication.role_id == int(scoped_role.id))
+    else:
+        base = role_scope.scope_roster(base).filter(
+            CandidateApplication.cv_match_details.isnot(None)
+        )
 
     engine_kwargs = dict(
         db=db,
@@ -740,6 +756,11 @@ def screen_pool_against_requirement(
         engine_kwargs["offset"] = max(0, int(offset))
     if getattr(user, "require_role_authority", False) is True:
         engine_kwargs["require_role_authority"] = True
+    row_adapter, payload_transform = build_role_local_projection(db, role_scope)
+    if row_adapter is not None:
+        engine_kwargs["row_adapter"] = row_adapter
+    if payload_transform is not None:
+        engine_kwargs["payload_transform"] = payload_transform
     result = _engine(**engine_kwargs)
     if scoped_role is not None:
         result["role_name"] = scoped_role.name

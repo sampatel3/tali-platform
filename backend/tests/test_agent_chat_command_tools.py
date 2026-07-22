@@ -612,6 +612,17 @@ def test_candidate_search_failure_is_terminal_sanitized_and_precedes_mutation(db
             "evidence_succeeded": 0,
             "is_exact_empty": False,
         },
+        {
+            "search_status": "structural_retrieval_incomplete",
+            "warnings": [{"code": "structural_retrieval_incomplete"}],
+            "candidates": [],
+            "returned": 0,
+            "pool_size": 2,
+            "role_roster_size": 5,
+            "qualified_total": None,
+            "exhaustive": False,
+            "is_exact_empty": False,
+        },
     ],
 )
 def test_warning_shaped_search_failure_is_terminal_and_discards_raw_message(

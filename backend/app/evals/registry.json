@@ -1,0 +1,154 @@
+{
+  "schema_version": "feature-ai-evals/v2",
+  "feature_enum": "app.services.pricing_service.Feature",
+  "features": {
+    "prescreen": {
+      "risk": "critical",
+      "coverage": "grounded_truth",
+      "ground_truth_scope": "Deterministic gate-threshold selection against labelled advance/reject outcomes.",
+      "test_cases": [
+        "tests/test_prescreen_gate_calibration.py::test_compute_gate_threshold_calibrated"
+      ]
+    },
+    "score": {
+      "risk": "critical",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_holistic_scoring.py"],
+      "reviewed_semantic_exemption": "The suite validates score contracts and rejects fabricated citations, but there is not yet an independently labelled fit-quality set. Prompt or model changes require semantic review until that oracle exists."
+    },
+    "assessment": {
+      "risk": "critical",
+      "coverage": "behavioral",
+      "test_paths": ["tests/components/assessments/test_rubric_scoring.py"],
+      "reviewed_semantic_exemption": "The suite has deterministic rubric and practice-outcome expectations, but no human-labelled corpus covers the model-graded assessment dimensions. Grader prompt or model changes require semantic review."
+    },
+    "taali_chat": {
+      "risk": "critical",
+      "coverage": "grounded_truth",
+      "ground_truth_scope": "Candidate-search role scope, ranking, and projection match the constructed sister-role truth case across Taali Chat and the shared handler.",
+      "test_cases": [
+        "tests/evals/test_search_surface_parity.py::test_related_role_top_candidates_preserve_local_truth_across_agent_surfaces"
+      ]
+    },
+    "agent_autonomous": {
+      "risk": "critical",
+      "coverage": "grounded_truth",
+      "ground_truth_scope": "Autonomous candidate search returns the same sister-role roster, local scores, and exclusions as the constructed cross-surface oracle.",
+      "test_cases": [
+        "tests/evals/test_search_surface_parity.py::test_related_role_top_candidates_preserve_local_truth_across_agent_surfaces"
+      ]
+    },
+    "agent_chat": {
+      "risk": "critical",
+      "coverage": "grounded_truth",
+      "ground_truth_scope": "Agent Chat candidate search returns the same sister-role roster, local scores, and exclusions as the constructed cross-surface oracle.",
+      "test_cases": [
+        "tests/evals/test_search_surface_parity.py::test_related_role_top_candidates_preserve_local_truth_across_agent_surfaces"
+      ]
+    },
+    "cv_parse": {
+      "risk": "critical",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_cv_parsing.py"],
+      "reviewed_semantic_exemption": "The suite validates schema, caching, retries, and persistence, but there is no labelled CV extraction corpus. Parser prompt or model changes require semantic review until one is added."
+    },
+    "cv_rerank": {
+      "risk": "high",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_candidate_search_rerank.py"]
+    },
+    "candidate_grounding": {
+      "risk": "critical",
+      "coverage": "grounded_truth",
+      "ground_truth_scope": "Direct, cited capability evidence is separated from mentions, adjacent skills, team attribution, negation, and structured-but-uncited sister-role matches.",
+      "test_cases": [
+        "tests/evals/test_runtime_ground_truth.py::test_production_hybrid_path_matches_oracle_derived_agentforce_truth",
+        "tests/postgres/test_candidate_search_runtime_matrix.py::test_related_role_top_candidates_uses_owner_applications_and_grounded_truth"
+      ]
+    },
+    "search_parse": {
+      "risk": "critical",
+      "coverage": "grounded_truth",
+      "ground_truth_scope": "The exact PySpark query produces the expected structured population filter inside the real PostgreSQL sister-role search path.",
+      "test_cases": [
+        "tests/postgres/test_candidate_search_runtime_matrix.py::test_related_role_top_candidates_uses_owner_applications_and_grounded_truth"
+      ]
+    },
+    "archetype_synthesis": {
+      "risk": "high",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_cv_matching_synthesizer_judge_diff.py"]
+    },
+    "pairwise_judge": {
+      "risk": "critical",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_cv_matching_synthesizer_judge_diff.py"],
+      "reviewed_semantic_exemption": "The suite validates judge parsing, bounds, and failure behavior, but has no independently labelled pairwise ranking corpus. Judge prompt or model changes require semantic review."
+    },
+    "interview_focus": {
+      "risk": "medium",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_interview_focus_quality.py"]
+    },
+    "interview_tech": {
+      "risk": "medium",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_role_tech_questions.py"]
+    },
+    "fit_matching": {
+      "risk": "high",
+      "coverage": "contract",
+      "test_paths": ["tests/test_fit_matching_summary_contract.py"]
+    },
+    "graph_sync": {
+      "risk": "high",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_graph_ingest_tasks.py"]
+    },
+    "intent_parser": {
+      "risk": "high",
+      "coverage": "behavioral",
+      "test_paths": ["tests/sub_agents/test_intent_parser_sub_agent.py"]
+    },
+    "intent_chip_parser": {
+      "risk": "medium",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_qa_services.py"]
+    },
+    "material_change": {
+      "risk": "medium",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_material_change.py"]
+    },
+    "requisition_intake": {
+      "risk": "high",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_requisition_intake_agent.py"]
+    },
+    "requisition_intake_chat": {
+      "risk": "high",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_api_requisition_chat.py"]
+    },
+    "requisition_client_intake": {
+      "risk": "high",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_api_client_intake.py"]
+    },
+    "sourcing_search": {
+      "risk": "medium",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_sourcing_assist_service.py"]
+    },
+    "sourcing_outreach_draft": {
+      "risk": "medium",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_sourcing_assist_service.py"]
+    },
+    "outreach_draft": {
+      "risk": "medium",
+      "coverage": "behavioral",
+      "test_paths": ["tests/test_outreach_tasks.py"]
+    }
+  }
+}

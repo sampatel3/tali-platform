@@ -662,6 +662,56 @@ def test_candidate_search_failure_recovers_fails_run_and_blocks_later_tools(db):
     assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
 
 
+def test_narrowed_structural_zero_fails_run_before_model_narration(db):
+    """The autonomous runtime cannot narrate an inexact roster-slice zero."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    client = _scripted_client(
+        [
+            _response(
+                blocks=[
+                    _block_tool_use(
+                        tool_use_id="tu_narrowed_zero",
+                        name="find_top_candidates",
+                        input_={"query": "PySpark experience"},
+                    )
+                ],
+                stop_reason="tool_use",
+            )
+        ]
+    )
+    result = {
+        "search_status": "structural_retrieval_incomplete",
+        "warnings": [{"code": "structural_retrieval_incomplete"}],
+        "pool_size": 2,
+        "role_roster_size": 5,
+        "structural_matches": 0,
+        "qualified_total": None,
+        "returned": 0,
+        "exhaustive": False,
+        "is_exact_empty": False,
+        "candidates": [],
+    }
+
+    with (
+        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch("app.agent_runtime.orchestrator.dispatch", return_value=result),
+    ):
+        run = orchestrator.run_cycle(
+            db,
+            role=role,
+            trigger="manual",
+            application_id=app.id,
+        )
+    db.commit()
+
+    assert run.status == "failed"
+    assert (run.error or "").startswith(f"{CANDIDATE_SEARCH_UNAVAILABLE_CODE}:")
+    assert client.messages.create.call_count == 1
+    assert db.query(AgentDecision).filter(AgentDecision.role_id == role.id).count() == 0
+
+
 def test_successful_candidate_search_releases_authority_lock_and_continues(db):
     org = _make_org(db)
     role = _make_role(db, org)

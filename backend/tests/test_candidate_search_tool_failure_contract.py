@@ -94,6 +94,59 @@ def test_empty_inexact_graph_degradation_is_terminal(warning_code):
 
 
 @pytest.mark.parametrize(
+    "search_status", ["no_verified_matches", "no_actionable_candidates"]
+)
+@pytest.mark.parametrize(
+    "tool_name", ["find_top_candidates", "screen_pool_against_requirement"]
+)
+def test_zero_of_zero_qualitative_checks_cannot_be_a_verified_empty_result(
+    search_status, tool_name
+):
+    """Regression for the false PySpark "checked everyone" production claim."""
+
+    assert candidate_search_result_failed(
+        tool_name,
+        {
+            "search_status": search_status,
+            "pool_size": 0,
+            "returned": 0,
+            "deep_checked": 0,
+            "evidence_succeeded": 0,
+            "criteria_requested": ["AI engineers with PySpark experience"],
+            "required_criteria": ["AI engineers with PySpark experience"],
+            "is_exact_empty": True,
+            "exhaustive": True,
+            "candidates": [],
+        },
+    )
+
+
+def test_narrowed_structural_zero_is_terminal_before_model_narration():
+    """A zero over an actionable slice cannot be narrated as a roster zero."""
+
+    assert candidate_search_result_failed(
+        "find_top_candidates",
+        {
+            "search_status": "structural_retrieval_incomplete",
+            "pool_size": 2,
+            "role_roster_size": 5,
+            "returned": 0,
+            "structural_matches": 0,
+            "qualified_total": None,
+            "is_exact_empty": False,
+            "exhaustive": False,
+            "candidates": [],
+            "warnings": [
+                {
+                    "code": "structural_retrieval_incomplete",
+                    "message": "The actionable subset did not cover the roster.",
+                }
+            ],
+        },
+    )
+
+
+@pytest.mark.parametrize(
     "result",
     [
         {"is_exact_empty": True, "candidates": []},

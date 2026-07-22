@@ -624,6 +624,55 @@ def test_candidate_search_failure_recovers_and_ends_without_model_synthesis(db):
     assert raw_marker not in serialized_messages
 
 
+def test_narrowed_structural_zero_ends_without_model_synthesis(db):
+    """Taali Chat owns the response for an inexact zero over a roster slice."""
+    user, org = _seed_user(db)
+    fake_client = _FakeClient(
+        [
+            _tool_use_plan(
+                tool_id="toolu_narrowed_zero",
+                tool_name="find_top_candidates",
+                args={"query": "PySpark experience"},
+            )
+        ]
+    )
+    result = {
+        "search_status": "structural_retrieval_incomplete",
+        "warnings": [{"code": "structural_retrieval_incomplete"}],
+        "pool_size": 2,
+        "role_roster_size": 5,
+        "structural_matches": 0,
+        "qualified_total": None,
+        "returned": 0,
+        "exhaustive": False,
+        "is_exact_empty": False,
+        "candidates": [],
+    }
+
+    with (
+        patch("app.taali_chat.service.get_client_for_org", return_value=fake_client),
+        patch("app.taali_chat.service.record_event"),
+        patch("app.taali_chat.tool_execution.dispatch_tool", return_value=result),
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message="find PySpark candidates",
+                    conversation_id=None,
+                ),
+            )
+        )
+
+    assert len(fake_client.messages.calls) == 1
+    serialized_frames = "".join(frames)
+    assert CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE in serialized_frames
+    assert CANDIDATE_SEARCH_UNAVAILABLE_CODE in serialized_frames
+    assert "structural_retrieval_incomplete" not in serialized_frames
+
+
 def test_verified_search_result_is_durable_before_later_tool_failure(db):
     user, org = _seed_user(db)
     raw_marker = str(org.slug)

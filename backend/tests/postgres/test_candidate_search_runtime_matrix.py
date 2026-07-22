@@ -1,8 +1,9 @@
 """Real PostgreSQL regressions for the unified candidate-search runtime.
 
 Only external boundaries are replaced: structured parsing, usage admission,
-and GraphDB evidence retrieval. SQL compilation/execution, role/tenant scope,
-rank fusion, handler hydration, and every product-surface adapter remain real.
+GraphDB retrieval, and citation-grade evidence evaluation. SQL
+compilation/execution, role/tenant scope, rank fusion, handler hydration, and
+every product-surface adapter remain real.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from app.candidate_graph.search import (
     GraphEvidenceSearchResult,
 )
 from app.candidate_search import cache as search_cache
+from app.candidate_search import grounded_evidence as search_evidence
 from app.candidate_search import hybrid, parser, rerank, runner
 from app.candidate_search.evals.contracts import (
     Citation,
@@ -62,7 +64,11 @@ from app.mcp import handlers
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import (
+    SISTER_EVAL_DONE,
+    SisterRoleEvaluation,
+)
 from app.models.user import User
 from app.platform.database import get_db
 from app.taali_chat import tool_registry as taali_tools
@@ -88,12 +94,22 @@ class SearchWorld:
     documents: dict[str, str]
 
 
+@dataclass(frozen=True)
+class SisterSearchWorld:
+    role: Role
+    owner_role: Role
+    positive_application_id: int
+    ungrounded_application_id: int
+    distractor_application_id: int
+
+
 @dataclass
 class BoundaryFakes:
     parser_results: list[StructuredResult[ParsedFilter]] = field(default_factory=list)
     graph_results: dict[str, GraphEvidenceSearchResult] = field(default_factory=dict)
     parser_calls: list[dict[str, Any]] = field(default_factory=list)
     graph_calls: list[dict[str, Any]] = field(default_factory=list)
+    evidence_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _seed_world(db) -> SearchWorld:
@@ -279,6 +295,65 @@ def search_world(postgres_search_db) -> SearchWorld:
 
 
 @pytest.fixture
+def sister_search_world(
+    postgres_search_db,
+    search_world: SearchWorld,
+) -> SisterSearchWorld:
+    """A related role whose searchable rows exist only on its ATS owner role."""
+
+    sister_role = Role(
+        organization_id=search_world.role.organization_id,
+        name="Related AI Engineer",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=int(search_world.role.id),
+    )
+    postgres_search_db.add(sister_role)
+    postgres_search_db.flush()
+
+    scores = {
+        # Structured PySpark plus direct, citable CV evidence.
+        "pyspark-near-title": 88.0,
+        # Structured PySpark but no CV evidence for the qualitative claim.
+        "structured-match": 91.0,
+        # Higher score, but no PySpark population match.
+        "project-manager": 99.0,
+    }
+    for key, score in scores.items():
+        application = postgres_search_db.get(
+            CandidateApplication,
+            search_world.application_ids[key],
+        )
+        assert application is not None
+        application.taali_score_cache_100 = score
+        application.pre_screen_score_100 = score
+        evaluation = SisterRoleEvaluation(
+            organization_id=int(search_world.role.organization_id),
+            role_id=int(sister_role.id),
+            source_application_id=int(application.id),
+            status=SISTER_EVAL_DONE,
+            pipeline_stage="applied",
+            pipeline_stage_source="system",
+            spec_fingerprint=sha256(b"related-ai-engineer-spec").hexdigest(),
+            cv_fingerprint=sha256(
+                (application.cv_text or "").encode("utf-8")
+            ).hexdigest(),
+            role_fit_score=score,
+            summary=f"Deterministic related-role score for {key}.",
+        )
+        postgres_search_db.add(evaluation)
+    postgres_search_db.flush()
+
+    return SisterSearchWorld(
+        role=sister_role,
+        owner_role=search_world.role,
+        positive_application_id=search_world.application_ids["pyspark-near-title"],
+        ungrounded_application_id=search_world.application_ids["structured-match"],
+        distractor_application_id=search_world.application_ids["project-manager"],
+    )
+
+
+@pytest.fixture
 def boundaries(monkeypatch) -> BoundaryFakes:
     fakes = BoundaryFakes()
     search_cache.clear()
@@ -316,9 +391,49 @@ def boundaries(monkeypatch) -> BoundaryFakes:
     def external_call_forbidden(*_args, **_kwargs):
         raise AssertionError("external provider boundary was not faked")
 
+    def extract_evidence(**kwargs):
+        fakes.evidence_calls.append(dict(kwargs))
+        cv_text = str(kwargs.get("cv_text") or "")
+        verdicts: list[search_evidence.CriterionVerdict] = []
+        quote = "Built streaming services with PySpark."
+        for criterion in kwargs.get("criteria") or []:
+            if quote.lower() in cv_text.lower():
+                start = cv_text.lower().index(quote.lower())
+                verdicts.append(
+                    search_evidence.CriterionVerdict(
+                        criterion=str(criterion),
+                        status="met",
+                        grounded=True,
+                        source="cv_citation",
+                        evidence=[
+                            search_evidence.Evidence(
+                                quote=quote,
+                                start_char=start,
+                                end_char=start + len(quote),
+                                source="cv",
+                            )
+                        ],
+                    )
+                )
+            else:
+                verdicts.append(
+                    search_evidence.CriterionVerdict(
+                        criterion=str(criterion),
+                        status="missing",
+                        grounded=False,
+                        note="The deterministic CV does not contain PySpark evidence.",
+                    )
+                )
+        return verdicts
+
     monkeypatch.setattr(parser, "admitted_search_metering", admit)
     monkeypatch.setattr(parser, "generate_structured", generate)
     monkeypatch.setattr(runner, "retrieve_graph_backend", retrieve_graph)
+    monkeypatch.setattr(
+        "app.services.claude_client_resolver.get_metered_client",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(search_evidence, "extract_cv_evidence", extract_evidence)
     monkeypatch.setattr(
         "app.candidate_graph.search.search_candidate_evidence",
         external_call_forbidden,
@@ -737,3 +852,97 @@ def test_real_postgres_search_is_identical_across_all_product_surfaces(
         assert payload["is_exact_empty"] is False
     assert boundaries.parser_calls == []
     assert boundaries.graph_calls == []
+
+
+def test_related_role_top_candidates_uses_owner_applications_and_grounded_truth(
+    postgres_search_db,
+    search_world: SearchWorld,
+    sister_search_world: SisterSearchWorld,
+    boundaries: BoundaryFakes,
+) -> None:
+    """The Agent Chat regression: a sister role must not search an empty role id.
+
+    The related role has no direct applications. Its canonical candidates live
+    on the ATS owner role and are projected through SisterRoleEvaluation. The
+    oracle deliberately separates a structured PySpark tag from cited CV truth:
+    only one of the two structural matches has direct PySpark evidence.
+    """
+
+    query = "give me the top candidates with PySpark experience"
+    boundaries.graph_results[query] = GraphEvidenceSearchResult(
+        status="ok",
+        exhaustive=True,
+    )
+
+    direct_application_count = (
+        postgres_search_db.query(CandidateApplication)
+        .filter(CandidateApplication.role_id == sister_search_world.role.id)
+        .count()
+    )
+    assert direct_application_count == 0
+    assert (
+        postgres_search_db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == sister_search_world.role.id)
+        .count()
+        == 3
+    )
+
+    result = handlers.find_top_candidates(
+        postgres_search_db,
+        search_world.user,
+        query=query,
+        role_id=int(sister_search_world.role.id),
+        limit=10,
+    )
+
+    assert result["role_id"] == int(sister_search_world.role.id)
+    assert result["pool_size"] == 3
+    assert result["total_matched"] == 2
+    assert result["structural_matches"] == 2
+    assert result["deep_checked"] == 2
+    assert result["evidence_succeeded"] == 2
+    assert result["qualified_in_checked"] == 1
+    # Graph coverage is deliberately non-authoritative, so the runtime may
+    # report the verified result in the checked window but must not extrapolate
+    # that to a complete-population total.
+    assert result["qualified_total"] is None
+    assert result["returned"] == 1
+    assert result["is_exact_empty"] is False
+    assert result["exhaustive"] is False
+    assert result["capped"] is True
+    assert "graph_coverage_partial" in {
+        warning["code"] for warning in result["warnings"]
+    }
+    assert result["spec"]["population"]["skills_all"] == ["PySpark"]
+
+    [candidate] = result["candidates"]
+    assert candidate["application_id"] == sister_search_world.positive_application_id
+    assert candidate["candidate_name"] == "pyspark-near-title"
+    assert candidate["meets_all_criteria"] is True
+    [criterion] = candidate["criteria"]
+    assert criterion["criterion"] == "PySpark experience"
+    assert criterion["status"] == "met"
+    assert criterion["grounded"] is True
+    assert criterion["evidence"] == [
+        {
+            "quote": "Built streaming services with PySpark.",
+            "start_char": 0,
+            "end_char": 38,
+            "source": "cv",
+        }
+    ]
+
+    assert sister_search_world.ungrounded_application_id not in {
+        item["application_id"] for item in result["candidates"]
+    }
+    assert sister_search_world.distractor_application_id not in {
+        item["application_id"] for item in result["candidates"]
+    }
+    assert boundaries.parser_calls == []
+    assert {int(call["application_id"]) for call in boundaries.evidence_calls} == {
+        sister_search_world.positive_application_id,
+        sister_search_world.ungrounded_application_id,
+    }
+    assert all(call["client"] is not None for call in boundaries.evidence_calls)
+    assert len(boundaries.graph_calls) == 1
+    assert boundaries.graph_calls[0]["query"] == query

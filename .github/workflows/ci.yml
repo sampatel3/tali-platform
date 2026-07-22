@@ -121,15 +121,34 @@ jobs:
         # the rest from behavioural heuristics that aren't grades. Stdlib-only.
         # Fix = add the missing dimensions, don't widen the exemption.
         run: python scripts/check_fluency_coverage.py
+      - name: AI feature eval coverage gate
+        # Every metered AI Feature except OTHER must declare risk and offline
+        # test coverage (or a reasoned infrastructure exemption). Grounded
+        # coverage names exact truth cases; critical behavioral-only gaps must
+        # be explicitly reviewed. Adding an enum member without a decision fails.
+        run: python scripts/check_ai_eval_coverage.py
       - name: Install backend test dependencies
         run: python -m pip install --disable-pip-version-check -r requirements.txt
       - name: Build disposable candidate-search PostgreSQL schema
-        # The historical Alembic chain begins with an ALTER against the
-        # platform's pre-Alembic schema, so it cannot bootstrap an empty DB.
-        # This helper creates the current ORM baseline, executes the real
-        # candidate-search index migration, and stamps the resulting test-only
-        # schema at the exact repository head.
+        # A registered grounded-truth case exercises the real PostgreSQL search
+        # path, so the disposable schema must exist before the eval suite runs.
+        # The helper creates the ORM baseline, executes the real candidate-search
+        # index migration, and stamps the test-only schema at repository head.
         run: python scripts/bootstrap_candidate_search_postgres.py
+      - name: Registered offline AI feature evals
+        # The registry is the source of truth for this focused suite. Provider
+        # credentials are blank by design: these tests must stay deterministic
+        # and zero-provider-cost.
+        env:
+          ANTHROPIC_API_KEY: ""
+          ANTHROPIC_ADMIN_API_KEY: ""
+          CLAUDE_API_KEY: ""
+          OPENAI_API_KEY: ""
+          VOYAGE_API_KEY: ""
+          E2B_API_KEY: ""
+        run: |
+          mapfile -t AI_EVAL_TESTS < <(python scripts/check_ai_eval_coverage.py --list-tests)
+          python -m pytest -q "${AI_EVAL_TESTS[@]}" tests/evals/test_ai_eval_registry.py
       - name: PostgreSQL candidate-search truth matrix
         # Executes the real parser -> scope -> PostgreSQL -> fusion -> product
         # handler chain. Provider/model/GraphDB boundaries are local fakes.

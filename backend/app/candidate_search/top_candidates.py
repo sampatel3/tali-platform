@@ -34,9 +34,9 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import Any, Callable
 
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
@@ -63,6 +63,13 @@ from .criteria_policy import (
 )
 from .grounded_evidence import CriterionVerdict
 from .retrieval_reporting import search_output_metadata
+from .top_candidate_runtime import (
+    load_candidates as _load_candidates,
+    load_candidates_by_ids as _load_candidates_by_ids,
+    no_actionable_candidates_payload,
+    pool_count as _pool_count,
+    structural_zero_payload,
+)
 
 logger = logging.getLogger("taali.candidate_search.top_candidates")
 
@@ -452,61 +459,6 @@ def _has_structural(parsed) -> bool:
     )
 
 
-def _pool_count(base_query) -> int:
-    """Size of the actionable pool (cheap COUNT, no rows loaded)."""
-    try:
-        return int(base_query.count())
-    except Exception:  # noqa: BLE001 — count is best-effort display
-        return 0
-
-
-def _load_candidates(base_query, *, matcher_ids, score_attr, size: int):
-    """Load at most ``size`` apps from the pool — top by score, with any
-    structural matches biased to the front — WITHOUT materialising the whole
-    pool, so an org-wide query stays cheap. The caller does the final Python
-    ordering, so the IN-clause load order here doesn't matter."""
-    from sqlalchemy import case
-
-    if size <= 0:
-        return []
-    order = [score_attr.is_(None), score_attr.desc()]
-    if matcher_ids:
-        order = [case((CandidateApplication.id.in_(matcher_ids), 0), else_=1)] + order
-    ids = [
-        row[0]
-        for row in base_query.with_entities(CandidateApplication.id)
-        .order_by(*order)
-        .limit(int(size))
-        .all()
-    ]
-    if not ids:
-        return []
-    return (
-        base_query.filter(CandidateApplication.id.in_(ids))
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
-        )
-        .all()
-    )
-
-
-def _load_candidates_by_ids(base_query, application_ids: list[int]):
-    """Hydrate a relevance-ordered id list without losing its order."""
-    if not application_ids:
-        return []
-    apps = (
-        base_query.filter(CandidateApplication.id.in_(application_ids))
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
-        )
-        .all()
-    )
-    by_id = {int(app.id): app for app in apps}
-    return [by_id[app_id] for app_id in application_ids if app_id in by_id]
-
-
 def find_top_candidates(
     *,
     db: Session,
@@ -521,6 +473,10 @@ def find_top_candidates(
     inherited_titles_all: list[str] | None = None,
     inherited_titles_any: list[str] | None = None,
     require_role_authority: bool = False,
+    score_expression=None,
+    row_adapter: Callable[[Any], Any] | None = None,
+    payload_transform: Callable[[Any, dict[str, Any]], dict[str, Any]] | None = None,
+    authoritative_pool_size: int | None = None,
 ) -> dict[str, Any]:
     """Run the grounded top-N procedure.
 
@@ -562,7 +518,30 @@ def find_top_candidates(
     ]
 
     score_col = SCORE_FIELDS[rank_by]
-    score_attr = getattr(CandidateApplication, score_col)
+    score_attr = (
+        score_expression
+        if score_expression is not None
+        else getattr(CandidateApplication, score_col)
+    )
+
+    def _payload(
+        app,
+        *,
+        rank: int,
+        verdicts: list[CriterionVerdict],
+        has_criteria: bool,
+    ) -> dict[str, Any]:
+        payload = _candidate_payload(
+            app,
+            rank=rank,
+            verdicts=verdicts,
+            has_criteria=has_criteria,
+        )
+        return (
+            payload_transform(app, payload)
+            if payload_transform is not None
+            else payload
+        )
     # Structural matches bias the window; `None` when the query had no structural
     # filter at all (then the whole pool is fair game, ranked by score).
     has_structural = _has_structural(parsed)
@@ -607,6 +586,7 @@ def find_top_candidates(
         "preferred_criteria": preferred_criteria,
         "warnings": warnings,
         "rank_by": rank_by,
+        "role_roster_size": authoritative_pool_size,
     }
 
     if getattr(parsed, "parse_degraded", False):
@@ -635,6 +615,18 @@ def find_top_candidates(
             "evidence_model": None,
         }
 
+    # The ranked/actionable pool is intentionally narrower than the role's
+    # canonical roster.  An empty ranked pool proves only that there is nobody
+    # currently eligible to evaluate; it never proves that the role roster was
+    # exhaustively checked for an ad-hoc quality.  This also fails safe if a
+    # future role-topology regression accidentally scopes the base query to an
+    # empty application slice.
+    if authoritative_pool_size is not None and pool_count == 0:
+        return no_actionable_candidates_payload(
+            base_payload=base_payload,
+            authoritative_pool_size=authoritative_pool_size,
+        )
+
     # A hard population request that matched nobody must never be padded with
     # unrelated high scorers.  This was especially damaging for occupations:
     # "project manager" produced zero exact skill-array hits, after which the
@@ -642,48 +634,15 @@ def find_top_candidates(
     # criteria and presented them as PM results.  Fail closed and let the
     # caller explain/relax the structural constraint instead.
     if has_structural and not matcher_ids:
-        exact_structural_zero = bool(result.is_exact_empty)
-        zero_code = (
-            "no_structural_matches" if exact_structural_zero
-            else "structural_retrieval_incomplete"
+        covers_roster = bool(
+            authoritative_pool_size is None
+            or pool_count >= int(authoritative_pool_size)
         )
-        return {
-            **base_payload,
-            "evaluated": 0,
-            "deep_checked": 0,
-            "shown": 0,
-            "returned": 0,
-            "qualified": None,
-            "qualified_in_checked": 0,
-            "qualified_total": 0 if exact_structural_zero else None,
-            "eligible_after_hard_constraints": 0,
-            "search_status": zero_code,
-            "capped": not exact_structural_zero,
-            "candidates": [],
-            "excluded": {
-                "required_total": 0,
-                "not_met_total": 0,
-                "missing_total": 0,
-                "partial_total": 0,
-                "unverified_total": 0,
-                "by_criterion": [],
-            },
-            "evidence_model": None,
-            "warnings": base_payload["warnings"]
-            + [
-                {
-                    "code": zero_code,
-                    "message": (
-                        "No candidates matched the requested skills or titles; "
-                        "unrelated candidates were not substituted."
-                        if exact_structural_zero
-                        else "No candidates were retrieved for the requested skills "
-                        "or titles, but retrieval was incomplete; this is not an "
-                        "exact zero and unrelated candidates were not substituted."
-                    ),
-                }
-            ],
-        }
+        return structural_zero_payload(
+            base_payload=base_payload,
+            retrieval_exact=bool(result.is_exact_empty),
+            covers_roster=covers_roster,
+        )
 
     # Required criteria are evaluated before preferences at the cap. If even
     # that required set exceeds the bounded evidence budget, no candidate can
@@ -739,7 +698,11 @@ def find_top_candidates(
     # quotes so a bare "top 5" report still explains the ranking in evidence.
     if not criteria:
         apps = _load_candidates(
-            candidate_pool, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
+            candidate_pool,
+            matcher_ids=matcher_ids,
+            score_attr=score_attr,
+            size=limit,
+            row_adapter=row_adapter,
         )
         apps.sort(key=_rank_key, reverse=True)
         shown = []
@@ -753,7 +716,7 @@ def find_top_candidates(
             if any(verdict.grounded for verdict in verdicts):
                 reused += 1
             shown.append(
-                _candidate_payload(
+                _payload(
                     app,
                     rank=i,
                     verdicts=verdicts,
@@ -839,11 +802,15 @@ def find_top_candidates(
         # Optional preferences or stated-value constraints retain the legacy
         # degraded list, clearly labelled as unverified by coverage fields.
         apps = _load_candidates(
-            candidate_pool, matcher_ids=matcher_ids, score_attr=score_attr, size=limit
+            candidate_pool,
+            matcher_ids=matcher_ids,
+            score_attr=score_attr,
+            size=limit,
+            row_adapter=row_adapter,
         )
         apps.sort(key=_rank_key, reverse=True)
         shown = [
-            _candidate_payload(app, rank=i, verdicts=[], has_criteria=True)
+            _payload(app, rank=i, verdicts=[], has_criteria=True)
             for i, app in enumerate(apps[:limit], start=1)
         ]
         return {
@@ -885,13 +852,17 @@ def find_top_candidates(
         # Use it to choose WHICH bounded profiles deserve evidence calls; the
         # final sort below still uses grounded constraint/preference signals and
         # the query-relevance order.
-        apps = _load_candidates_by_ids(candidate_pool, relevance_ids[:window_size])
+        load_kwargs = {"row_adapter": row_adapter} if row_adapter is not None else {}
+        apps = _load_candidates_by_ids(
+            candidate_pool, relevance_ids[:window_size], **load_kwargs
+        )
     else:
         apps = _load_candidates(
             candidate_pool,
             matcher_ids=matcher_ids,
             score_attr=score_attr,
             size=max(window_size, limit),
+            row_adapter=row_adapter,
         )
     apps.sort(key=_rank_key, reverse=True)
     grounded = _ground_window(
@@ -963,7 +934,7 @@ def find_top_candidates(
 
     survivors.sort(key=_signal_key, reverse=True)
     shown = [
-        _candidate_payload(app, rank=i, verdicts=verdicts, has_criteria=True)
+        _payload(app, rank=i, verdicts=verdicts, has_criteria=True)
         for i, (app, verdicts) in enumerate(survivors[:limit], start=1)
     ]
     evidence_succeeded = _evidence_succeeded_count(grounded)
@@ -1052,6 +1023,8 @@ def screen_pool_against_requirement(
     deep_verify: bool = False,
     offset: int = 0,
     require_role_authority: bool = False,
+    row_adapter: Callable[[Any], Any] | None = None,
+    payload_transform: Callable[[Any, dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Screen the already-scored pool (``base_query``) against a NEW free-text
     requirement.
@@ -1073,7 +1046,13 @@ def screen_pool_against_requirement(
     limit = max(1, min(int(limit), MAX_SCREEN_LIMIT))
     offset = max(0, int(offset))
     score_col = SCORE_FIELDS["taali"]
-    score_attr = getattr(CandidateApplication, score_col)
+    load_kwargs = {"row_adapter": row_adapter} if row_adapter is not None else {}
+
+    def _payload(app, *, rank, verdicts, has_criteria):
+        row = _candidate_payload(
+            app, rank=rank, verdicts=verdicts, has_criteria=has_criteria
+        )
+        return payload_transform(app, row) if payload_transform is not None else row
 
     # 1. Parse and run the zero-cost Postgres retrieval across the full scored
     #    pool. This is exhaustive at the person level; model verification is a
@@ -1152,7 +1131,7 @@ def screen_pool_against_requirement(
     def _degrade(apps, *, warning):
         """Return the deterministic retrieval order without grounding."""
         shown = [
-            _candidate_payload(a, rank=i, verdicts=[], has_criteria=bool(criteria))
+            _payload(a, rank=i, verdicts=[], has_criteria=bool(criteria))
             for i, a in enumerate(apps[:limit], start=1)
         ]
         return {
@@ -1199,7 +1178,7 @@ def screen_pool_against_requirement(
     # deep verification for the bounded citations pass.
     if not deep_verify:
         page_ids = result_ids[offset : offset + limit]
-        apps = _load_candidates_by_ids(matched_pool, page_ids)
+        apps = _load_candidates_by_ids(matched_pool, page_ids, **load_kwargs)
         if result.exhaustive:
             verification_message = (
                 "Returned complete retrieval matches; deep CV verification was "
@@ -1222,7 +1201,7 @@ def screen_pool_against_requirement(
     # for a model to verify.
     if not criteria:
         page_ids = result_ids[offset : offset + limit]
-        apps = _load_candidates_by_ids(matched_pool, page_ids)
+        apps = _load_candidates_by_ids(matched_pool, page_ids, **load_kwargs)
         no_criteria_message = (
             "No qualitative criteria parsed; returned complete database matches."
             if result.exhaustive
@@ -1271,7 +1250,9 @@ def screen_pool_against_requirement(
                     ),
                 },
             )
-        apps = _load_candidates_by_ids(matched_pool, result_ids[:limit])
+        apps = _load_candidates_by_ids(
+            matched_pool, result_ids[:limit], **load_kwargs
+        )
         return _degrade(
             apps,
             warning={
@@ -1289,7 +1270,7 @@ def screen_pool_against_requirement(
     #    buries exactly the under-scored fits the feature exists to surface.
     window_size = min(matched_count, SCREEN_GROUND_WINDOW)
     apps = _load_candidates_by_ids(
-        matched_pool, result_ids[: max(window_size, limit)]
+        matched_pool, result_ids[: max(window_size, limit)], **load_kwargs
     )
     grounded = _ground_window(
         apps[:window_size],
@@ -1357,7 +1338,7 @@ def screen_pool_against_requirement(
 
     survivors.sort(key=_signal_key, reverse=True)
     shown = [
-        _candidate_payload(app, rank=i, verdicts=verdicts, has_criteria=True)
+        _payload(app, rank=i, verdicts=verdicts, has_criteria=True)
         for i, (app, verdicts) in enumerate(survivors[:limit], start=1)
     ]
     evidence_succeeded = _evidence_succeeded_count(grounded)

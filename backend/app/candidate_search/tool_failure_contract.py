@@ -96,6 +96,19 @@ def candidate_search_result_failed(name: str, result: Any) -> bool:
         and result.get("is_exact_empty") is False
         and warning_codes.intersection(CONDITIONAL_EMPTY_RETRIEVAL_WARNINGS)
     )
+    # A qualitative "no verified matches" verdict is impossible when no
+    # candidate evidence check ran.  In particular, ``is_exact_empty`` may
+    # describe an empty/mis-scoped retrieval query; it cannot turn 0/0 CV
+    # checks into a grounded negative.  Stop the tool round server-side so the
+    # model never receives that payload as permission to say "checked everyone".
+    unchecked_qualitative_zero = bool(
+        name in {"find_top_candidates", "screen_pool_against_requirement"}
+        and result.get("search_status")
+        in {"no_verified_matches", "no_actionable_candidates"}
+        and result.get("deep_checked") == 0
+        and result.get("evidence_succeeded") == 0
+        and (result.get("criteria_requested") or result.get("required_criteria"))
+    )
     return bool(
         result.get("error")
         or result.get("available") is False
@@ -108,6 +121,7 @@ def candidate_search_result_failed(name: str, result: Any) -> bool:
             )
         )
         or incomplete_empty_retrieval
+        or unchecked_qualitative_zero
     )
 
 
