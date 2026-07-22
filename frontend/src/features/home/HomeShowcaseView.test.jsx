@@ -68,5 +68,7 @@ describe('ShowcaseDock agent lanes', () => {
     expect(screen.getByText('95')).toBeInTheDocument();
     expect(screen.queryByText('312')).not.toBeInTheDocument();
     expect(screen.queryByText('3 pending decisions')).not.toBeInTheDocument();
+    expect(screen.getByText('1 advance')).toBeInTheDocument();
+    expect(screen.queryByText('25 reject')).not.toBeInTheDocument();
   });
 });

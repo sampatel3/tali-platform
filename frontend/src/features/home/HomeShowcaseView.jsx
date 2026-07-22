@@ -178,7 +178,7 @@ export const SHOWCASE_AGENT = {
 };
 
 export const SHOWCASE_KPIS = [
-  { key: 'awaiting', label: 'Awaiting you', value: '103', emph: true, sub: '85 not yet decided by the agent' },
+  { key: 'awaiting', label: 'Awaiting you', value: '3', emph: true, sub: 'Three pending recommendations' },
   { key: 'today', label: 'Decisions today', value: '14', sub: '11 auto-applied' },
   { key: 'budget', label: 'Org budget · MTD', value: '$18', unit: '/ $50', bar: { pct: 36, over: false }, sub: '36% · proj $44 EOM' },
   { key: 'override', label: 'Override rate · 7d', value: '8%', sub: '12% taught' },
@@ -187,8 +187,8 @@ export const SHOWCASE_KPIS = [
 // The agent rail — every live role, so you can click one and steer (or activate)
 // its agent. Mix of on / paused / off so the dock's states are visible.
 export const SHOWCASE_AGENTS = [
-  { role_id: 109, role_name: 'Senior Backend Engineer', group: 'on_paused', agent_enabled: true, unread_messages: 0, open_questions: 1, pending_decisions: 85, last_message_preview: 'Capped salary at AED 25k · re-screened 4', budget_cap_cents: 5000, budget_spent_cents: 1820 },
-  { role_id: 110, role_name: 'Data Engineer', group: 'on_paused', agent_enabled: true, unread_messages: 0, open_questions: 0, pending_decisions: 12, last_message_preview: 'Idle · waiting for new candidates', budget_cap_cents: 5000, budget_spent_cents: 640 },
+  { role_id: 109, role_name: 'Senior Backend Engineer', group: 'on_paused', agent_enabled: true, unread_messages: 0, open_questions: 1, pending_decisions: 2, last_message_preview: 'Capped salary at AED 25k · re-screened 4', budget_cap_cents: 5000, budget_spent_cents: 1820 },
+  { role_id: 110, role_name: 'Data Engineer', group: 'on_paused', agent_enabled: true, unread_messages: 0, open_questions: 0, pending_decisions: 1, last_message_preview: 'Idle · waiting for new candidates', budget_cap_cents: 5000, budget_spent_cents: 640 },
   { role_id: 111, role_name: 'AI Delivery Lead', group: 'on_paused', agent_enabled: false, agent_paused: true, agent_paused_reason: 'paused by recruiter', pending_decisions: 0, last_message_preview: 'Paused · no pending decisions' },
   { role_id: 112, role_name: 'Platform Engineer', group: 'previously_on', agent_enabled: false, pending_decisions: 0, last_message_preview: 'Agent off · ran last week' },
   { role_id: 113, role_name: 'Senior Cloud Architect', group: 'starred', agent_enabled: false, pending_decisions: 0, last_message_preview: 'Agent off — tap to set up' },
@@ -196,21 +196,21 @@ export const SHOWCASE_AGENTS = [
 ];
 
 const SHOWCASE_FUNNEL_ALL = {
-  stageCounts: { applied: 312, scored: 184, invited: 9, completed: 4, advanced: 61, rejected: 1905, in_assessment: 6, invited_opened: 7, invited_delivered: 8 },
-  decisionsByType: { send_assessment: 20, reject: 80, advance_to_interview: 3, skip_assessment_reject: 0 },
+  stageCounts: { applied: 312, scored: 184, invited: 9, completed: 4, advanced: 61, rejected: 1905, in_assessment: 6, invited_opened: 7, invited_delivered: 8, not_yet_decided: 0 },
+  decisionsByType: { send_assessment: 0, reject: 1, advance_to_interview: 2, skip_assessment_reject: 0 },
 };
 
 const SHOWCASE_FUNNEL_BY_ROLE = {
   109: {
-    stageCounts: { applied: 180, scored: 112, invited: 5, completed: 2, advanced: 39, rejected: 1102, in_assessment: 3, invited_opened: 4, invited_delivered: 5 },
-    decisionsByType: { send_assessment: 13, reject: 53, advance_to_interview: 2, skip_assessment_reject: 0 },
+    stageCounts: { applied: 180, scored: 112, invited: 5, completed: 2, advanced: 39, rejected: 1102, in_assessment: 3, invited_opened: 4, invited_delivered: 5, not_yet_decided: 0 },
+    decisionsByType: { send_assessment: 0, reject: 1, advance_to_interview: 1, skip_assessment_reject: 0 },
   },
   110: {
-    stageCounts: { applied: 95, scored: 47, invited: 2, completed: 1, advanced: 15, rejected: 671, in_assessment: 2, invited_opened: 2, invited_delivered: 2 },
-    decisionsByType: { send_assessment: 5, reject: 25, advance_to_interview: 1, skip_assessment_reject: 0 },
+    stageCounts: { applied: 95, scored: 47, invited: 2, completed: 1, advanced: 15, rejected: 671, in_assessment: 2, invited_opened: 2, invited_delivered: 2, not_yet_decided: 0 },
+    decisionsByType: { send_assessment: 0, reject: 0, advance_to_interview: 1, skip_assessment_reject: 0 },
   },
   111: {
-    stageCounts: { applied: 37, scored: 25, invited: 2, completed: 1, advanced: 7, rejected: 132, in_assessment: 1, invited_opened: 1, invited_delivered: 1 },
+    stageCounts: { applied: 37, scored: 25, invited: 2, completed: 1, advanced: 7, rejected: 132, in_assessment: 1, invited_opened: 1, invited_delivered: 1, not_yet_decided: 0 },
     decisionsByType: { send_assessment: 0, reject: 0, advance_to_interview: 0, skip_assessment_reject: 0 },
   },
 };
@@ -550,7 +550,7 @@ export const HomeShowcaseView = () => {
     <div className="home-app" style={{ height: '100vh' }}>
       <AgentHeader
         breadcrumbs={[{ label: 'Home' }]}
-        kicker="HUB · 103 AWAITING YOU · 4 ACTIVE ROLES"
+        kicker="HUB · 3 AWAITING YOU · 4 ACTIVE ROLES"
         title="Good morning"
         subtitle="Approve, override, or teach the agent's calls — this is where you keep the loop honest."
         agent={SHOWCASE_AGENT}
