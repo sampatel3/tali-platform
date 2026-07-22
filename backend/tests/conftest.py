@@ -36,7 +36,7 @@ os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["VOYAGE_API_KEY"] = ""
 os.environ["NEO4J_URI"] = ""
 os.environ["NEO4J_PASSWORD"] = ""
-os.environ["CLAUDE_MODEL"] = "claude-3-5-haiku-latest"
+os.environ["CLAUDE_MODEL"] = "claude-haiku-4-5-20251001"
 # Preserve test fixtures that create/update/delete tasks through API helpers.
 os.environ["TASK_AUTHORING_API_ENABLED"] = "true"
 os.environ["GITHUB_MOCK_MODE"] = "true"

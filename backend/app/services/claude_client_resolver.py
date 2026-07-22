@@ -86,7 +86,10 @@ def _build_inner_client(
 
 
 def get_shared_client(
-    *, organization_id: Optional[int] = None
+    *,
+    organization_id: Optional[int] = None,
+    timeout: float = _REQUEST_TIMEOUT_SECONDS,
+    max_retries: int = _MAX_RETRIES,
 ) -> MeteredAnthropicClient:
     """Anthropic client using the Taali-wide ``ANTHROPIC_API_KEY``. Use only
     for flows without an org context (admin scripts, archetype synthesis
@@ -97,9 +100,15 @@ def get_shared_client(
     the spend correctly. Otherwise the wrapper will skip recording with
     a logged warning.
     """
-    inner = _build_inner_client(_shared_api_key())
+    inner = _build_inner_client(
+        _shared_api_key(),
+        timeout=timeout,
+        max_retries=max_retries,
+    )
     return MeteredAnthropicClient(
-        inner=inner, organization_id=organization_id
+        inner=inner,
+        organization_id=organization_id,
+        sdk_max_retries=max_retries,
     )
 
 
@@ -184,7 +193,10 @@ def _provision_for_org_safe(org: Organization) -> Optional[str]:
 
 
 def get_metered_client(
-    *, organization_id: Optional[int] = None
+    *,
+    organization_id: Optional[int] = None,
+    timeout: float = _REQUEST_TIMEOUT_SECONDS,
+    max_retries: int = _MAX_RETRIES,
 ) -> MeteredAnthropicClient:
     """The single gated entry point every billable call path should use.
 
@@ -210,14 +222,22 @@ def get_metered_client(
                     .first()
                 )
                 if org is not None:
-                    return get_client_for_org(org)
+                    return get_client_for_org(
+                        org,
+                        timeout=timeout,
+                        max_retries=max_retries,
+                    )
         except Exception:
             logger.exception(
                 "get_metered_client: per-org routing failed for org=%s; "
                 "falling back to shared key",
                 organization_id,
             )
-    return get_shared_client(organization_id=organization_id)
+    return get_shared_client(
+        organization_id=organization_id,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
 
 
 def get_client_for_org(
@@ -249,7 +269,11 @@ def get_client_for_org(
         )
 
     def _wrap(inner: Anthropic) -> MeteredAnthropicClient:
-        return MeteredAnthropicClient(inner=inner, organization_id=org_id)
+        return MeteredAnthropicClient(
+            inner=inner,
+            organization_id=org_id,
+            sdk_max_retries=max_retries,
+        )
 
     if org is None:
         return _wrap(_client(_shared_api_key()))

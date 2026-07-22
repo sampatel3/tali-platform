@@ -8,8 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.candidate_search.metering import admitted_search_metering
 from app.candidate_search.parser import parse_nl_query
+from app.components.ai_routing.adapters.anthropic_messages import RoutedAnthropicClient
+from app.models.ai_routing import AIRoutingAttempt, AIRoutingInvocation
 from app.models.billing_credit_ledger import BillingCreditLedger
 from app.models.organization import Organization
 from app.models.role import Role
@@ -18,7 +19,6 @@ from app.platform.config import settings
 from app.services.metered_anthropic_client import MeteredAnthropicClient
 from app.services.pricing_service import Feature
 from app.services.provider_usage_admission import reserve_provider_usage
-from app.services.provider_usage_admission import AutomaticProviderAuthorityError
 
 
 class _ParserMessages:
@@ -27,10 +27,11 @@ class _ParserMessages:
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
 
-    def create(self, **_kwargs):
+    def create(self, **kwargs):
         self.calls += 1
         return SimpleNamespace(
             id=f"msg-search-{self.calls}",
+            model=kwargs["model"],
             content=[
                 SimpleNamespace(
                     type="tool_use",
@@ -76,7 +77,12 @@ def _client(org_id: int, messages: _ParserMessages) -> MeteredAnthropicClient:
     return MeteredAnthropicClient(
         inner=SimpleNamespace(messages=messages),
         organization_id=int(org_id),
+        sdk_max_retries=0,
     )
+
+
+def _route_factory(client: MeteredAnthropicClient):
+    return lambda execution: RoutedAnthropicClient(client, execution)
 
 
 def test_workspace_search_is_hard_admitted_and_debited(db, monkeypatch):
@@ -86,7 +92,7 @@ def test_workspace_search_is_hard_admitted_and_debited(db, monkeypatch):
 
     parsed = parse_nl_query(
         "worked at Google or Meta",
-        client=_client(int(org.id), inner),
+        route_client_factory=_route_factory(_client(int(org.id), inner)),
         organization_id=int(org.id),
     )
 
@@ -100,9 +106,22 @@ def test_workspace_search_is_hard_admitted_and_debited(db, monkeypatch):
     assert event.role_id is None
     assert event.credits_charged == 450
     settlement = event.event_metadata["credit_reservation"]
-    assert settlement["reserved"] == 500
+    assert settlement["reserved"] >= settlement["charged"]
     assert settlement["charged"] == 450
     assert settlement["shortfall"] == 0
+
+    invocation = db.query(AIRoutingInvocation).one()
+    attempt = db.query(AIRoutingAttempt).one()
+    assert invocation.task == "candidate_search.parse"
+    assert invocation.status == "succeeded"
+    assert invocation.organization_id == int(org.id)
+    assert attempt.invocation_id == invocation.invocation_id
+    assert attempt.status == "succeeded"
+    assert attempt.deployment_id == invocation.selected_deployment_id
+    assert (
+        event.event_metadata["ai_routing"]["invocation_id"] == invocation.invocation_id
+    )
+    assert event.event_metadata["ai_routing"]["attempt_ordinal"] == 1
 
 
 def test_workspace_search_with_insufficient_credits_never_calls_provider(
@@ -114,7 +133,7 @@ def test_workspace_search_with_insufficient_credits_never_calls_provider(
 
     parsed = parse_nl_query(
         "worked at Google or Meta",
-        client=_client(int(org.id), inner),
+        route_client_factory=_route_factory(_client(int(org.id), inner)),
         organization_id=int(org.id),
     )
 
@@ -129,7 +148,7 @@ def test_role_search_enforces_role_cap_before_provider(db, monkeypatch):
     org, role = _seed(db, balance=100_000, role_budget_cents=1)
     assert role is not None
     # Leave only 200 of the role's 10,000-microcredit cap available. The
-    # parser needs a fresh 500-credit hold, so it must stop before the SDK.
+    # request-shaped conservative hold must stop before the SDK.
     reserve_provider_usage(
         organization_id=int(org.id),
         role_id=int(role.id),
@@ -141,7 +160,7 @@ def test_role_search_enforces_role_cap_before_provider(db, monkeypatch):
 
     parsed = parse_nl_query(
         "worked at Google or Meta",
-        client=_client(int(org.id), inner),
+        route_client_factory=_route_factory(_client(int(org.id), inner)),
         organization_id=int(org.id),
         role_id=int(role.id),
     )
@@ -170,41 +189,33 @@ def test_autonomous_search_admission_rechecks_pause_before_reserving(
     db.commit()
 
     before = db.query(BillingCreditLedger).count()
-    with pytest.raises(AutomaticProviderAuthorityError, match="paused"):
-        admitted_search_metering(
-            organization_id=int(org.id),
-            role_id=int(role.id),
-            feature=Feature.SEARCH_PARSE,
-            entity_id=None,
-            sub_feature="candidate_search_parse",
-            require_role_authority=True,
-        )
+    inner = _ParserMessages()
+    parsed = parse_nl_query(
+        "worked at Google or Meta",
+        route_client_factory=_route_factory(_client(int(org.id), inner)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        require_role_authority=True,
+    )
 
+    assert inner.calls == 0
+    assert parsed.keywords == ["worked at Google or Meta"]
     assert db.query(BillingCreditLedger).count() == before
 
 
-def test_actual_overage_is_explicit_and_never_makes_balance_negative(
-    db, monkeypatch
-):
+def test_conservative_hold_prevents_unfunded_overage_before_provider(db, monkeypatch):
     monkeypatch.setattr(settings, "USAGE_METER_LIVE", True)
     org, _ = _seed(db, balance=700)
     inner = _ParserMessages(input_tokens=100, output_tokens=100)
 
     parse_nl_query(
         "worked at Google or Meta",
-        client=_client(int(org.id), inner),
+        route_client_factory=_route_factory(_client(int(org.id), inner)),
         organization_id=int(org.id),
     )
 
     db.expire_all()
-    assert inner.calls == 1
-    assert db.get(Organization, int(org.id)).credits_balance == 0
-    event = db.query(UsageEvent).filter_by(feature="search_parse").one()
-    # Actual charge is 1,800; 500 was held and the remaining 200 balance was
-    # consumed. The uncovered 1,100 is retained explicitly for reconciliation.
-    settlement = event.event_metadata["credit_reservation"]
-    assert event.credits_charged == 1_800
-    assert settlement["reserved"] == 500
-    assert settlement["adjustment"] == -200
-    assert settlement["shortfall"] == 1_100
-    assert settlement["state"] == "settled"
+    assert inner.calls == 0
+    assert db.get(Organization, int(org.id)).credits_balance == 700
+    assert db.query(UsageEvent).count() == 0
+    assert db.query(BillingCreditLedger).count() == 0

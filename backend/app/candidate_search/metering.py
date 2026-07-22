@@ -1,10 +1,9 @@
-"""Hard admission for paid candidate-search provider calls.
+"""Attribution context for routed candidate-search provider calls.
 
 Candidate search can run either inside one role or across an entire workspace.
-Both shapes must reserve organization credits before touching Anthropic; a
-role-scoped search additionally enforces that role's monthly budget.  Keeping
-the construction here makes the parser, reranker, and citation-grounding paths
-use the same fail-closed contract.
+The universal provider adapter owns hard admission and settlement. This module
+only normalizes candidate-search attribution and authority requirements; it
+never creates a reservation or touches provider state.
 """
 
 from __future__ import annotations
@@ -13,13 +12,9 @@ import uuid
 from typing import Any
 
 from ..services.pricing_service import Feature
-from ..services.provider_usage_admission import (
-    reserve_provider_usage,
-    with_credit_reservation,
-)
 
 
-def admitted_search_metering(
+def search_metering(
     *,
     organization_id: int,
     role_id: int | None,
@@ -31,33 +26,33 @@ def admitted_search_metering(
     base_metering: dict[str, Any] | None = None,
     require_role_authority: bool = False,
 ) -> dict[str, Any]:
-    """Reserve one bounded provider attempt and return its metering payload.
+    """Return canonical attribution for one routed search attempt.
 
     ``role_id=None`` is intentional for a workspace-wide candidate search: the
-    durable hold still serializes against and debits the organization balance,
-    but does not invent job attribution.  With a role id, the shared admission
-    service also checks the role's monthly ceiling.
+    adapter's durable hold still debits the organization balance without
+    inventing job attribution. With a role id, central admission also checks
+    the role's monthly ceiling.
     """
 
     resolved_trace_id = str(trace_id or f"candidate-search:{uuid.uuid4().hex}")
-    reservation = reserve_provider_usage(
-        organization_id=int(organization_id),
-        role_id=int(role_id) if role_id is not None else None,
-        feature=feature,
-        trace_id=resolved_trace_id,
-        entity_id=str(entity_id) if entity_id is not None else None,
-        sub_feature=str(sub_feature),
-        metadata={
-            **dict(metadata or {}),
-            "admission_scope": "role" if role_id is not None else "organization",
-        },
-        require_role_authority=bool(require_role_authority),
-    )
+    base = dict(base_metering or {})
+    if base.get("credit_reservation") is not None:
+        raise ValueError(
+            "candidate search reservations are owned by the routing adapter"
+        )
     meter = {
-        **dict(base_metering or {}),
+        **base,
         "feature": feature.value,
         "organization_id": int(organization_id),
         "trace_id": resolved_trace_id,
+        "metadata": {
+            **dict(base.get("metadata") or {}),
+            **dict(metadata or {}),
+            "sub_feature": str(sub_feature),
+            "admission_scope": (
+                "role" if role_id is not None else "organization"
+            ),
+        },
     }
     if role_id is not None:
         meter["role_id"] = int(role_id)
@@ -65,7 +60,13 @@ def admitted_search_metering(
         meter.pop("role_id", None)
     if entity_id is not None:
         meter["entity_id"] = str(entity_id)
-    return with_credit_reservation(meter, reservation)
+    else:
+        meter.pop("entity_id", None)
+    if require_role_authority:
+        meter["require_role_authority"] = True
+    else:
+        meter.pop("require_role_authority", None)
+    return meter
 
 
-__all__ = ["admitted_search_metering"]
+__all__ = ["search_metering"]

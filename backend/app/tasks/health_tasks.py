@@ -40,9 +40,17 @@ def release_stale_usage_credit_reservations(
     from ..services.usage_credit_reservation_recovery import (
         release_stale_credit_reservations,
     )
+    from ..components.ai_routing.reconciliation import (
+        reconcile_stale_route_telemetry,
+    )
 
     with SessionLocal() as db:
         result = release_stale_credit_reservations(
+            db,
+            stale_after_minutes=int(stale_after_minutes),
+            limit=int(limit),
+        )
+        result["ai_routing"] = reconcile_stale_route_telemetry(
             db,
             stale_after_minutes=int(stale_after_minutes),
             limit=int(limit),

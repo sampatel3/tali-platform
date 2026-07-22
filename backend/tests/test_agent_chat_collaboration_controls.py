@@ -24,6 +24,15 @@ from app.models.user import User
 from tests.conftest import TestingSessionLocal
 
 
+def _routed_transport_stub():
+    return SimpleNamespace(
+        messages=object(),
+        ai_routing_metered_transport=True,
+        ai_routing_sdk_max_retries=0,
+        organization_id=None,
+    )
+
+
 def _user(db, org: Organization, local: str) -> User:
     user = User(
         email=f"{local}-{id(db)}@chat-controls.test",
@@ -180,7 +189,11 @@ def _run_scripted_turn(
     scripted,
 ):
     with (
-        patch.object(chat_engine, "get_client_for_org", return_value=object()),
+        patch.object(
+            chat_engine,
+            "routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
         patch.object(chat_engine, "reserve"),
         patch.object(chat_engine, "one_call", side_effect=scripted),
     ):

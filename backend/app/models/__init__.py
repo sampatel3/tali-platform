@@ -85,6 +85,7 @@ from .assessment_experiment import (
 from .billing_credit_ledger import BillingCreditLedger
 from .usage_event import UsageEvent
 from .claude_call_log import ClaudeCallLog
+from .ai_routing import AIRoutingAttempt, AIRoutingInvocation
 from .anthropic_wire_log import AnthropicWireLog
 from .anthropic_batch_job import AnthropicBatchJob
 from .usage_grant import (
@@ -207,10 +208,7 @@ from .email_suppression import (
     SUPPRESSION_REASON_RANK,
     EmailSuppression,
 )
-from .prospect import (
-    PROSPECT_STATUSES,
-    Prospect,
-)
+from .prospect import PROSPECT_STATUSES, Prospect
 from .job_hiring_team import (
     TEAM_ROLE_COORDINATOR,
     TEAM_ROLE_HIRING_MANAGER,
@@ -295,6 +293,8 @@ __all__ = [
     "BillingCreditLedger",
     "UsageEvent",
     "ClaudeCallLog",
+    "AIRoutingInvocation",
+    "AIRoutingAttempt",
     "AnthropicWireLog",
     "AnthropicBatchJob",
     "UsageGrant",

@@ -19,6 +19,19 @@ from app.candidate_search import rerank as rerank_module
 from app.services.metered_async_anthropic_client import GraphProviderAdmissionError
 
 
+@pytest.fixture(autouse=True)
+def _unit_route_seam(monkeypatch):
+    """Keep verifier unit tests focused on tri-state candidate behavior."""
+
+    class _Execution:
+        selected_model_id = "test-rerank-model"
+
+        def finish_workflow(self, *, succeeded: bool) -> None:
+            self.succeeded = succeeded
+
+    monkeypatch.setattr(rerank_module, "prepare_route", lambda *_a, **_k: _Execution())
+
+
 class _FakeClient:
     def __init__(self, decisions: list[object]):
         self._decisions = list(decisions)
@@ -46,6 +59,11 @@ class _FakeClient:
                 return SimpleNamespace(content=[SimpleNamespace(text=body)])
 
         self.messages = _Messages()
+
+    def __call__(self, _execution):
+        """Act as the route-aware client factory injected by unit tests."""
+
+        return self
 
 
 def _make_app_row(app_id: int, candidate_id: int):
@@ -82,7 +100,7 @@ def test_empty_soft_criteria_returns_input_untouched():
         organization_id=1,
         application_ids=[1, 2, 3],
         soft_criteria=[],
-        client=_FakeClient([]),
+        route_client_factory=_FakeClient([]),
     )
     assert out.application_ids == [1, 2, 3]
     assert out.outcomes == []
@@ -102,7 +120,7 @@ def test_keeps_only_matched_in_input_order(monkeypatch):
         organization_id=1,
         application_ids=[10, 20, 30],
         soft_criteria=["large enterprise"],
-        client=fake,
+        route_client_factory=fake,
     )
     assert out.application_ids == [10, 30]
     assert [item.status for item in out.outcomes] == [
@@ -126,7 +144,7 @@ def test_malformed_response_keeps_candidate_unclassified(monkeypatch):
         organization_id=1,
         application_ids=[1],
         soft_criteria=["in production"],
-        client=fake,
+        route_client_factory=fake,
     )
     assert out.application_ids == [1]
     assert out.evidence_succeeded == 0
@@ -147,7 +165,7 @@ def test_api_failure_keeps_candidate_unclassified(monkeypatch):
         organization_id=1,
         application_ids=[1],
         soft_criteria=["in production"],
-        client=fake,
+        route_client_factory=fake,
     )
 
     assert out.application_ids == [1]
@@ -168,7 +186,7 @@ def test_non_boolean_match_is_invalid_not_truthy(monkeypatch):
         organization_id=1,
         application_ids=[1],
         soft_criteria=["in production"],
-        client=fake,
+        route_client_factory=fake,
     )
 
     assert out.application_ids == [1]
@@ -197,7 +215,7 @@ def test_role_id_is_threaded_into_rerank_admission_and_metering(monkeypatch):
             },
         }
 
-    monkeypatch.setattr(rerank_module, "admitted_search_metering", _admit)
+    monkeypatch.setattr(rerank_module, "search_metering", _admit)
     graph_context_args = {}
 
     def _graph_context(**kwargs):
@@ -212,7 +230,7 @@ def test_role_id_is_threaded_into_rerank_admission_and_metering(monkeypatch):
         role_id=77,
         application_ids=[10],
         soft_criteria=["large enterprise"],
-        client=fake,
+        route_client_factory=fake,
         require_role_authority=True,
     )
 
@@ -237,7 +255,7 @@ def test_graph_authority_denial_stops_before_rerank_provider(monkeypatch):
         "_build_graph_context",
         MagicMock(side_effect=GraphProviderAdmissionError("role agent is paused")),
     )
-    monkeypatch.setattr(rerank_module, "admitted_search_metering", admitted)
+    monkeypatch.setattr(rerank_module, "search_metering", admitted)
 
     out = rerank_module.rerank_application_ids(
         db=db,
@@ -245,7 +263,7 @@ def test_graph_authority_denial_stops_before_rerank_provider(monkeypatch):
         role_id=77,
         application_ids=[10],
         soft_criteria=["large enterprise"],
-        client=fake,
+        route_client_factory=fake,
         require_role_authority=True,
     )
 
@@ -254,23 +272,20 @@ def test_graph_authority_denial_stops_before_rerank_provider(monkeypatch):
     admitted.assert_not_called()
 
 
-def test_no_api_key_reports_verification_unavailable(monkeypatch):
-    monkeypatch.setattr(
-        rerank_module,
-        "_resolve_anthropic_client",
-        lambda **_: (_ for _ in ()).throw(
+def test_client_factory_failure_keeps_candidates_unclassified():
+    db = _make_db([_make_app_row(1, 11), _make_app_row(2, 22)])
+    result = rerank_module.rerank_application_ids(
+        db=db,
+        organization_id=1,
+        application_ids=[1, 2],
+        soft_criteria=["in production"],
+        route_client_factory=lambda _execution: (_ for _ in ()).throw(
             RuntimeError("ANTHROPIC_API_KEY is not configured")
         ),
     )
-    db = _make_db([_make_app_row(1, 11), _make_app_row(2, 22)])
-    with pytest.raises(rerank_module.RerankUnavailable):
-        rerank_module.rerank_application_ids(
-            db=db,
-            organization_id=1,
-            application_ids=[1, 2],
-            soft_criteria=["in production"],
-            client=None,
-        )
+
+    assert result.application_ids == [1, 2]
+    assert [outcome.status for outcome in result.outcomes] == ["error", "error"]
 
 
 def test_summary_truncation_caps_long_strings():

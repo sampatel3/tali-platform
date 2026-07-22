@@ -63,6 +63,7 @@ def test_semantic_graph_hit_rescues_postgres_miss_inside_structured_population(
         return postgres_query if len(applied) == 1 else population_query
 
     monkeypatch.setattr(runner.cache_module, "get", lambda _key: parsed)
+    monkeypatch.setattr(runner, "parse_common_query", lambda _query: None)
     monkeypatch.setattr(runner, "apply_parsed_filter", _apply)
     monkeypatch.setattr(runner, "apply_relevance_order", lambda query, _parsed: query)
     captured: dict = {}
@@ -156,6 +157,7 @@ def test_generic_product_experience_returns_only_source_grounded_graph_candidate
         ),
     )
     monkeypatch.setattr(runner.cache_module, "get", lambda _key: parsed)
+    monkeypatch.setattr(runner, "parse_common_query", lambda _query: None)
     monkeypatch.setattr(runner, "apply_parsed_filter", _apply)
     monkeypatch.setattr(runner, "apply_relevance_order", lambda query, _parsed: query)
     monkeypatch.setattr(
@@ -346,6 +348,7 @@ def test_skill_bound_duration_fails_closed_until_typed_duration_is_executable(
         free_text="3 years of AWS Glue production experience",
     )
     monkeypatch.setattr(runner.cache_module, "get", lambda _key: parsed)
+    monkeypatch.setattr(runner, "parse_common_query", lambda _query: None)
     monkeypatch.setattr(
         runner,
         "apply_parsed_filter",

@@ -9,9 +9,13 @@ tool (the parser fast-fails to keywords-only on any failure).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
+import pytest
+
+import app.candidate_search.parser as parser_module
+from app.candidate_search import cache as parser_cache
 from app.candidate_search.deterministic_parser import parse_common_query
 from app.candidate_search.parser import _normalise, parse_nl_query
 from app.candidate_search.schemas import ParsedFilter
@@ -19,6 +23,19 @@ from app.candidate_search.schemas import ParsedFilter
 
 # Tool name the gateway derives from ``ParsedFilter``.
 TOOL_NAME = "emit_parsed_filter"
+
+
+@pytest.fixture(autouse=True)
+def _unit_route_seam(monkeypatch):
+    """Keep parser unit tests focused on parsing; routing has integration tests."""
+
+    class _Execution:
+        selected_model_id = "test-parser-model"
+
+        def finish_workflow(self, *, succeeded: bool) -> None:
+            self.succeeded = succeeded
+
+    monkeypatch.setattr(parser_module, "prepare_route", lambda *_a, **_k: _Execution())
 
 
 @dataclass
@@ -76,6 +93,11 @@ class _FakeClient:
 
         self.messages = _Messages()
 
+    def __call__(self, _execution):
+        """Act as the route-aware client factory injected by unit tests."""
+
+        return self
+
 
 def _client_for(payload: dict) -> _FakeClient:
     return _FakeClient(response=_tu(payload))
@@ -84,7 +106,7 @@ def _client_for(payload: dict) -> _FakeClient:
 def test_parses_skill_only_query():
     parsed = parse_nl_query(
         "candidates with AWS Glue experience",
-        client=_client_for(
+        route_client_factory=_client_for(
             {"skills_all": ["AWS Glue"], "free_text": "candidates with AWS Glue experience"}
         ),
     )
@@ -115,7 +137,7 @@ def test_any_skill_experience_keeps_one_boolean_evidence_criterion():
 def test_parses_country_query_with_alias_normalisation():
     parsed = parse_nl_query(
         "candidates who have worked in the UK",
-        client=_client_for({"locations_country": ["UK"]}),
+        route_client_factory=_client_for({"locations_country": ["UK"]}),
         organization_id=1,
     )
     assert parsed.locations_country == ["United Kingdom"]
@@ -124,7 +146,7 @@ def test_parses_country_query_with_alias_normalisation():
 def test_graph_predicate_boolean_operator_survives_parsing():
     parsed = parse_nl_query(
         "candidates who worked at Google or Meta",
-        client=_client_for(
+        route_client_factory=_client_for(
             {
                 "graph_predicates": [
                     {"type": "worked_at", "value": "Google"},
@@ -151,7 +173,7 @@ def test_graph_predicates_default_to_all_for_backward_compatibility():
 def test_parses_compound_query_with_region_and_soft_criteria():
     parsed = parse_nl_query(
         "5 years experience, worked in Europe, large enterprise in production",
-        client=_client_for(
+        route_client_factory=_client_for(
             {
                 "min_years_experience": 5,
                 "locations_region": ["europe"],
@@ -168,7 +190,7 @@ def test_parses_compound_query_with_region_and_soft_criteria():
 def test_parses_explicit_preferences_separately_from_required_criteria():
     parsed = parse_nl_query(
         "project manager with Treasury experience, ideally in banking",
-        client=_client_for(
+        route_client_factory=_client_for(
             {
                 "titles_all": ["project manager"],
                 "soft_criteria": ["Treasury experience"],
@@ -188,7 +210,7 @@ def test_exact_treasury_banking_pm_query_is_deterministic_and_atomic():
 
     parsed = parse_nl_query(
         "project manager with Treasury experience (Banking domain)",
-        client=parser_client,
+        route_client_factory=parser_client,
     )
 
     assert parsed.titles_all == ["project manager"]
@@ -204,7 +226,7 @@ def test_natural_request_leading_preserves_pm_population_and_atomic_requirement(
 
     parsed = parse_nl_query(
         "can you find a project manager with Treasury experience (Banking domain)",
-        client=parser_client,
+        route_client_factory=parser_client,
     )
 
     assert parsed.titles_all == ["project manager"]
@@ -220,7 +242,7 @@ def test_treasury_banking_experience_stays_one_required_criterion():
 
     parsed = parse_nl_query(
         "top candidates with Treasury banking experience",
-        client=parser_client,
+        route_client_factory=parser_client,
     )
 
     assert parsed.soft_criteria == ["Treasury banking experience"]
@@ -286,7 +308,7 @@ def test_title_with_explicit_preference_preserves_title_and_modality():
 def test_parses_graph_predicates():
     parsed = parse_nl_query(
         "Python, worked at Google or Meta",
-        client=_client_for(
+        route_client_factory=_client_for(
             {
                 "skills_all": ["Python"],
                 "graph_predicates": [
@@ -306,7 +328,7 @@ def test_text_instead_of_tool_use_falls_back_to_keywords():
     to a keyword-only filter so the user still gets ILIKE matches."""
     parsed = parse_nl_query(
         "anything",
-        client=_FakeClient(response=_text("not json at all")),
+        route_client_factory=_FakeClient(response=_text("not json at all")),
         organization_id=1,
     )
     assert parsed.skills_all == []
@@ -318,7 +340,7 @@ def test_text_instead_of_tool_use_falls_back_to_keywords():
 def test_valid_but_empty_tool_output_is_an_explicit_degraded_fallback():
     parsed = parse_nl_query(
         "anything",
-        client=_client_for({}),
+        route_client_factory=_client_for({}),
         organization_id=1,
     )
 
@@ -333,7 +355,7 @@ def test_invalid_schema_falls_back_to_keywords():
     # input fails → fallback.
     parsed = parse_nl_query(
         "ten thousand years",
-        client=_client_for({"min_years_experience": 9999}),
+        route_client_factory=_client_for({"min_years_experience": 9999}),
         organization_id=1,
     )
     assert parsed.keywords == ["ten thousand years"]
@@ -343,7 +365,7 @@ def test_invalid_schema_falls_back_to_keywords():
 def test_client_exception_falls_back():
     parsed = parse_nl_query(
         "boom",
-        client=_FakeClient(raise_exc=RuntimeError("network down")),
+        route_client_factory=_FakeClient(raise_exc=RuntimeError("network down")),
         organization_id=1,
     )
     assert parsed.keywords == ["boom"]
@@ -352,7 +374,7 @@ def test_client_exception_falls_back():
 def test_empty_query_short_circuits_without_claude_call():
     # Pass a client that would raise if called: the parser must not call it.
     parser_client = _FakeClient(raise_exc=RuntimeError("must not be called"))
-    parsed = parse_nl_query("   ", client=parser_client)
+    parsed = parse_nl_query("   ", route_client_factory=parser_client)
     assert parsed.is_empty()
     assert parsed.free_text == ""
 
@@ -371,20 +393,14 @@ def test_normalise_drops_unknown_regions():
     assert cleaned.preferred_criteria == ["banking domain"]
 
 
-def test_no_api_key_falls_back():
-    # Force missing client by passing client=None and ensuring settings.ANTHROPIC_API_KEY is empty.
-    import app.candidate_search.parser as parser_module
-    original = parser_module._resolve_anthropic_client
+def test_common_skill_path_does_not_resolve_a_route_client():
+    def forbidden_factory(_execution):
+        raise AssertionError("deterministic parsing must not resolve a client")
 
-    def boom():
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured")
-
-    parser_module._resolve_anthropic_client = boom
-    try:
-        parsed = parse_nl_query("AWS Glue", client=None)
-    finally:
-        parser_module._resolve_anthropic_client = original
-    # Common skills take the deterministic zero-model path even without a key.
+    parsed = parse_nl_query(
+        "AWS Glue",
+        route_client_factory=forbidden_factory,
+    )
     assert parsed.skills_all == ["AWS Glue"]
     assert parsed.keywords == []
 
@@ -404,3 +420,23 @@ def test_deterministic_country_keeps_canonical_case():
     parsed = parse_nl_query("candidates with Python based in united arab emirates")
     assert parsed.skills_all == ["Python"]
     assert parsed.locations_country == ["United Arab Emirates"]
+
+
+def test_parser_cache_key_tracks_route_behavior(monkeypatch):
+    monkeypatch.setattr(
+        parser_cache,
+        "route_behavior_fingerprint",
+        lambda _task: "search-parse-behavior-a",
+    )
+    first = parser_cache.compute_cache_key(organization_id=7, query="  AWS Glue ")
+    normalized = parser_cache.compute_cache_key(organization_id=7, query="aws glue")
+
+    monkeypatch.setattr(
+        parser_cache,
+        "route_behavior_fingerprint",
+        lambda _task: "search-parse-behavior-b",
+    )
+    rerouted = parser_cache.compute_cache_key(organization_id=7, query="aws glue")
+
+    assert first == normalized
+    assert rerouted != first

@@ -354,11 +354,15 @@ def sister_search_world(
 
 
 @pytest.fixture
-def boundaries(monkeypatch) -> BoundaryFakes:
+def boundaries(monkeypatch, db) -> BoundaryFakes:
+    # Candidate rows live in the dedicated PostgreSQL fixture, while the
+    # routed control-plane telemetry uses the ordinary isolated test database.
+    # Depending on ``db`` creates that schema so parser routing remains real.
+    del db
     fakes = BoundaryFakes()
     search_cache.clear()
 
-    monkeypatch.setattr(parser, "_resolve_anthropic_client", lambda **_kwargs: object())
+    monkeypatch.setattr(parser, "routed_messages_client", lambda _execution: object())
 
     def admit(**kwargs):
         meter = {
@@ -426,13 +430,9 @@ def boundaries(monkeypatch) -> BoundaryFakes:
                 )
         return verdicts
 
-    monkeypatch.setattr(parser, "admitted_search_metering", admit)
+    monkeypatch.setattr(parser, "search_metering", admit)
     monkeypatch.setattr(parser, "generate_structured", generate)
     monkeypatch.setattr(runner, "retrieve_graph_backend", retrieve_graph)
-    monkeypatch.setattr(
-        "app.services.claude_client_resolver.get_metered_client",
-        lambda **_kwargs: object(),
-    )
     monkeypatch.setattr(search_evidence, "extract_cv_evidence", extract_evidence)
     monkeypatch.setattr(
         "app.candidate_graph.search.search_candidate_evidence",
@@ -943,6 +943,9 @@ def test_related_role_top_candidates_uses_owner_applications_and_grounded_truth(
         sister_search_world.positive_application_id,
         sister_search_world.ungrounded_application_id,
     }
-    assert all(call["client"] is not None for call in boundaries.evidence_calls)
+    assert all("client" not in call for call in boundaries.evidence_calls)
+    assert all(
+        call["route_client_factory"] is None for call in boundaries.evidence_calls
+    )
     assert len(boundaries.graph_calls) == 1
     assert boundaries.graph_calls[0]["query"] == query

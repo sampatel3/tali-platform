@@ -11,6 +11,7 @@ All pure / mock-backed — no real Anthropic calls, no real DB.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -25,12 +26,54 @@ def test_grounding_deadline_fits_inside_chat_stream_idle_budget():
     assert tc.GROUND_BATCH_DEADLINE_S < 30
 
 
+def test_ground_window_preserves_lineage_context_and_factory(monkeypatch):
+    lineage = ContextVar("test_grounding_lineage", default=None)
+    route_factory = object()
+    seen = []
+    app = SimpleNamespace(id=1)
+
+    monkeypatch.setattr(tc, "_collect_evidence", lambda _app: ("cv", None))
+
+    def _capture(_cv, _notes, *, route_client_factory, **_kwargs):
+        seen.append((lineage.get(), route_client_factory))
+        return []
+
+    monkeypatch.setattr(tc, "_ground", _capture)
+    token = lineage.set("root-invocation")
+    try:
+        grounded = tc._ground_window(
+            [app],
+            criteria=["banking"],
+            route_client_factory=route_factory,
+            organization_id=1,
+        )
+    finally:
+        lineage.reset(token)
+
+    assert grounded[0][0] is app
+    assert seen == [("root-invocation", route_factory)]
+
+
 @pytest.fixture(autouse=True)
 def _no_grounding_cache(monkeypatch):
     """Disable the Redis-backed grounding cache by default so tests are
     deterministic and never touch a real Redis. The cache-specific tests install
-    their own fake handle via monkeypatch."""
+    their own fake handle via monkeypatch. Provider-routing durability is
+    covered separately, so these pure tests use an in-memory route seam."""
     monkeypatch.setattr(ge, "_redis", lambda: None)
+
+    class _Execution:
+        selected_model_id = "test-grounding-model"
+        last_attempt_model_id = "test-grounding-model"
+        decision = SimpleNamespace(
+            limits=SimpleNamespace(max_iterations=3),
+            behavior_fingerprint="test-grounding-behavior",
+        )
+
+        def finish_workflow(self, *, succeeded: bool) -> None:
+            self.succeeded = succeeded
+
+    monkeypatch.setattr(ge, "prepare_route", lambda *_a, **_k: _Execution())
 
 
 class _FakeRedis:
@@ -44,6 +87,10 @@ class _FakeRedis:
 
     def setex(self, key, _ttl, value):
         self.store[key] = value
+
+
+def _route_factory(client):
+    return lambda _execution: client
 
 
 # --------------------------------------------------------------------------
@@ -136,13 +183,21 @@ def test_parse_not_met_constraint_cites_the_violating_value():
 
 def test_extract_no_criteria_short_circuits():
     assert ge.extract_cv_evidence(
-        cv_text="anything", criteria=[], client=None, organization_id=1, application_id=1
+        cv_text="anything",
+        criteria=[],
+        route_client_factory=None,
+        organization_id=1,
+        application_id=1,
     ) == []
 
 
 def test_extract_no_cv_text_returns_missing():
     out = ge.extract_cv_evidence(
-        cv_text="   ", criteria=["banking"], client=None, organization_id=1, application_id=1
+        cv_text="   ",
+        criteria=["banking"],
+        route_client_factory=None,
+        organization_id=1,
+        application_id=1,
     )
     assert len(out) == 1
     assert out[0].status == "missing"
@@ -200,7 +255,7 @@ def test_extract_happy_path_through_fake_client():
     out = ge.extract_cv_evidence(
         cv_text="...led the core banking platform migration...",
         criteria=["banking domain experience"],
-        client=client,
+        route_client_factory=_route_factory(client),
         organization_id=1,
         application_id=42,
     )
@@ -257,7 +312,7 @@ def test_extract_grounds_salary_from_notes_when_cv_silent():
         cv_text="AWS Glue ETL pipelines, PySpark, CDC.",  # no salary in the CV
         notes_text="Recruiter note: Salary expectation: less than 40,000 AED",
         criteria=["salary expectation less than 30000 AED"],
-        client=_FakeClient(),
+        route_client_factory=_route_factory(_FakeClient()),
         organization_id=1,
         application_id=7,
     )
@@ -309,7 +364,7 @@ def test_cache_grounds_once_then_reuses(monkeypatch):
     kw = dict(
         cv_text="...led the core banking platform migration...",
         criteria=["banking domain experience"],
-        client=client,
+        route_client_factory=_route_factory(client),
         organization_id=1,
         application_id=42,
     )
@@ -322,17 +377,36 @@ def test_cache_grounds_once_then_reuses(monkeypatch):
     assert fake.store  # the met verdict was cached
 
 
-def test_failed_call_yields_error_not_missing(monkeypatch):
-    """No fallback: a call that fails after retries becomes `error` (UI shows
-    'couldn't verify'), never a fabricated `missing`, and is never cached."""
+def test_grounding_cache_key_tracks_route_behavior(monkeypatch):
+    first = ge._cache_key(
+        1,
+        "document-hash",
+        "Banking  domain",
+        behavior_fingerprint="grounding-behavior-a",
+    )
+    normalized = ge._cache_key(
+        1,
+        "document-hash",
+        "banking domain",
+        behavior_fingerprint="grounding-behavior-a",
+    )
+    rerouted = ge._cache_key(
+        1,
+        "document-hash",
+        "banking domain",
+        behavior_fingerprint="grounding-behavior-b",
+    )
+
+    assert first == normalized
+    assert rerouted != first
+
+
+def test_ambiguous_failure_is_not_replayed_or_cached(monkeypatch):
+    """An outcome-ambiguous error is surfaced after exactly one attempt."""
     fake = _FakeRedis()
     monkeypatch.setattr(ge, "_redis", lambda: fake)
-    monkeypatch.setattr(ge.time, "sleep", lambda *_a, **_k: None)
-
     class _Boom(Exception):
         pass
-
-    monkeypatch.setattr(ge, "_TRANSIENT_ERRORS", (_Boom,))
 
     def _always_fail(_n):
         raise _Boom("overloaded")
@@ -341,23 +415,39 @@ def test_failed_call_yields_error_not_missing(monkeypatch):
     out = ge.extract_cv_evidence(
         cv_text="banking platform work",
         criteria=["banking domain experience"],
-        client=client,
+        route_client_factory=_route_factory(client),
         organization_id=1,
         application_id=7,
     )
-    assert client.calls == ge.GROUNDING_MAX_ATTEMPTS  # retried, didn't bail early
+    assert client.calls == 1
     assert out[0].status == "error"  # NOT "missing"
     assert out[0].grounded is False
     assert fake.store == {}  # errors are never cached
 
 
-def test_retries_transient_then_succeeds(monkeypatch):
-    monkeypatch.setattr(ge.time, "sleep", lambda *_a, **_k: None)
+def test_timeout_and_5xx_are_never_replayed():
+    class _ServerError(Exception):
+        status_code = 500
 
+    for error in (TimeoutError("timed out"), _ServerError("provider failed")):
+        client = _CountingClient(
+            lambda _attempt, error=error: (_ for _ in ()).throw(error)
+        )
+        out = ge.extract_cv_evidence(
+            cv_text="banking platform work",
+            criteria=["banking domain experience"],
+            route_client_factory=_route_factory(client),
+            organization_id=1,
+            application_id=7,
+        )
+
+        assert client.calls == 1
+        assert out[0].status == "error"
+
+
+def test_grounding_delegates_retry_authority_to_route_client():
     class _Boom(Exception):
-        pass
-
-    monkeypatch.setattr(ge, "_TRANSIENT_ERRORS", (_Boom,))
+        status_code = 429
 
     def _fail_twice(n):
         if n < 3:
@@ -368,17 +458,12 @@ def test_retries_transient_then_succeeds(monkeypatch):
     out = ge.extract_cv_evidence(
         cv_text="core banking platform",
         criteria=["banking domain experience"],
-        client=client,
+        route_client_factory=_route_factory(client),
         organization_id=1,
         application_id=9,
     )
-    assert client.calls == 3
-    assert out[0].status == "met" and out[0].grounded is True
-    reservation_refs = {
-        call["metering"]["credit_reservation"]["external_ref"]
-        for call in client.requests
-    }
-    assert len(reservation_refs) == 3
+    assert client.calls == 1
+    assert out[0].status == "error"
 
 
 def test_grounding_threads_role_into_each_admitted_call(monkeypatch):
@@ -399,13 +484,13 @@ def test_grounding_threads_role_into_each_admitted_call(monkeypatch):
             },
         }
 
-    monkeypatch.setattr(ge, "admitted_search_metering", _admit)
+    monkeypatch.setattr(ge, "search_metering", _admit)
     client = _CountingClient(lambda _n: _met_response())
 
     out = ge.extract_cv_evidence(
         cv_text="core banking platform",
         criteria=["banking domain experience"],
-        client=client,
+        route_client_factory=_route_factory(client),
         organization_id=1,
         role_id=88,
         application_id=9,
@@ -420,8 +505,6 @@ def test_grounding_threads_role_into_each_admitted_call(monkeypatch):
 
 def test_non_transient_error_is_not_retried(monkeypatch):
     """A 400-class error won't be fixed by retrying — fail fast to a single call."""
-    monkeypatch.setattr(ge, "_TRANSIENT_ERRORS", ())  # nothing counts as transient
-
     def _bad_request(_n):
         raise ValueError("malformed document")
 
@@ -429,7 +512,7 @@ def test_non_transient_error_is_not_retried(monkeypatch):
     out = ge.extract_cv_evidence(
         cv_text="x banking",
         criteria=["banking domain experience"],
-        client=client,
+        route_client_factory=_route_factory(client),
         organization_id=1,
         application_id=1,
     )
@@ -448,12 +531,8 @@ def test_find_top_candidates_shows_error_not_hidden(monkeypatch):
         parsed_filter=ParsedFilter(soft_criteria=["salary under 30k AED"]),
         warnings=[]))
     monkeypatch.setattr(tc, "_notes_text", lambda app: None)
-    monkeypatch.setattr(ge.time, "sleep", lambda *_a, **_k: None)
-
     class _Boom(Exception):
         pass
-
-    monkeypatch.setattr(ge, "_TRANSIENT_ERRORS", (_Boom,))
 
     a = _fake_app(1, taali=80, name="A")
     a.cv_text = "some cv text"
@@ -469,7 +548,8 @@ def test_find_top_candidates_shows_error_not_hidden(monkeypatch):
 
     out = tc.find_top_candidates(
         db=MagicMock(), organization_id=1, query="top under 30k",
-        base_query=MagicMock(), limit=5, evidence_client=_FailClient(),
+        base_query=MagicMock(), limit=5,
+        evidence_route_client_factory=_route_factory(_FailClient()),
     )
     ids = [c["application_id"] for c in out["candidates"]]
     assert ids == [1]  # not hidden by the failure
@@ -522,7 +602,7 @@ def test_qualified_is_unknown_when_requested_criteria_are_capped(monkeypatch):
         query="banking experience and team leadership",
         base_query=MagicMock(),
         limit=5,
-        evidence_client=_Client(),
+        evidence_route_client_factory=_route_factory(_Client()),
     )
 
     assert out["criteria_checked"] == ["banking experience"]
@@ -962,7 +1042,7 @@ def test_find_top_candidates_does_not_pad_zero_structural_matches(monkeypatch):
         query="project manager or scrum master with Treasury and Data",
         base_query=MagicMock(),
         limit=10,
-        evidence_client=MagicMock(),
+        evidence_route_client_factory=_route_factory(MagicMock()),
     )
 
     assert out["total_matched"] == 0
@@ -1122,7 +1202,7 @@ def test_find_top_candidates_does_not_claim_complete_total_for_partial_nonzero(
         organization_id=1,
         query="Treasury experience",
         base_query=MagicMock(),
-        evidence_client=MagicMock(),
+        evidence_route_client_factory=_route_factory(MagicMock()),
     )
 
     assert out["shown"] == 1
@@ -1175,7 +1255,7 @@ def test_find_top_candidates_hides_not_met(monkeypatch):
 
     out = tc.find_top_candidates(
         db=db, organization_id=1, query="top under 30k", base_query=MagicMock(),
-        limit=2, evidence_client=_FakeClient(),
+        limit=2, evidence_route_client_factory=_route_factory(_FakeClient()),
     )
     ids = [c["application_id"] for c in out["candidates"]]
     assert 2 not in ids  # B (over cap) is hidden
@@ -1225,7 +1305,8 @@ def test_find_top_candidates_does_not_fill_required_matches_with_missing(monkeyp
 
     out = tc.find_top_candidates(
         db=db, organization_id=1, query="best who led a large team",
-        base_query=MagicMock(), limit=2, evidence_client=_FakeClient(),
+        base_query=MagicMock(), limit=2,
+        evidence_route_client_factory=_route_factory(_FakeClient()),
     )
     ids = [c["application_id"] for c in out["candidates"]]
     assert ids == [1]
@@ -1314,7 +1395,7 @@ def test_find_top_candidates_excludes_candidates_without_grounded_treasury(
         query="top candidates with Treasury banking experience",
         base_query=MagicMock(),
         limit=10,
-        evidence_client=MagicMock(),
+        evidence_route_client_factory=_route_factory(MagicMock()),
     )
 
     assert [candidate["application_id"] for candidate in out["candidates"]] == [2]
@@ -1404,7 +1485,7 @@ def test_find_top_candidates_grounds_query_relevant_window_before_score(monkeypa
         organization_id=1,
         query="Treasury experience",
         base_query=MagicMock(),
-        evidence_client=MagicMock(),
+        evidence_route_client_factory=_route_factory(MagicMock()),
     )
 
     assert loaded_ids == [2, 1]
@@ -1414,11 +1495,10 @@ def test_find_top_candidates_grounds_query_relevant_window_before_score(monkeypa
     assert out["qualified_total"] is None
 
 
-def test_find_top_candidates_fails_closed_when_required_grounding_unavailable(
+def test_find_top_candidates_fails_closed_when_default_route_factory_fails(
     monkeypatch,
 ):
     from app.candidate_search import runner as runner_mod
-    from app.services import claude_client_resolver
 
     monkeypatch.setattr(
         runner_mod,
@@ -1430,27 +1510,30 @@ def test_find_top_candidates_fails_closed_when_required_grounding_unavailable(
         ),
     )
     monkeypatch.setattr(tc, "_pool_count", lambda _base: 1)
-    monkeypatch.setattr(claude_client_resolver, "get_metered_client", lambda **_kw: None)
-    monkeypatch.setattr(
-        tc,
-        "_load_candidates",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("an unverified required search must not load score-only rows")
-        ),
-    )
+    app = _fake_app(1, taali=91, name="Unverified candidate")
+    app.cv_text = "Treasury experience"
+    monkeypatch.setattr(tc, "_load_candidates", lambda *_args, **_kwargs: [app])
+    monkeypatch.setattr(tc, "_notes_text", lambda _app: None)
+
+    def _unavailable(_execution):
+        raise RuntimeError("transport unavailable")
+
+    monkeypatch.setattr(ge, "routed_messages_client", _unavailable)
 
     out = tc.find_top_candidates(
         db=MagicMock(),
         organization_id=1,
         query="Treasury experience",
         base_query=MagicMock(),
-        evidence_client=None,
     )
 
     assert out["candidates"] == []
     assert out["shown"] == 0
-    assert out["search_status"] == "verification_unavailable"
+    assert out["search_status"] == "no_verified_matches"
+    assert out["deep_checked"] == 1
+    assert out["evidence_succeeded"] == 0
     assert out["excluded"]["unverified_total"] == 1
+    assert any(w["code"] == "evidence_incomplete" for w in out["warnings"])
 
 
 def test_find_top_candidates_does_not_present_parser_fallback_as_verified_search(
@@ -1535,6 +1618,7 @@ def test_run_search_defer_qualitative_keeps_prefilter_structural(monkeypatch):
 
     monkeypatch.setattr(runner_mod.cache_module, "get", lambda *a, **k: None)
     monkeypatch.setattr(runner_mod.cache_module, "set", lambda *a, **k: None)
+    monkeypatch.setattr(runner_mod, "parse_common_query", lambda _query: None)
     monkeypatch.setattr(
         runner_mod,
         "parse_nl_query",
@@ -1649,7 +1733,8 @@ def test_find_top_candidates_keeps_failed_explicit_preference(monkeypatch):
         messages = _M()
 
     out = tc.find_top_candidates(db=db, organization_id=1, query="ideally a Western company",
-                                 base_query=MagicMock(), limit=5, evidence_client=_FakeClient())
+                                 base_query=MagicMock(), limit=5,
+                                 evidence_route_client_factory=_route_factory(_FakeClient()))
     ids = [c["application_id"] for c in out["candidates"]]
     assert ids == [1, 2]  # B (not_met Western) shown, ranked below A (met)
     assert out["excluded"]["not_met_total"] == 0
@@ -1683,7 +1768,8 @@ def test_structural_match_is_a_strict_population_filter(monkeypatch):
 
     out = tc.find_top_candidates(
         db=MagicMock(), organization_id=1, query="top react engineers in fintech",
-        base_query=MagicMock(), limit=3, evidence_client=_FakeClient())
+        base_query=MagicMock(), limit=3,
+        evidence_route_client_factory=_route_factory(_FakeClient()))
     ids = {c["application_id"] for c in out["candidates"]}
     assert ids == {3}
     assert out["total_matched"] == 1
@@ -1835,7 +1921,8 @@ def test_find_top_candidates_decides_self_score_criterion(monkeypatch):
         messages = _M()
 
     out = tc.find_top_candidates(db=MagicMock(), organization_id=1, query="top with Taali 60+",
-                                base_query=MagicMock(), limit=5, evidence_client=_FakeClient())
+                                base_query=MagicMock(), limit=5,
+                                evidence_route_client_factory=_route_factory(_FakeClient()))
     by_id = {c["application_id"]: c for c in out["candidates"]}
     assert set(by_id) == {1}
     assert by_id[1]["criteria"][0]["status"] == "met"

@@ -18,6 +18,18 @@ from typing import Any, Optional
 from sqlalchemy.orm import Session
 
 from ..agent_chat.events import try_post_agent_run_event
+from ..components.ai_routing import (
+    RoutingAttribution,
+    TaskKey,
+    estimate_anthropic_messages,
+    finish_route_with_transaction,
+    guarded_routed_workflow,
+    plan_route,
+    prepare_route,
+    routed_messages_client,
+    routing_scope,
+    validated_role_model_override,
+)
 from ..candidate_search.tool_failure_contract import (
     CANDIDATE_SEARCH_UNAVAILABLE_CODE,
     candidate_search_result_failed,
@@ -30,14 +42,10 @@ from ..models.agent_run import AgentRun
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.organization import Organization
 from ..models.role import Role
-from ..platform.config import settings
 from ..llm import CallUsage, MeteringContext, one_call
-from ..services.claude_client_resolver import get_client_for_org
-from ..services.pricing_service import Feature, raw_cost_usd_micro
+from ..services.pricing_service import Feature
 from ..services.provider_usage_admission import (
     AutomaticProviderAuthorityError,
-    release_provider_usage,
-    reserve_provider_usage,
 )
 from ..services.usage_credit_reservations import InsufficientRoleBudgetError
 from ..services.usage_metering_service import InsufficientCreditsError
@@ -49,7 +57,6 @@ from .tool_registry import (
     is_run_complete,
     tools_for_role,
 )
-
 
 logger = logging.getLogger("taali.agent_runtime")
 
@@ -142,7 +149,8 @@ def _emit_cycle_abort_event(
     except Exception:  # pragma: no cover — defensive
         logger.exception(
             "agent_cycle_aborted event emit failed run_id=%s app_id=%s",
-            getattr(run, "id", None), application_id,
+            getattr(run, "id", None),
+            application_id,
         )
 
 
@@ -292,6 +300,7 @@ def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str
     )
 
 
+@guarded_routed_workflow
 def run_cycle(
     db: Session,
     *,
@@ -308,6 +317,9 @@ def run_cycle(
     session — we ``flush`` at boundaries so ids populate, but never
     ``commit`` ourselves.
     """
+    default_model = plan_route(
+        TaskKey.AUTONOMOUS_RECRUITING_ORCHESTRATION
+    ).selected_model_id
     # C1: prevent overlapping cycles for the same role across ALL trigger
     # paths (cron tick, event-driven, manual). Two layers working together:
     #   1. A Postgres TRANSACTION-scoped advisory lock serialises the
@@ -327,12 +339,15 @@ def run_cycle(
     lock_acquired = True
     if is_postgres:
         from sqlalchemy import text as _sql_text
+
         # Lock key derived from a stable hash of ('agent_run', role_id)
         # so concurrent cycles for the same role compete for the same
         # lock without conflicting with other unrelated lock keys.
         lock_acquired = bool(
             db.execute(
-                _sql_text("SELECT pg_try_advisory_xact_lock(hashtext('agent_run'), :role_id)"),
+                _sql_text(
+                    "SELECT pg_try_advisory_xact_lock(hashtext('agent_run'), :role_id)"
+                ),
                 {"role_id": int(role.id)},
             ).scalar()
         )
@@ -344,16 +359,20 @@ def run_cycle(
             .filter(
                 AgentRun.role_id == role.id,
                 AgentRun.status == "running",
-                AgentRun.started_at > datetime.now(timezone.utc) - timedelta(minutes=15),
+                AgentRun.started_at
+                > datetime.now(timezone.utc) - timedelta(minutes=15),
             )
             .first()
         )
 
     if not lock_acquired or in_flight is not None:
         import logging
+
         logging.getLogger("taali.agent_runtime.orchestrator").info(
             "cycle_skipped_overlap role_id=%s trigger=%s lock_acquired=%s in_flight=%s",
-            role.id, trigger, lock_acquired,
+            role.id,
+            trigger,
+            lock_acquired,
             int(in_flight[0]) if in_flight is not None else None,
         )
         run = AgentRun(
@@ -363,14 +382,16 @@ def run_cycle(
             trigger_event_id=trigger_event_id,
             status="aborted",
             error="skipped_overlap",
-            model_version=settings.resolved_claude_model,
+            model_version=default_model,
             prompt_version=PROMPT_VERSION,
             finished_at=datetime.now(timezone.utc),
         )
         db.add(run)
         db.flush()
         _emit_cycle_abort_event(
-            db, run=run, application_id=application_id,
+            db,
+            run=run,
+            application_id=application_id,
             reason="Agent cycle skipped — another cycle was already running for this role.",
         )
         try_post_agent_run_event(db, role=role, run=run)
@@ -397,7 +418,7 @@ def run_cycle(
             trigger_event_id=trigger_event_id,
             status="aborted",
             error="workspace_paused_before_cycle",
-            model_version=settings.resolved_agent_autonomous_model,
+            model_version=default_model,
             prompt_version=PROMPT_VERSION,
             finished_at=datetime.now(timezone.utc),
         )
@@ -415,12 +436,53 @@ def run_cycle(
     # Per-role override (Sonnet for borderline-judgment roles, etc.) wins; else
     # the autonomous-loop model (cheaper than the interactive agent by default —
     # this loop is ~92% no-op/fail and the clear decisions are deterministic).
-    role_model = (role.agent_model or "").strip() if isinstance(role.agent_model, str) else ""
-    model = role_model or settings.resolved_agent_autonomous_model
+    role_model = (
+        (role.agent_model or "").strip() if isinstance(role.agent_model, str) else ""
+    )
+    try:
+        role_model = (
+            validated_role_model_override(
+                TaskKey.AUTONOMOUS_RECRUITING_ORCHESTRATION,
+                role_model or None,
+            )
+            or ""
+        )
+        model = plan_route(
+            TaskKey.AUTONOMOUS_RECRUITING_ORCHESTRATION,
+            explicit_model_override=role_model or None,
+        ).selected_model_id
+    except Exception:
+        logger.exception(
+            "agent model route validation failed role_id=%s",
+            role.id,
+        )
+        run = AgentRun(
+            organization_id=role.organization_id,
+            role_id=role.id,
+            trigger=trigger,
+            trigger_event_id=trigger_event_id,
+            status="failed",
+            error="model_route_invalid",
+            model_version=default_model,
+            prompt_version=PROMPT_VERSION,
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.flush()
+        _emit_cycle_abort_event(
+            db,
+            run=run,
+            application_id=application_id,
+            reason="Agent cycle failed because its configured model route is invalid.",
+        )
+        try_post_agent_run_event(db, role=role, run=run)
+        return run
 
     monthly = budget_guard.check_monthly_usd(db, role=role)
     if not monthly.ok:
-        budget_guard.pause_role(db, role=role, reason=monthly.reason or "monthly cap reached")
+        budget_guard.pause_role(
+            db, role=role, reason=monthly.reason or "monthly cap reached"
+        )
         run = AgentRun(
             organization_id=role.organization_id,
             role_id=role.id,
@@ -435,7 +497,9 @@ def run_cycle(
         db.add(run)
         db.flush()
         _emit_cycle_abort_event(
-            db, run=run, application_id=application_id,
+            db,
+            run=run,
+            application_id=application_id,
             reason=(
                 "Agent paused — monthly budget cap reached for this role. "
                 "Raise the monthly cap above current spend to resume."
@@ -464,7 +528,9 @@ def run_cycle(
         db.add(run)
         db.flush()
         _emit_cycle_abort_event(
-            db, run=run, application_id=application_id,
+            db,
+            run=run,
+            application_id=application_id,
             reason=(
                 "Agent held — this role has no job description. Add a job spec "
                 "(or sync it from Workable) and the agent resumes automatically."
@@ -477,40 +543,6 @@ def run_cycle(
     # clear) the count of candidates the agent can't act on for lack of a CV.
     data_readiness.resolve_open(db, role=role, kind="missing_job_spec")
     data_readiness.sync_cv_readiness(db, role=role)
-
-    # Resolve provider access only after the free budget/readiness gates. A
-    # configuration failure must still become durable role state (and a safe
-    # chat event), but the underlying exception may contain credentials or
-    # provider internals and therefore belongs only in server logs.
-    try:
-        client = get_client_for_org(org)
-    except Exception:
-        logger.exception(
-            "agent model client resolution failed role_id=%s org_id=%s",
-            role.id,
-            role.organization_id,
-        )
-        run = AgentRun(
-            organization_id=role.organization_id,
-            role_id=role.id,
-            trigger=trigger,
-            trigger_event_id=trigger_event_id,
-            status="failed",
-            error="model_client_unavailable",
-            model_version=model,
-            prompt_version=PROMPT_VERSION,
-            finished_at=datetime.now(timezone.utc),
-        )
-        db.add(run)
-        db.flush()
-        _emit_cycle_abort_event(
-            db,
-            run=run,
-            application_id=application_id,
-            reason="Agent cycle failed before model access was available.",
-        )
-        try_post_agent_run_event(db, role=role, run=run)
-        return run
 
     snapshot = calibration.load(role)
     run = AgentRun(
@@ -587,7 +619,9 @@ def run_cycle(
     messages: list[dict[str, Any]] = [
         {
             "role": "user",
-            "content": _initial_user_message(trigger=trigger, application_id=application_id),
+            "content": _initial_user_message(
+                trigger=trigger, application_id=application_id
+            ),
         }
     ]
 
@@ -616,6 +650,8 @@ def run_cycle(
     )
 
     role_tools = tools_for_role(role)
+    route_execution = None
+    routed_client = None
 
     for round_idx in range(MAX_TOOL_ROUNDS):
         rounds_used = round_idx + 1
@@ -630,7 +666,9 @@ def run_cycle(
         # that another worker reached after this cycle's initial preflight.
         monthly = budget_guard.check_monthly_usd(db, role=role)
         if not monthly.ok:
-            budget_guard.pause_role(db, role=role, reason=monthly.reason or "monthly cap reached")
+            budget_guard.pause_role(
+                db, role=role, reason=monthly.reason or "monthly cap reached"
+            )
             run.status = "budget_paused"
             run.error = monthly.reason or "monthly cap reached"
             break
@@ -641,62 +679,33 @@ def run_cycle(
             run.error = f"per-cycle token budget reached ({int(token_budget)})"
             break
 
-        reservation = None
-        try:
-            reservation = reserve_provider_usage(
-                organization_id=int(role.organization_id),
-                role_id=int(role.id),
-                feature=Feature.AGENT_AUTONOMOUS,
-                trace_id=f"agent-run:{int(run.id)}:round:{int(round_idx)}",
-                entity_id=str(role.id),
-                sub_feature="agent_autonomous_round",
-                metadata={
-                    "agent_run_id": int(run.id),
-                    "round": int(round_idx),
-                },
-                require_role_authority=True,
-            )
-        except AutomaticProviderAuthorityError as exc:
-            # Pause/disable that linearized before admission is an intentional
-            # authority stop, not a provider failure. No SDK attempt or paid
-            # hold has started.
-            run.status = "aborted"
-            run.error = f"provider_authority_revoked:{exc}"
-            break
-        except InsufficientCreditsError as exc:
-            credit_reason = (
-                "usage credits exhausted: "
-                f"need {exc.required}, have {exc.available}; top up to resume"
-            )
-            # This is an organization-level spend stop, not a transient LLM
-            # failure. Persist the same durable hold used by scoring so future
-            # cohort/event tasks cannot repeatedly enter the paid phase while
-            # the ledger is empty.
-            budget_guard.pause_role(db, role=role, reason=credit_reason)
-            run.status = "budget_paused"
-            run.error = credit_reason
-            break
-        except InsufficientRoleBudgetError as exc:
-            role_reason = (
-                "monthly USD cap admission blocked agent round: "
-                f"need {exc.required}, have {exc.available} remaining"
-            )
-            budget_guard.pause_role(db, role=role, reason=role_reason)
-            run.status = "budget_paused"
-            run.error = role_reason
-            break
-        except Exception as exc:
-            # A ledger/hold failure is not permission to bypass billing. Leave
-            # the role enabled for the scheduled recovery path, but fail this
-            # cycle before the provider call.
-            logger.exception(
-                "agent_runtime: usage reservation failed role=%s round=%s",
-                role.id,
-                round_idx,
-            )
-            run.status = "failed"
-            run.error = f"usage reservation failed: {exc}"
-            break
+        if route_execution is None:
+            try:
+                route_execution = prepare_route(
+                    TaskKey.AUTONOMOUS_RECRUITING_ORCHESTRATION,
+                    request_estimate=estimate_anthropic_messages(
+                        system=system,
+                        messages=messages,
+                        tools=role_tools,
+                        max_tokens=MAX_TOKENS_PER_ROUND,
+                    ),
+                    attribution=RoutingAttribution(
+                        organization_id=int(role.organization_id),
+                        role_id=int(role.id),
+                        agent_run_id=int(run.id),
+                        entity_id=str(role.id),
+                    ),
+                    operation="autonomous_cycle",
+                    explicit_model_override=role_model or None,
+                )
+                routed_client = routed_messages_client(route_execution)
+            except Exception as exc:
+                logger.exception(
+                    "agent_runtime: route preflight failed role=%s", role.id
+                )
+                run.status = "failed"
+                run.error = f"model route unavailable: {type(exc).__name__}"
+                break
 
         # Fresh sink per round for the AgentRun rollup. The metered wrapper
         # independently commits the authoritative UsageEvent + call log.
@@ -711,12 +720,13 @@ def run_cycle(
             # have no UsageEvent) directly back to this AgentRun.
             trace_id=f"agent-run:{int(run.id)}",
             metadata={"agent_run_id": int(run.id), "round": int(round_idx)},
-            credit_reservation=reservation.as_metering_payload(),
+            require_role_authority=True,
         )
+        route_cost_before = route_execution.cumulative_cost_usd_micro
         try:
             response = one_call(
-                client,
-                model=model,
+                routed_client,
+                model=route_execution.selected_model_id,
                 system=system,
                 messages=messages,
                 max_tokens=MAX_TOKENS_PER_ROUND,
@@ -724,38 +734,50 @@ def run_cycle(
                 metering=round_metering,
                 usage_sink=round_usage,
             )
-        except Exception as exc:  # pragma: no cover — defensive
-            # MeteredAnthropicClient releases SDK-error holds centrally; this
-            # idempotent fallback covers injected clients and pre-wrapper
-            # failures.
-            release_provider_usage(
-                reservation,
-                reason=f"agent_round_call_failed:{type(exc).__name__}",
+        except AutomaticProviderAuthorityError as exc:
+            run.status = "aborted"
+            run.error = f"provider_authority_revoked:{exc}"
+            break
+        except InsufficientCreditsError as exc:
+            credit_reason = (
+                "usage credits exhausted: "
+                f"need {exc.required}, have {exc.available}; top up to resume"
             )
+            budget_guard.pause_role(db, role=role, reason=credit_reason)
+            run.status = "budget_paused"
+            run.error = credit_reason
+            break
+        except InsufficientRoleBudgetError as exc:
+            role_reason = (
+                "monthly USD cap admission blocked agent round: "
+                f"need {exc.required}, have {exc.available} remaining"
+            )
+            budget_guard.pause_role(db, role=role, reason=role_reason)
+            run.status = "budget_paused"
+            run.error = role_reason
+            break
+        except Exception as exc:  # pragma: no cover — defensive
             logger.exception("agent_runtime: anthropic call failed role=%s", role.id)
             run.status = "failed"
             run.error = f"anthropic call failed: {exc}"
             break
+        finally:
+            # RouteExecution is the sole pricing authority. Its cumulative
+            # value includes exact deployment/fallback/cache pricing and the
+            # admitted estimate when response usage is unknowable. Fold the
+            # delta even when the provider call raises after incurring cost.
+            run.total_cost_micro_usd += max(
+                route_execution.cumulative_cost_usd_micro - route_cost_before,
+                0,
+            )
 
         run.input_tokens += round_usage.input_tokens
         run.output_tokens += round_usage.output_tokens
         run.cache_read_tokens += round_usage.cache_read_tokens
         run.cache_creation_tokens += round_usage.cache_creation_tokens
 
-        # The metered client already wrote the UsageEvent + ClaudeCallLog in
-        # independent committed sessions. Keep the run's raw-cost rollup using
-        # the same canonical pricing function without creating a second event.
-        run.total_cost_micro_usd += raw_cost_usd_micro(
-            model=model,
-            input_tokens=round_usage.input_tokens,
-            output_tokens=round_usage.output_tokens,
-            cache_read_tokens=round_usage.cache_read_tokens,
-            cache_creation_tokens=round_usage.cache_creation_tokens,
-        )
-
-        # A recruiter may turn the agent off while the provider request is in
-        # flight. The call is already metered, but its response must not queue
-        # decisions or actions against a now-disabled/stale job snapshot.
+        # Re-read control state after the paid call. Its response must not
+        # queue decisions or actions against a now-disabled/stale job snapshot.
         control_abort = _control_state_abort_reason()
         if control_abort is not None:
             run.status = "aborted"
@@ -830,7 +852,11 @@ def run_cycle(
                 db.commit()
 
             try:
-                result = dispatch(name, args, db=db, agent_run=run, role=role)
+                # Nested model work (for example candidate search or policy
+                # evaluation) inherits this cycle as its durable parent while
+                # ordinary tool signatures remain provider-neutral.
+                with routing_scope(route_execution):
+                    result = dispatch(name, args, db=db, agent_run=run, role=role)
                 # decisions_emitted is incremented inside _queue when a
                 # real AgentDecision row is created — moved out of here
                 # so dedup / auto-execute-direct-dispatch paths don't
@@ -958,7 +984,10 @@ def run_cycle(
     # candidate timeline shows "agent tried but didn't finish" instead of
     # silent failure. Limited to the focus application; role-level aborts
     # without a focus surface via the Hub banner reading AgentRun.status.
-    if run.status in ("aborted", "failed", "budget_paused") and application_id is not None:
+    if (
+        run.status in ("aborted", "failed", "budget_paused")
+        and application_id is not None
+    ):
         reason_map = {
             "aborted": (
                 f"Agent cycle aborted after {rounds_used} round(s) — "
@@ -974,7 +1003,9 @@ def run_cycle(
             ),
         }
         _emit_cycle_abort_event(
-            db, run=run, application_id=application_id,
+            db,
+            run=run,
+            application_id=application_id,
             reason=reason_map[run.status],
         )
 
@@ -1009,7 +1040,9 @@ def run_cycle(
             getattr(run, "id", None),
         )
 
-    run.tools_called = [{"name": n, "count": c} for n, c in tools_called_summary.items()]
+    run.tools_called = [
+        {"name": n, "count": c} for n, c in tools_called_summary.items()
+    ]
     # B7 step 1: instrument round count so we can histogram p95
     # post-deploy and tune MAX_TOOL_ROUNDS downward if appropriate.
     run.rounds_executed = int(rounds_used)
@@ -1044,5 +1077,10 @@ def run_cycle(
         cost_usd,
         finished_via_complete_tool,
         run.error,
+    )
+    finish_route_with_transaction(
+        db,
+        route_execution,
+        succeeded=run.status == "succeeded",
     )
     return run

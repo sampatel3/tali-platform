@@ -32,6 +32,12 @@ from sqlalchemy.orm import Session
 from ..candidate_search.tool_failure_contract import (
     CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE,
 )
+from ..components.ai_routing import (
+    RouteExecution,
+    finish_route_with_transaction,
+    routed_messages_client,
+    routing_scope,
+)
 from ..models.organization import Organization
 from ..models.taali_chat_conversation import TaaliChatConversation
 from ..models.taali_chat_message import (
@@ -40,17 +46,12 @@ from ..models.taali_chat_message import (
     TaaliChatMessage,
 )
 from ..models.user import User
-from ..platform.config import settings
-from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event as record_event
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import streaming
-from .stream_round import (
-    CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
-    _RunningUsage,
-    _stream_one_round,
-)
+from .route_setup import prepare_chat_route
+from .stream_round import _RunningUsage, _stream_one_round
 from .system_prompt import build_system_blocks
 from .tool_execution import (
     _arguments_with_role_scope as _arguments_with_role_scope,
@@ -140,7 +141,9 @@ def _ensure_conversation(
     return conversation
 
 
-def _load_history(db: Session, *, conversation: TaaliChatConversation) -> list[dict[str, Any]]:
+def _load_history(
+    db: Session, *, conversation: TaaliChatConversation
+) -> list[dict[str, Any]]:
     """Pull persisted messages in Anthropic message format. Sanitised so a
     tool_use orphaned by an interrupted turn can't 400 the whole conversation."""
     from ..llm.tool_pairs import sanitize_tool_pairs
@@ -151,7 +154,9 @@ def _load_history(db: Session, *, conversation: TaaliChatConversation) -> list[d
         .order_by(TaaliChatMessage.created_at.asc(), TaaliChatMessage.id.asc())
         .all()
     )
-    return sanitize_tool_pairs([{"role": row.role, "content": row.content} for row in rows])
+    return sanitize_tool_pairs(
+        [{"role": row.role, "content": row.content} for row in rows]
+    )
 
 
 def _persist_message(
@@ -189,6 +194,34 @@ def run_chat_turn(
     user: User,
     organization: Organization,
     turn: ChatTurnInput,
+) -> Iterator[streaming.Frame]:
+    """Run one routed chat workflow and close its telemetry on all exits."""
+
+    route_holder: list[RouteExecution] = []
+    try:
+        yield from _run_chat_turn(
+            db=db,
+            user=user,
+            organization=organization,
+            turn=turn,
+            route_holder=route_holder,
+        )
+    except BaseException:
+        finish_route_with_transaction(
+            db,
+            route_holder[0] if route_holder else None,
+            succeeded=False,
+        )
+        raise
+
+
+def _run_chat_turn(
+    *,
+    db: Session,
+    user: User,
+    organization: Organization,
+    turn: ChatTurnInput,
+    route_holder: list[RouteExecution],
 ) -> Iterator[streaming.Frame]:
     """Run one chat turn end-to-end. Generator yields AI-SDK protocol frames.
 
@@ -242,20 +275,19 @@ def run_chat_turn(
 
     # User message: one text content block.
     user_content = [{"type": "text", "text": text}]
-    _persist_message(db, conversation=conversation, role=ROLE_USER, content=user_content)
+    _persist_message(
+        db, conversation=conversation, role=ROLE_USER, content=user_content
+    )
     history = _load_history(db, conversation=conversation)
 
-    client = get_client_for_org(
-        organization,
-        timeout=CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
-        max_retries=0,
-    )
-    model = settings.resolved_claude_model
+    client = None
     running_usage = _RunningUsage()
     final_stop_reason: str | None = None
     previous_tool_signature: str | None = None
     identical_tool_rounds = 0
     consecutive_error_rounds = 0
+    route: RouteExecution | None = None
+    workflow_succeeded = False
 
     # Anthropic-side message log: starts as the persisted history (which
     # already includes the just-added user message).
@@ -294,9 +326,20 @@ def run_chat_turn(
             message_id=f"msg-{conversation_db_id}-{uuid.uuid4().hex[:8]}"
         )
         try:
+            if route is None:
+                route = prepare_chat_route(
+                    system_blocks=system_blocks,
+                    messages=messages,
+                    organization_id=organization_id,
+                    user_id=user_id,
+                    role_id=conversation_role_id,
+                    conversation_id=conversation_db_id,
+                )
+                route_holder.append(route)
+                client = routed_messages_client(route)
             assistant_blocks, stop_reason, round_usage = yield from _stream_one_round(
                 client=client,
-                model=model,
+                model=route.selected_model_id,
                 messages=messages,
                 system=system_blocks,
                 metering={
@@ -310,7 +353,9 @@ def run_chat_turn(
             )
         except Exception as exc:
             logger.exception("Anthropic stream failed: %s", exc)
-            yield streaming.error("Sorry — I hit a problem answering that. Please try again.")
+            yield streaming.error(
+                "Sorry — I hit a problem answering that. Please try again."
+            )
             final_stop_reason = "stop"
             break
 
@@ -328,7 +373,7 @@ def run_chat_turn(
                 conversation=conversation,
                 role=ROLE_ASSISTANT,
                 content=assistant_blocks,
-                model=model,
+                model=route.selected_model_id,
                 stop_reason=stop_reason,
                 token_usage={
                     "input": round_usage.input_tokens,
@@ -337,6 +382,7 @@ def run_chat_turn(
                     "cache_creation": round_usage.cache_creation_tokens,
                 },
             )
+            workflow_succeeded = True
             break
 
         tool_blocks = [
@@ -358,17 +404,20 @@ def run_chat_turn(
             identical_tool_rounds = 0
         previous_tool_signature = signature
         if identical_tool_rounds >= MAX_IDENTICAL_TOOL_ROUNDS:
-            yield streaming.error("Stopped a repeated tool loop before it could waste more credits.")
+            yield streaming.error(
+                "Stopped a repeated tool loop before it could waste more credits."
+            )
             final_stop_reason = "stop"
             break
 
-        round_result = execute_tool_round(
-            db=db,
-            user=user,
-            conversation=conversation,
-            assistant_blocks=assistant_blocks,
-            messages=messages,
-        )
+        with routing_scope(route):
+            round_result = execute_tool_round(
+                db=db,
+                user=user,
+                conversation=conversation,
+                assistant_blocks=assistant_blocks,
+                messages=messages,
+            )
         tool_results = round_result.live_results
         stored_tool_results = round_result.stored_results
         for result in tool_results:
@@ -385,7 +434,7 @@ def run_chat_turn(
             conversation=conversation,
             role=ROLE_ASSISTANT,
             content=assistant_blocks,
-            model=model,
+            model=route.selected_model_id,
             stop_reason=stop_reason,
             token_usage={
                 "input": round_usage.input_tokens,
@@ -411,7 +460,7 @@ def run_chat_turn(
                 conversation=conversation,
                 role=ROLE_ASSISTANT,
                 content=safe_content,
-                model=model,
+                model=route.selected_model_id,
                 stop_reason="stop",
             )
             final_stop_reason = "stop"
@@ -421,7 +470,9 @@ def run_chat_turn(
         else:
             consecutive_error_rounds = 0
         if consecutive_error_rounds >= MAX_CONSECUTIVE_ERROR_ROUNDS:
-            yield streaming.error("Stopped after repeated tool errors. Try a narrower request.")
+            yield streaming.error(
+                "Stopped after repeated tool errors. Try a narrower request."
+            )
             final_stop_reason = "stop"
             break
     else:
@@ -435,6 +486,7 @@ def run_chat_turn(
     # Bump conversation.updated_at + meter the call.
     conversation.updated_at = datetime.now(timezone.utc)
     db.flush()
+    finish_route_with_transaction(db, route, succeeded=workflow_succeeded)
 
     aisdk_usage = {
         "promptTokens": running_usage.input_tokens,

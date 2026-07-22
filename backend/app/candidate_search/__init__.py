@@ -5,17 +5,14 @@ Public surface:
     from app.candidate_search import run_search, ParsedFilter, SearchOutput
 
 A query like "AWS Glue experience, worked in Europe, 5+ years" is parsed
-by Haiku into a typed ``ParsedFilter``, translated to SQL (skills,
+into a typed ``ParsedFilter``, translated to SQL (skills,
 country, years) and Cypher (graph predicates), executed, then optionally
-reranked by Claude for soft criteria using graph-neighbourhood context.
+reranked for soft criteria using graph-neighbourhood context.
 
 Bumping ``PROMPT_VERSION`` invalidates parser cache entries cleanly.
 """
 
-from ..llm.models import FAST_MODEL
-
 PROMPT_VERSION = "candidate_search_v3_required_preferences"
-MODEL_VERSION = FAST_MODEL
 
 
 def __getattr__(name: str):
@@ -39,7 +36,6 @@ def __getattr__(name: str):
 __all__ = [
     "CandidateDeepVerification",
     "GraphPredicate",
-    "MODEL_VERSION",
     "ParsedFilter",
     "PROMPT_VERSION",
     "SearchOutput",

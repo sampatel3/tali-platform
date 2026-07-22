@@ -1,19 +1,24 @@
 """NL query → ``ParsedFilter``.
 
-One Claude call per uncached query (``PARSER_MODEL``, Sonnet by default — the
-extraction makes subtle judgement calls a smaller model gets wrong). On any
-failure we degrade to a keyword-only filter so the user still gets best-effort
-ILIKE matches.
+One routed model call per uncached ambiguous query. On any failure we degrade
+to a keyword-only filter so the user still gets best-effort ILIKE matches.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 
+from ..components.ai_routing import (
+    RoutingAttribution,
+    TaskKey,
+    estimate_anthropic_messages,
+    prepare_route,
+    routed_messages_client,
+)
 from ..llm import MeteringContext, generate_structured
+from ..llm.structured import structured_tool_params
 from ..services.pricing_service import Feature
-from .metering import admitted_search_metering
+from .metering import search_metering
 from .prompts import (
     build_parser_prompt,
     expand_region,
@@ -25,12 +30,6 @@ logger = logging.getLogger("taali.candidate_search.parser")
 
 PARSER_MAX_TOKENS = 512
 PARSER_TEMPERATURE = 0.0
-# Parse on a stronger model than the codebase FAST_MODEL (Haiku): the
-# NL→filter extraction makes subtle judgement calls (is "a Western company" the
-# candidate's location or the employer's origin? is "salary <= 30k" one
-# constraint?) that Haiku gets wrong and Sonnet gets right. It's ONE call per
-# query (~$0.004), negligible beside the grounding fan-out. Env-overridable.
-PARSER_MODEL = os.getenv("CLAUDE_SEARCH_PARSER_MODEL") or "claude-sonnet-4-6"
 
 
 class ProviderCallsForbiddenError(ValueError):
@@ -40,7 +39,7 @@ class ProviderCallsForbiddenError(ValueError):
 def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
     """Server-side cleanup applied AFTER schema validation.
 
-    Defensive: even if Haiku misses an alias, we still normalise here.
+    Defensive: even if the selected model misses an alias, normalise it here.
     """
     countries = []
     seen = set()
@@ -62,11 +61,7 @@ def _normalise(filter_obj: ParsedFilter, query: str) -> ParsedFilter:
     titles_all = [s.strip() for s in filter_obj.titles_all if s and s.strip()]
     titles_any = [s.strip() for s in filter_obj.titles_any if s and s.strip()]
     soft = [s.strip() for s in filter_obj.soft_criteria if s and s.strip()]
-    preferred = [
-        s.strip()
-        for s in filter_obj.preferred_criteria
-        if s and s.strip()
-    ]
+    preferred = [s.strip() for s in filter_obj.preferred_criteria if s and s.strip()]
     keywords = [s.strip() for s in filter_obj.keywords if s and s.strip()]
 
     normalized = filter_obj.model_copy(
@@ -103,16 +98,17 @@ def _fallback_filter(query: str) -> ParsedFilter:
     )
 
 
-def _resolve_anthropic_client(*, organization_id: int | None = None):
-    from ..services.claude_client_resolver import get_metered_client
-
-    return get_metered_client(organization_id=organization_id)
+def _metering_int(metering: dict, key: str) -> int | None:
+    try:
+        return int(metering[key])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def parse_nl_query(
     query: str,
     *,
-    client=None,
+    route_client_factory=None,
     organization_id: int | None = None,
     role_id: int | None = None,
     metering: dict | None = None,
@@ -152,25 +148,10 @@ def parse_nl_query(
     base_metering = dict(metering or {})
     meter_org_id = organization_id
     if meter_org_id is None:
-        try:
-            meter_org_id = int(base_metering["organization_id"])
-        except (KeyError, TypeError, ValueError):
-            meter_org_id = None
+        meter_org_id = _metering_int(base_metering, "organization_id")
     meter_role_id = role_id
-    if meter_role_id is None and base_metering.get("role_id") is not None:
-        try:
-            meter_role_id = int(base_metering["role_id"])
-        except (TypeError, ValueError):
-            meter_role_id = None
-
-    if client is None:
-        try:
-            client = _resolve_anthropic_client(
-                organization_id=meter_org_id,
-            )
-        except Exception as exc:
-            logger.warning("Parser client init failed: %s", exc)
-            return _fallback_filter(cleaned_query)
+    if meter_role_id is None:
+        meter_role_id = _metering_int(base_metering, "role_id")
 
     # A candidate-search parse without org attribution cannot be safely billed.
     # Degrade to deterministic keyword search instead of making an unadmitted
@@ -179,35 +160,13 @@ def parse_nl_query(
         logger.warning("Parser skipped paid call: organization_id is required")
         return _fallback_filter(cleaned_query)
 
-    try:
-        call_metering = admitted_search_metering(
-            organization_id=int(meter_org_id),
-            role_id=meter_role_id,
-            feature=Feature.SEARCH_PARSE,
-            entity_id=(
-                str(base_metering["entity_id"])
-                if base_metering.get("entity_id") is not None
-                else None
-            ),
-            sub_feature="candidate_search_parse",
-            trace_id=(
-                str(base_metering["trace_id"])
-                if base_metering.get("trace_id")
-                else None
-            ),
-            base_metering=base_metering,
-            require_role_authority=bool(require_role_authority),
-        )
-    except Exception as exc:
-        logger.warning("Parser blocked by usage admission: %s", exc)
-        return _fallback_filter(cleaned_query)
-
-    # System prompt is identical across every parser call (only the user
-    # query changes). We mark it cacheable so successive queries from any
-    # org can hit the cache. The prompt currently sits ~800 tokens, below
-    # Haiku 4.5's 4096-token minimum cacheable prefix — Anthropic silently
-    # skips caching when the prefix is too short, so this is free today
-    # and activates automatically if the prompt grows past the threshold.
+    entity_id = (
+        str(base_metering["entity_id"])
+        if base_metering.get("entity_id") is not None
+        else None
+    )
+    # The same cacheable request shape is estimated before planning and sent
+    # after planning. Prompt content itself is never persisted by the router.
     system_blocks = [
         {
             "type": "text",
@@ -215,27 +174,84 @@ def parse_nl_query(
             "cache_control": {"type": "ephemeral"},
         }
     ]
+    structured_tools, structured_tool_choice, _ = structured_tool_params(ParsedFilter)
+    request_estimate = estimate_anthropic_messages(
+        system=system_blocks,
+        messages=[{"role": "user", "content": user_prompt}],
+        tools=structured_tools,
+        tool_choice=structured_tool_choice,
+        max_tokens=PARSER_MAX_TOKENS,
+    )
+    try:
+        execution = prepare_route(
+            TaskKey.SEARCH_PARSE,
+            request_estimate=request_estimate,
+            attribution=RoutingAttribution(
+                organization_id=int(meter_org_id),
+                user_id=_metering_int(base_metering, "user_id"),
+                role_id=meter_role_id,
+                entity_id=entity_id,
+            ),
+            operation="candidate_search.parse",
+            require_role_authority=bool(require_role_authority),
+        )
+    except Exception as exc:
+        logger.warning("Parser routing failed: %s", exc)
+        return _fallback_filter(cleaned_query)
 
     # No retry: the parser fast-fails to a keyword-only filter on any
     # call / parse / schema failure, so the user still gets ILIKE matches.
     # Forced tool-use: the model emits ParsedFilter as the tool's ``.input``
     # dict — one schema source, no JSON repair.
-    result = generate_structured(
-        client,
-        model=PARSER_MODEL,
-        system=system_blocks,
-        messages=[{"role": "user", "content": user_prompt}],
-        output_model=ParsedFilter,
-        metering=MeteringContext.from_dict(
-            call_metering, default_feature=Feature.SEARCH_PARSE
-        ),
-        max_tokens=PARSER_MAX_TOKENS,
-        temperature=PARSER_TEMPERATURE,
-        max_retries=0,
-        use_tool_use=True,
-    )
-    if not result.ok or result.value is None:
-        logger.warning("Parser failed (%s); falling back to keywords", result.error_reason)
-        return _fallback_filter(cleaned_query)
+    workflow_succeeded = False
+    try:
+        try:
+            call_metering = search_metering(
+                organization_id=int(meter_org_id),
+                role_id=meter_role_id,
+                feature=Feature.SEARCH_PARSE,
+                entity_id=entity_id,
+                sub_feature="candidate_search_parse",
+                trace_id=(
+                    str(base_metering["trace_id"])
+                    if base_metering.get("trace_id")
+                    else None
+                ),
+                base_metering=base_metering,
+                require_role_authority=bool(require_role_authority),
+            )
+        except Exception as exc:
+            logger.warning("Parser blocked by usage admission: %s", exc)
+            return _fallback_filter(cleaned_query)
 
-    return _normalise(result.value, cleaned_query)
+        client_factory = route_client_factory or routed_messages_client
+        try:
+            result = generate_structured(
+                client_factory(execution),
+                model=execution.selected_model_id,
+                system=system_blocks,
+                messages=[{"role": "user", "content": user_prompt}],
+                output_model=ParsedFilter,
+                metering=MeteringContext.from_dict(
+                    call_metering, default_feature=Feature.SEARCH_PARSE
+                ),
+                max_tokens=PARSER_MAX_TOKENS,
+                temperature=PARSER_TEMPERATURE,
+                max_retries=0,
+                use_tool_use=True,
+            )
+        except Exception as exc:
+            logger.warning("Parser provider call failed: %s", exc)
+            return _fallback_filter(cleaned_query)
+        if not result.ok or result.value is None:
+            logger.warning(
+                "Parser failed (%s); falling back to keywords",
+                result.error_reason,
+            )
+            return _fallback_filter(cleaned_query)
+
+        parsed = _normalise(result.value, cleaned_query)
+        workflow_succeeded = not parsed.parse_degraded
+        return parsed
+    finally:
+        execution.finish_workflow(succeeded=workflow_succeeded)

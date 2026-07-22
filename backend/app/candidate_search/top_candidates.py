@@ -34,23 +34,22 @@ from __future__ import annotations
 
 import logging
 import re
+from contextvars import copy_context
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
-from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..mcp.payloads import SCORE_FIELDS, application_summary
 from . import grounded_evidence as _ge
 from .constraint_policy import (
     _is_constraint,
-    _is_junk_criterion,
-    _is_self_score_criterion,
-    _merge_constraint_fragments,
-    _parse_score_threshold,
+    _is_junk_criterion as _is_junk_criterion,
+    _is_self_score_criterion as _is_self_score_criterion,
+    _merge_constraint_fragments as _merge_constraint_fragments,
+    _parse_score_threshold as _parse_score_threshold,
     _recompute_currency_cap_verdict,
     _recompute_self_score_verdict,
-    _tokens,
 )
 from .criteria_policy import (
     _collect_criteria,
@@ -74,7 +73,7 @@ from .top_candidate_runtime import (
 logger = logging.getLogger("taali.candidate_search.top_candidates")
 
 # Default shortlist size and the hard cap (each shortlisted candidate may
-# cost one Haiku citation call, so the cap bounds spend).
+# cost one routed citation task, so the cap bounds spend).
 DEFAULT_LIMIT = 10
 MAX_LIMIT = 25
 # Cap the number of qualitative criteria we ground per query. The response
@@ -151,7 +150,7 @@ def _ground(
     notes: str | None,
     *,
     criteria: list[str],
-    client,
+    route_client_factory,
     organization_id: int,
     role_id: int | None,
     application_id: int,
@@ -168,7 +167,7 @@ def _ground(
         cv_text=cv,
         notes_text=notes,
         criteria=criteria,
-        client=client,
+        route_client_factory=route_client_factory,
         organization_id=organization_id,
         role_id=role_id,
         application_id=int(application_id),
@@ -184,12 +183,12 @@ def _ground_window(
     apps: list[CandidateApplication],
     *,
     criteria: list[str],
-    client,
+    route_client_factory,
     organization_id: int,
     role_id: int | None = None,
     require_role_authority: bool = False,
 ) -> list[tuple[CandidateApplication, list[CriterionVerdict]]]:
-    """Ground each app in ``apps`` concurrently (I/O-bound Haiku calls).
+    """Ground each app in ``apps`` concurrently (I/O-bound routed calls).
 
     Evidence is collected in this (main) thread; only the pure ``_ground`` runs
     in workers, so the DB session is never touched off-thread. Order preserved.
@@ -206,7 +205,7 @@ def _ground_window(
             return _ground(
                 cv, notes,
                 criteria=criteria,
-                client=client,
+                route_client_factory=route_client_factory,
                 organization_id=organization_id,
                 role_id=role_id,
                 application_id=int(app.id),
@@ -230,7 +229,10 @@ def _ground_window(
     results: dict[int, list[CriterionVerdict]] = {}
     ex = cf.ThreadPoolExecutor(max_workers=workers)
     try:
-        fut_to_idx = {ex.submit(_one, job): i for i, job in enumerate(jobs)}
+        fut_to_idx = {
+            ex.submit(copy_context().run, _one, job): i
+            for i, job in enumerate(jobs)
+        }
         done, not_done = cf.wait(fut_to_idx, timeout=GROUND_BATCH_DEADLINE_S)
         for fut in done:
             try:
@@ -249,6 +251,21 @@ def _ground_window(
         ex.shutdown(wait=False, cancel_futures=True)
 
     return [(jobs[i][0], results.get(i) or [_timed_out(c) for c in criteria]) for i in range(len(jobs))]
+
+
+def _grounding_models(
+    grounded: list[tuple[CandidateApplication, list[CriterionVerdict]]],
+) -> list[str]:
+    """Return only model IDs actually recorded on evidence attempts/cache rows."""
+
+    return sorted(
+        {
+            verdict.model_id
+            for _, verdicts in grounded
+            for verdict in verdicts
+            if verdict.model_id
+        }
+    )
 
 
 def _criteria_coverage(parsed) -> tuple[list[str], list[str], list[str]]:
@@ -468,8 +485,8 @@ def find_top_candidates(
     base_query,
     limit: int = DEFAULT_LIMIT,
     rank_by: str = "taali",
-    parser_client=None,
-    evidence_client=None,
+    parser_route_client_factory=None,
+    evidence_route_client_factory=None,
     inherited_titles_all: list[str] | None = None,
     inherited_titles_any: list[str] | None = None,
     require_role_authority: bool = False,
@@ -500,7 +517,7 @@ def find_top_candidates(
         base_query=base_query,
         rerank_enabled=False,
         include_subgraph=False,
-        parser_client=parser_client,
+        parser_route_client_factory=parser_route_client_factory,
         defer_qualitative=True,
         inherited_titles_all=inherited_titles_all,
         inherited_titles_any=inherited_titles_any,
@@ -749,97 +766,7 @@ def find_top_candidates(
             "evidence_model": None,
         }
 
-    # 2. Grounding client.
-    client = evidence_client
-    if client is None:
-        try:
-            from ..services.claude_client_resolver import get_metered_client
-
-            client = get_metered_client(organization_id=organization_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("grounding client init failed: %s", exc)
-
-    if client is None:
-        strict_required = [
-            criterion for criterion in checked_required if not _is_constraint(criterion)
-        ]
-        if strict_required:
-            return {
-                **base_payload,
-                "evaluated": 0,
-                "shown": 0,
-                "returned": 0,
-                "deep_checked": 0,
-                "evidence_succeeded": 0,
-                "qualified": None,
-                "qualified_in_checked": 0,
-                "qualified_total": None,
-                "eligible_after_hard_constraints": 0,
-                "search_status": "verification_unavailable",
-                "capped": result.capped or not result.exhaustive or matched_count > 0,
-                "candidates": [],
-                "excluded": {
-                    "required_total": 0,
-                    "not_met_total": 0,
-                    "missing_total": 0,
-                    "partial_total": 0,
-                    "unverified_total": matched_count,
-                    "by_criterion": [],
-                },
-                "evidence_model": None,
-                "warnings": base_payload["warnings"]
-                + [
-                    {
-                        "code": "rerank_skipped",
-                        "message": (
-                            "Required evidence could not be checked; no score-ranked "
-                            "candidates were presented as matches."
-                        ),
-                    }
-                ],
-            }
-
-        # Optional preferences or stated-value constraints retain the legacy
-        # degraded list, clearly labelled as unverified by coverage fields.
-        apps = _load_candidates(
-            candidate_pool,
-            matcher_ids=matcher_ids,
-            score_attr=score_attr,
-            size=limit,
-            row_adapter=row_adapter,
-        )
-        apps.sort(key=_rank_key, reverse=True)
-        shown = [
-            _payload(app, rank=i, verdicts=[], has_criteria=True)
-            for i, app in enumerate(apps[:limit], start=1)
-        ]
-        return {
-            **base_payload,
-            "evaluated": 0,
-            "shown": len(shown),
-            "returned": len(shown),
-            "deep_checked": 0,
-            "qualified": None,
-            "qualified_in_checked": 0,
-            "qualified_total": None,
-            "eligible_after_hard_constraints": matched_count,
-            "search_status": "verification_unavailable",
-            "capped": result.capped or not result.exhaustive or matched_count > len(shown),
-            "candidates": shown,
-            "excluded": {
-                "required_total": 0,
-                "not_met_total": 0,
-                "missing_total": 0,
-                "partial_total": 0,
-                "unverified_total": matched_count if checked_required else 0,
-                "by_criterion": [],
-            },
-            "evidence_model": None,
-            "warnings": base_payload["warnings"]
-            + [{"code": "rerank_skipped", "message": "Grounding unavailable; not filtered."}],
-        }
-
-    # 3. Ground a bounded WINDOW (structural matches first). Required qualitative
+    # 2. Ground a bounded WINDOW (structural matches first). Required qualitative
     #    evidence gates the shortlist; stated-value constraints exclude a cited
     #    failure; explicit preferences rank the survivors. Ground the whole pool
     #    up to the cap — NOT just `limit*3` — so a relevant mid-scored candidate
@@ -868,7 +795,7 @@ def find_top_candidates(
     grounded = _ground_window(
         apps[:window_size],
         criteria=criteria,
-        client=client,
+        route_client_factory=evidence_route_client_factory,
         organization_id=organization_id,
         role_id=role_id,
         require_role_authority=bool(require_role_authority),
@@ -947,6 +874,7 @@ def find_top_candidates(
         else None
     )
     response_warnings = list(base_payload["warnings"])
+    evidence_models = _grounding_models(grounded)
     if evidence_succeeded < len(grounded):
         response_warnings.append(
             {
@@ -979,7 +907,8 @@ def find_top_candidates(
         "capped": population_capped,
         "candidates": shown,
         "excluded": excluded,
-        "evidence_model": _ge.GROUNDING_MODEL,
+        "evidence_model": evidence_models[0] if len(evidence_models) == 1 else None,
+        "evidence_models": evidence_models,
         "warnings": response_warnings,
     }
 
@@ -996,11 +925,11 @@ def find_top_candidates(
 # window, ranked by fit to the NEW requirement (grounded met/partial — NOT the
 # stale score). A bounded window is deep-checked via the cached Citations pass;
 # we report how many were screened vs the pool (``capped``) and hand back
-# ``rescore_candidate_ids`` for the opt-in Sonnet re-score that produces a true
+# ``rescore_candidate_ids`` for the opt-in model re-score that produces a true
 # comparable score against the requirement.
 # ---------------------------------------------------------------------------
 
-# How many of the scored history get the grounded (Haiku, cache-backed) deep
+# How many of the scored history get the grounded, cache-backed deep
 # check in one pass. Wider than the top-N window — rediscovery wants breadth —
 # but bounded for cost + the GROUND_BATCH_DEADLINE_S wall-clock. The structural
 # recall biases WHICH candidates land in the window, so a strong fit for the new
@@ -1018,8 +947,8 @@ def screen_pool_against_requirement(
     requirement: str,
     base_query,
     limit: int = DEFAULT_SCREEN_LIMIT,
-    parser_client=None,
-    evidence_client=None,
+    parser_route_client_factory=None,
+    evidence_route_client_factory=None,
     deep_verify: bool = False,
     offset: int = 0,
     require_role_authority: bool = False,
@@ -1065,7 +994,7 @@ def screen_pool_against_requirement(
         base_query=base_query,
         rerank_enabled=False,
         include_subgraph=False,
-        parser_client=parser_client,
+        parser_route_client_factory=parser_route_client_factory,
         defer_qualitative=deep_verify,
         require_role_authority=bool(require_role_authority),
     )
@@ -1228,41 +1157,7 @@ def screen_pool_against_requirement(
             },
         )
 
-    # 2. Grounding client.
-    client = evidence_client
-    if client is None:
-        try:
-            from ..services.claude_client_resolver import get_metered_client
-
-            client = get_metered_client(organization_id=organization_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("rediscovery grounding client init failed: %s", exc)
-
-    if client is None:
-        if any(not _is_constraint(criterion) for criterion in checked_required):
-            return _degrade(
-                [],
-                warning={
-                    "code": "rerank_skipped",
-                    "message": (
-                        "Required evidence could not be checked; no database-ranked "
-                        "candidates were presented as verified matches."
-                    ),
-                },
-            )
-        apps = _load_candidates_by_ids(
-            matched_pool, result_ids[:limit], **load_kwargs
-        )
-        return _degrade(
-            apps,
-            warning={
-                "code": "rerank_skipped",
-                "message": "Grounding unavailable; ranked by existing fit, not "
-                "screened against the requirement.",
-            },
-        )
-
-    # 3. Ground a bounded WINDOW of the scored history against the new requirement
+    # 2. Ground a bounded WINDOW of the scored history against the new requirement
     #    via the cached Citations pass. WHICH candidates fall in the window:
     #    structural matches first when the requirement carries a hard filter;
     #    otherwise (a purely-qualitative ask) seed by RECENCY, NOT the stale role
@@ -1275,7 +1170,7 @@ def screen_pool_against_requirement(
     grounded = _ground_window(
         apps[:window_size],
         criteria=criteria,
-        client=client,
+        route_client_factory=evidence_route_client_factory,
         organization_id=organization_id,
         role_id=role_id,
         require_role_authority=bool(require_role_authority),
@@ -1351,6 +1246,7 @@ def screen_pool_against_requirement(
         else None
     )
     response_warnings = list(base_payload["warnings"])
+    evidence_models = _grounding_models(grounded)
     if evidence_succeeded < len(grounded):
         response_warnings.append(
             {
@@ -1362,7 +1258,7 @@ def screen_pool_against_requirement(
             }
         )
 
-    # 5. Assemble. ``rescore_candidate_ids`` = the shortlist worth a true Sonnet
+    # 5. Assemble. ``rescore_candidate_ids`` = the shortlist worth a true model
     #    score against the requirement (the opt-in, bounded re-score step).
     return {
         **base_payload,
@@ -1381,7 +1277,8 @@ def screen_pool_against_requirement(
         "search_status": "matches_found" if shown else "no_verified_matches",
         "candidates": shown,
         "excluded": excluded,
-        "evidence_model": _ge.GROUNDING_MODEL,
+        "evidence_model": evidence_models[0] if len(evidence_models) == 1 else None,
+        "evidence_models": evidence_models,
         "warnings": response_warnings,
         "rescore_candidate_ids": [int(c["application_id"]) for c in shown],
     }

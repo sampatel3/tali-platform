@@ -25,8 +25,15 @@ def test_forbidden_parser_rejects_ambiguous_query_before_client_resolution(
     resolver_calls: list[dict] = []
     monkeypatch.setattr(
         parser,
-        "_resolve_anthropic_client",
-        lambda **kwargs: resolver_calls.append(kwargs),
+        "routed_messages_client",
+        lambda execution: resolver_calls.append({"execution": execution}),
+    )
+    monkeypatch.setattr(
+        parser,
+        "prepare_route",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("provider-forbidden parsing must not prepare a route")
+        ),
     )
 
     with pytest.raises(ProviderCallsForbiddenError, match="model parser"):
@@ -52,9 +59,16 @@ def test_forbidden_runner_is_deterministic_postgres_only_and_bypasses_cache(
         ),
     )
     monkeypatch.setattr(
-        parser,
-        "_resolve_anthropic_client",
+        runner.cache_module,
+        "compute_cache_key",
         lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("provider-forbidden search must not fingerprint a route")
+        ),
+    )
+    monkeypatch.setattr(
+        parser,
+        "routed_messages_client",
+        lambda _execution: (_ for _ in ()).throw(
             AssertionError("model client must not resolve")
         ),
     )
@@ -91,6 +105,39 @@ def test_forbidden_runner_is_deterministic_postgres_only_and_bypasses_cache(
     assert result.retrieval.mode == "postgres_only"
     assert result.retrieval.graph_status == "not_selected"
     assert result.rerank_applied is False
+
+
+def test_auto_runner_deterministic_query_precedes_route_cache(monkeypatch):
+    monkeypatch.setattr(runner, "apply_searchable_candidate_scope", lambda q, **_kw: q)
+    monkeypatch.setattr(
+        runner.cache_module,
+        "compute_cache_key",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("deterministic search must not fingerprint a route")
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "parse_nl_query",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("deterministic search must not enter the model parser")
+        ),
+    )
+    monkeypatch.setattr(
+        runner,
+        "unsupported_runtime_requirements",
+        lambda _parsed: ["test-only early return"],
+    )
+
+    result = runner.run_search(
+        db=MagicMock(),
+        organization_id=7,
+        nl_query="candidates based in UAE with Python and PostgreSQL",
+        base_query=MagicMock(),
+    )
+
+    assert result.parsed_filter.skills_all == ["Python", "PostgreSQL"]
+    assert result.parsed_filter.locations_country == ["United Arab Emirates"]
 
 
 def test_forbidden_runner_rejects_deterministic_semantic_shape_before_graph(

@@ -212,9 +212,17 @@ def provider_error_is_definitely_nonbillable(error: BaseException) -> bool:
     Connection failures, read timeouts, 5xx responses, and unknown exception
     types are outcome-ambiguous: the provider may have accepted and billed the
     request before the client lost the response. Those must retain the durable
-    attempt hold. Only an allowlisted provider-rejection status is considered
-    safe evidence that no billable output was produced.
+    attempt hold. Safe evidence is either an internal transport-boundary error
+    explicitly marked ``provider_not_called`` or an allowlisted provider
+    rejection status that cannot carry billable output.
     """
+
+    # Internal adapter/transport-boundary contract failures are raised only
+    # while the underlying SDK is still untouched.  Routed adapters may have
+    # already persisted their conservative "attempt started" marker by then,
+    # so this explicit evidence must be eligible for allow_started release.
+    if bool(getattr(error, "provider_not_called", False)):
+        return True
 
     status = getattr(error, "status_code", None)
     if status is None:
@@ -257,6 +265,7 @@ def mark_provider_attempt_started(
     reservation: CreditReservation | dict[str, Any] | None,
     *,
     provider: str,
+    attempt_ref: str | None = None,
 ) -> bool:
     """Durably record the last safe point before a paid SDK invocation.
 
@@ -275,8 +284,7 @@ def mark_provider_attempt_started(
             hold = (
                 meter_db.query(BillingCreditLedger)
                 .filter(
-                    BillingCreditLedger.organization_id
-                    == int(parsed.organization_id),
+                    BillingCreditLedger.organization_id == int(parsed.organization_id),
                     BillingCreditLedger.external_ref == parsed.external_ref,
                     BillingCreditLedger.reason.like("reservation:%"),
                 )
@@ -288,8 +296,7 @@ def mark_provider_attempt_started(
             if (
                 meter_db.query(BillingCreditLedger.id)
                 .filter(
-                    BillingCreditLedger.external_ref
-                    == f"{parsed.external_ref}:settled"
+                    BillingCreditLedger.external_ref == f"{parsed.external_ref}:settled"
                 )
                 .first()
                 is not None
@@ -304,7 +311,13 @@ def mark_provider_attempt_started(
             )
             state = str(metadata.get("state") or "")
             if state == PROVIDER_ATTEMPT_STARTED_STATE:
-                return True
+                # A live reservation funds exactly one physical attempt even
+                # across processes or newly-created adapter instances. Legacy
+                # callers omit attempt_ref and retain their old idempotency;
+                # routed callers always bind the durable invocation/ordinal.
+                if attempt_ref is None:
+                    return True
+                return metadata.get("provider_attempt_ref") == str(attempt_ref)
             if state in {
                 PROVIDER_SUCCEEDED_PENDING_STATE,
                 PROVIDER_SUCCEEDED_USAGE_UNKNOWN_STATE,
@@ -314,6 +327,9 @@ def mark_provider_attempt_started(
                 {
                     "state": PROVIDER_ATTEMPT_STARTED_STATE,
                     "provider": str(provider),
+                    "provider_attempt_ref": (
+                        str(attempt_ref) if attempt_ref is not None else None
+                    ),
                     "provider_attempt_started_at": datetime.now(
                         timezone.utc
                     ).isoformat(),
@@ -352,8 +368,7 @@ def mark_provider_usage_succeeded(
             hold = (
                 meter_db.query(BillingCreditLedger)
                 .filter(
-                    BillingCreditLedger.organization_id
-                    == int(parsed.organization_id),
+                    BillingCreditLedger.organization_id == int(parsed.organization_id),
                     BillingCreditLedger.external_ref == parsed.external_ref,
                     BillingCreditLedger.reason.like("reservation:%"),
                 )
@@ -365,8 +380,7 @@ def mark_provider_usage_succeeded(
             if (
                 meter_db.query(BillingCreditLedger.id)
                 .filter(
-                    BillingCreditLedger.external_ref
-                    == f"{parsed.external_ref}:settled"
+                    BillingCreditLedger.external_ref == f"{parsed.external_ref}:settled"
                 )
                 .first()
                 is not None

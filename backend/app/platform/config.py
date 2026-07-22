@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # so it runs on a cheaper model by default. Per-role role.agent_model still
     # wins. Empty → falls back to resolved_claude_model (no behaviour change).
     CLAUDE_AGENT_AUTONOMOUS_MODEL: str = ""
+    # Optional centralized model overrides keyed by the registered AI task key,
+    # for example {"candidate_search.parse":"anthropic.messages.sonnet-4-6"}. Values
+    # must resolve through the AI deployment registry; unknown, retired, or
+    # incompatible models fail closed before a provider call.
+    AI_ROUTER_MODEL_OVERRIDES_JSON: str = ""
     # Redundant-cycle gate for the autonomous cohort loop: skip a cron LLM cycle
     # when the previous one succeeded with 0 decisions and nothing in the cohort
     # changed since — with a force-run backstop so a gated role still runs at

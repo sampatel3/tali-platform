@@ -1,6 +1,6 @@
 """Grounded per-criterion CV evidence via Anthropic Citations.
 
-Given a candidate's CV text and a list of recruiter criteria, ask Claude —
+Given a candidate's CV text and a list of recruiter criteria, ask a routed model —
 with the CV supplied as a *citations-enabled document* — to judge each
 criterion and quote the supporting CV text. The Citations API guarantees
 ``cited_text`` is verbatim from the document (it is parsed out of the
@@ -18,10 +18,9 @@ so the model emits a small marker-tagged text format::
 which we parse, pairing each criterion with the citation blocks that
 follow its marker in the interleaved response.
 
-One Anthropic call per candidate (covers all criteria). Defaults to the
-codebase ``FAST_MODEL`` (Haiku 4.5 — cheap, and supports citations).
-Callers bound the candidate set to the ranked shortlist, so worst-case
-cost is ``len(shortlist)`` single Haiku calls.
+One logical route per candidate covers all criteria. The task profile owns the
+eligible citation-capable deployments and cost/iteration ceilings; callers also
+bound the candidate set to the ranked shortlist.
 """
 
 from __future__ import annotations
@@ -29,42 +28,35 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..llm.models import SONNET_MODEL as _SONNET_MODEL
+from ..components.ai_routing import (
+    RoutingAttribution,
+    TaskKey,
+    estimate_anthropic_messages,
+    plan_route,
+    prepare_route,
+    routed_messages_client,
+)
+from ..llm import MeteringContext, one_call
 from ..services.pricing_service import Feature
-from .metering import admitted_search_metering
+from .metering import search_metering
 
 logger = logging.getLogger("taali.candidate_search.grounded")
 
-# Grounding judges every displayed criterion (Sam: "keep citation for ALL
-# grounding"), so quote integrity matters. Default to Sonnet — Haiku citations
-# under-performed on the judgement, and pinning it here means a worker missing
-# the CLAUDE_GROUNDING_MODEL env var can't silently fall back to Haiku (the
-# per-service drift that ran ~45% of prod grounding on Haiku). Same Sonnet the
-# holistic scorer uses, so the two CV reads agree.
-GROUNDING_MODEL = os.getenv("CLAUDE_GROUNDING_MODEL") or _SONNET_MODEL
+# Grounding judges every displayed criterion, so quote integrity matters. The
+# selected deployment and its validated legacy override now belong to the
+# universal routing policy rather than this feature module.
 GROUNDING_MAX_TOKENS = 700
 GROUNDING_TEMPERATURE = 0.0
-# Per-request timeout for a single grounding attempt. Generous enough that a
-# Sonnet citation call finishes within it (the old 20s killed slow calls and,
-# with retries disabled, turned one transient blip into a blanked candidate),
-# but bounded so a wedged call fails and is retried rather than hanging.
+# Per-request timeout for a single grounding attempt. It is generous enough for
+# citation processing but bounded so a wedged call fails rather than hanging.
+# A timeout is outcome-ambiguous and therefore is never automatically replayed.
 GROUNDING_TIMEOUT_S = 45.0
-# Retry transient failures (timeout / 429 / 5xx / overloaded) before giving up.
-# A failed call still bills tokens, so the goal is for it NOT to fail — we retry
-# rather than degrade. On final exhaustion the criterion becomes an explicit
-# `error` verdict (never a fake `missing`, never cached), so the UI can show
-# "couldn't verify — retrying" instead of "no evidence".
-GROUNDING_MAX_ATTEMPTS = 3
-GROUNDING_BACKOFF_BASE_S = 0.5
-GROUNDING_BACKOFF_MAX_S = 4.0
 # Cache version: bump to invalidate every cached verdict after a prompt/logic
-# change. Part of the cache key alongside the CV+notes hash and the model.
+# change. Part of the cache key alongside the evidence and route fingerprints.
 GROUNDING_PROMPT_VERSION = "2"
 # Cached verdicts live this long; the CV+notes content hash in the key means a
 # changed CV or questionnaire answer misses and re-grounds, so a long TTL is safe.
@@ -76,26 +68,6 @@ CV_TEXT_CHAR_CAP = 16000
 # Cap the recruiter-notes / Workable evidence corpus (profile, questionnaire
 # answers, comments, activity log) sent alongside the CV.
 NOTES_CHAR_CAP = 8000
-
-# Anthropic transient error types to retry. Imported defensively so a test that
-# injects a fake client (or an environment without the SDK) still works — the
-# tuple is just empty there and nothing is caught as "transient".
-try:  # pragma: no cover - import shape, not logic
-    import anthropic as _anthropic
-
-    _TRANSIENT_ERRORS = tuple(
-        e
-        for e in (
-            getattr(_anthropic, "APITimeoutError", None),
-            getattr(_anthropic, "RateLimitError", None),
-            getattr(_anthropic, "InternalServerError", None),
-            getattr(_anthropic, "OverloadedError", None),
-            getattr(_anthropic, "APIConnectionError", None),
-        )
-        if isinstance(e, type)
-    )
-except Exception:  # pragma: no cover
-    _TRANSIENT_ERRORS = ()
 
 _MARKER_RE = re.compile(r"\[\[\s*C(\d+)\s*\]\]", re.IGNORECASE)
 _VERDICT_RE = re.compile(
@@ -154,6 +126,7 @@ class CriterionVerdict:
     source: str = "none"  # cv_citation | role_requirement | none
     evidence: list[Evidence] = field(default_factory=list)
     note: str = ""
+    model_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -163,6 +136,7 @@ class CriterionVerdict:
             "source": self.source,
             "evidence": [e.to_dict() for e in self.evidence],
             "note": self.note,
+            "model_id": self.model_id,
         }
 
     @classmethod
@@ -178,6 +152,7 @@ class CriterionVerdict:
                 if isinstance(e, dict)
             ],
             note=str(d.get("note") or ""),
+            model_id=(str(d["model_id"]) if d.get("model_id") else None),
         )
 
 
@@ -427,25 +402,45 @@ def _doc_hash(cv_text: str | None, notes_text: str | None) -> str:
     return h.hexdigest()[:32]
 
 
-def _cache_key(organization_id: int, doc_hash: str, criterion: str) -> str:
+def _cache_key(
+    organization_id: int,
+    doc_hash: str,
+    criterion: str,
+    *,
+    behavior_fingerprint: str,
+) -> str:
     # Normalise the criterion so "Banking domain" and "banking  domain" share a
-    # cache entry; version + model are in the key so a prompt/model change can't
-    # serve a stale verdict.
+    # cache entry. The behavior fingerprint includes semantic/schema revisions,
+    # policy, registry, and selected deployment, so routing changes cannot serve
+    # a stale verdict.
     crit_norm = " ".join((criterion or "").lower().split())
     crit_hash = hashlib.sha256(crit_norm.encode("utf-8")).hexdigest()[:16]
     return (
-        f"{_GROUNDING_CACHE_PREFIX}v{GROUNDING_PROMPT_VERSION}:{GROUNDING_MODEL}:"
+        f"{_GROUNDING_CACHE_PREFIX}v{GROUNDING_PROMPT_VERSION}:"
+        f"{behavior_fingerprint}:"
         f"{organization_id}:{doc_hash}:{crit_hash}"
     )
 
 
 def _cache_get(
-    r, organization_id: int, doc_hash: str, criterion: str
+    r,
+    organization_id: int,
+    doc_hash: str,
+    criterion: str,
+    *,
+    behavior_fingerprint: str,
 ) -> CriterionVerdict | None:
     if r is None:
         return None
     try:
-        raw = r.get(_cache_key(organization_id, doc_hash, criterion))
+        raw = r.get(
+            _cache_key(
+                organization_id,
+                doc_hash,
+                criterion,
+                behavior_fingerprint=behavior_fingerprint,
+            )
+        )
         if not raw:
             return None
         return CriterionVerdict.from_dict(json.loads(raw))
@@ -455,7 +450,12 @@ def _cache_get(
 
 
 def _cache_set(
-    r, organization_id: int, doc_hash: str, verdict: CriterionVerdict
+    r,
+    organization_id: int,
+    doc_hash: str,
+    verdict: CriterionVerdict,
+    *,
+    behavior_fingerprint: str,
 ) -> None:
     # Only cache real judgements. An `error` verdict is a failed check, not a
     # result — caching it would freeze a transient blip into a permanent answer.
@@ -463,7 +463,12 @@ def _cache_set(
         return
     try:
         r.setex(
-            _cache_key(organization_id, doc_hash, verdict.criterion),
+            _cache_key(
+                organization_id,
+                doc_hash,
+                verdict.criterion,
+                behavior_fingerprint=behavior_fingerprint,
+            ),
             GROUNDING_CACHE_TTL_S,
             json.dumps(verdict.to_dict()),
         )
@@ -471,84 +476,54 @@ def _cache_set(
         logger.debug("grounding cache write failed", exc_info=True)
 
 
-def _is_transient(exc: Exception) -> bool:
-    """Worth retrying? Timeouts, connection drops, rate limits, and any 5xx/529
-    (overload) are transient. Anything with a 4xx status (400 malformed doc, 401,
-    403, 404, 413) is permanent — retrying only burns money. The status-code
-    check covers 529, which this SDK version raises as a bare APIStatusError
-    rather than a dedicated OverloadedError class."""
-    if _TRANSIENT_ERRORS and isinstance(exc, _TRANSIENT_ERRORS):
-        return True
-    code = getattr(exc, "status_code", None)
-    return isinstance(code, int) and (code == 429 or code >= 500)
-
-
 def _grounding_request(
     client,
     *,
+    execution,
     messages,
     organization_id,
     role_id: int | None,
     application_id,
     require_role_authority: bool = False,
 ):
-    """One Citations call, retried with exponential backoff on TRANSIENT errors
-    (timeout / 429 / 5xx / overloaded). Non-transient errors (e.g. a 400 from a
-    malformed document) raise immediately. If every attempt fails the last
-    exception is raised for the caller to surface."""
-    last_exc: Exception | None = None
-    for attempt in range(GROUNDING_MAX_ATTEMPTS):
-        try:
-            call_metering = admitted_search_metering(
-                organization_id=int(organization_id),
-                role_id=int(role_id) if role_id is not None else None,
-                feature=Feature.CANDIDATE_GROUNDING,
-                entity_id=f"application:{application_id}",
-                sub_feature="candidate_search_grounding",
-                trace_id=(
-                    f"candidate-search:grounding:application:{application_id}:"
-                    f"attempt:{attempt}"
-                ),
-                metadata={"retry_attempt": int(attempt)},
-                require_role_authority=bool(require_role_authority),
-            )
-            return client.messages.create(
-                model=GROUNDING_MODEL,
-                max_tokens=GROUNDING_MAX_TOKENS,
-                temperature=GROUNDING_TEMPERATURE,
-                system=_SYSTEM_PROMPT,
-                messages=messages,
-                timeout=GROUNDING_TIMEOUT_S,
-                metering=call_metering,
-            )
-        except Exception as exc:  # noqa: BLE001 — re-raise non-transient below
-            if not _is_transient(exc):
-                raise
-            last_exc = exc
-            if attempt + 1 >= GROUNDING_MAX_ATTEMPTS:
-                break
-            delay = min(
-                GROUNDING_BACKOFF_BASE_S * (2 ** attempt), GROUNDING_BACKOFF_MAX_S
-            )
-            logger.info(
-                "grounding transient error app=%s attempt %d/%d, retrying in %.1fs: %s",
-                application_id, attempt + 1, GROUNDING_MAX_ATTEMPTS, delay, exc,
-            )
-            time.sleep(delay)
-    raise last_exc if last_exc is not None else RuntimeError("grounding failed")
+    """Run one Citations call; the adapter owns all safe physical retries."""
+    call_metering = search_metering(
+        organization_id=int(organization_id),
+        role_id=int(role_id) if role_id is not None else None,
+        feature=Feature.CANDIDATE_GROUNDING,
+        entity_id=f"application:{application_id}",
+        sub_feature="candidate_search_grounding",
+        trace_id=f"candidate-search:grounding:application:{application_id}",
+        require_role_authority=bool(require_role_authority),
+    )
+    return one_call(
+        client,
+        model=execution.selected_model_id,
+        max_tokens=GROUNDING_MAX_TOKENS,
+        temperature=GROUNDING_TEMPERATURE,
+        system=_SYSTEM_PROMPT,
+        messages=messages,
+        timeout=GROUNDING_TIMEOUT_S,
+        metering=MeteringContext.from_dict(
+            call_metering,
+            default_feature=Feature.CANDIDATE_GROUNDING,
+        ),
+    )
 
 
 def _error_verdict(criterion: str, note: str) -> CriterionVerdict:
     """A check that couldn't be completed — NOT a judgement. Distinct from
     `missing` so the UI shows 'couldn't verify' and the caller can retry."""
-    return CriterionVerdict(criterion=criterion, status="error", grounded=False, note=note)
+    return CriterionVerdict(
+        criterion=criterion, status="error", grounded=False, note=note
+    )
 
 
 def extract_cv_evidence(
     *,
     cv_text: str | None,
     criteria: list[str],
-    client,
+    route_client_factory=None,
     organization_id: int,
     role_id: int | None = None,
     application_id: int,
@@ -567,56 +542,95 @@ def extract_cv_evidence(
     the CV. Each verdict's quotes are tagged with their source (``cv`` /
     ``notes``).
 
-    Failure is explicit, not faked: a transient call failure is retried, and if
-    it still can't complete the criterion comes back as ``status="error"`` (never
-    a fabricated ``missing``, never cached) so the caller can retry and the UI can
-    show "couldn't verify" instead of "no evidence".
+    Failure is explicit, not faked. Only an explicit non-billable provider
+    rejection may be retried; ambiguous transport failures are never replayed.
+    A criterion that cannot complete comes back as ``status="error"`` (never a
+    fabricated ``missing``, never cached) so the caller can retry intentionally.
     """
     criteria = [c.strip() for c in (criteria or []) if c and c.strip()]
     if not criteria:
         return []
 
+    documents: list[dict[str, Any]] = []
+    doc_sources: list[str] = []
+    cv_chunks = _chunk_cv((cv_text or "").strip()[:CV_TEXT_CHAR_CAP])
+    if cv_chunks:
+        documents.append(_content_document(cv_chunks, "Candidate CV"))
+        doc_sources.append("cv")
+    notes_chunks = _chunk_cv((notes_text or "").strip()[:NOTES_CHAR_CAP])
+    if notes_chunks:
+        documents.append(
+            _content_document(
+                notes_chunks,
+                "Candidate notes & stated details (recruiter notes, "
+                "questionnaire answers, activity log)",
+            )
+        )
+        doc_sources.append("notes")
+
+    if not documents:
+        return [
+            CriterionVerdict(
+                criterion=criterion,
+                status="missing",
+                note="No CV or notes available.",
+            )
+            for criterion in criteria
+        ]
+
+    full_messages = [
+        {
+            "role": "user",
+            "content": [
+                *documents,
+                {"type": "text", "text": _criteria_block(criteria)},
+            ],
+        }
+    ]
+    try:
+        execution = prepare_route(
+            TaskKey.SEARCH_GROUNDING,
+            request_estimate=estimate_anthropic_messages(
+                system=_SYSTEM_PROMPT,
+                messages=full_messages,
+                max_tokens=GROUNDING_MAX_TOKENS,
+            ),
+            attribution=RoutingAttribution(
+                organization_id=int(organization_id),
+                role_id=int(role_id) if role_id is not None else None,
+                entity_id=f"application:{application_id}",
+            ),
+            operation="candidate_search.ground_evidence",
+            require_role_authority=bool(require_role_authority),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("grounded evidence routing failed app=%s: %s", application_id, exc)
+        return [
+            _error_verdict(criterion, "Evidence check failed — will retry.")
+            for criterion in criteria
+        ]
+
+    behavior_fingerprint = execution.decision.behavior_fingerprint
     r = _redis()
     doc_hash = _doc_hash(cv_text, notes_text)
     verdicts: dict[str, CriterionVerdict] = {}
     misses: list[str] = []
-    for c in criteria:
-        cached = _cache_get(r, organization_id, doc_hash, c)
-        if cached is not None:
-            verdicts[c] = cached
-        else:
-            misses.append(c)
-
-    if misses:
-        documents: list[dict[str, Any]] = []
-        doc_sources: list[str] = []
-
-        cv_chunks = _chunk_cv((cv_text or "").strip()[:CV_TEXT_CHAR_CAP])
-        if cv_chunks:
-            documents.append(_content_document(cv_chunks, "Candidate CV"))
-            doc_sources.append("cv")
-
-        notes_chunks = _chunk_cv((notes_text or "").strip()[:NOTES_CHAR_CAP])
-        if notes_chunks:
-            documents.append(
-                _content_document(
-                    notes_chunks,
-                    "Candidate notes & stated details (recruiter notes, "
-                    "questionnaire answers, activity log)",
-                )
+    workflow_succeeded = False
+    try:
+        for criterion in criteria:
+            cached = _cache_get(
+                r,
+                organization_id,
+                doc_hash,
+                criterion,
+                behavior_fingerprint=behavior_fingerprint,
             )
-            doc_sources.append("notes")
+            if cached is not None:
+                verdicts[criterion] = cached
+            else:
+                misses.append(criterion)
 
-        if not documents:
-            # Genuinely nothing to read — an honest "missing", and deterministic
-            # for this (empty) CV+notes hash, so it's safe to cache.
-            for c in misses:
-                v = CriterionVerdict(
-                    criterion=c, status="missing", note="No CV or notes available."
-                )
-                _cache_set(r, organization_id, doc_hash, v)
-                verdicts[c] = v
-        else:
+        if misses:
             messages = [
                 {
                     "role": "user",
@@ -626,33 +640,64 @@ def extract_cv_evidence(
                     ],
                 }
             ]
+            selected_model_id = execution.selected_model_id
             try:
                 resp = _grounding_request(
-                    client,
+                    (route_client_factory or routed_messages_client)(execution),
+                    execution=execution,
                     messages=messages,
                     organization_id=organization_id,
                     role_id=role_id,
                     application_id=application_id,
                     require_role_authority=bool(require_role_authority),
                 )
-            except Exception as exc:  # noqa: BLE001 — surface as error, don't crash
-                logger.warning(
-                    "grounded evidence call failed app=%s after %d attempts: %s",
-                    application_id, GROUNDING_MAX_ATTEMPTS, exc,
+                selected_model_id = execution.selected_model_id
+            except Exception as exc:  # noqa: BLE001
+                selected_model_id = (
+                    execution.last_attempt_model_id or execution.selected_model_id
                 )
-                for c in misses:
-                    verdicts[c] = _error_verdict(c, "Evidence check failed — will retry.")
+                logger.warning(
+                    "grounded evidence call failed app=%s: %s",
+                    application_id,
+                    exc,
+                )
+                for criterion in misses:
+                    verdict = _error_verdict(
+                        criterion,
+                        "Evidence check failed — will retry.",
+                    )
+                    verdict.model_id = selected_model_id
+                    verdicts[criterion] = verdict
             else:
-                content = getattr(resp, "content", None) or []
-                fresh = parse_citation_response(content, misses, doc_sources)
-                for v in fresh:
-                    _cache_set(r, organization_id, doc_hash, v)
-                    verdicts[v.criterion] = v
+                fresh = parse_citation_response(
+                    getattr(resp, "content", None) or [],
+                    misses,
+                    doc_sources,
+                )
+                for verdict in fresh:
+                    verdict.model_id = selected_model_id
+                    _cache_set(
+                        r,
+                        organization_id,
+                        doc_hash,
+                        verdict,
+                        behavior_fingerprint=behavior_fingerprint,
+                    )
+                    verdicts[verdict.criterion] = verdict
 
-    # Return in the caller's criterion order; anything still unresolved (a miss
-    # the model omitted from its reply) is an explicit error, never a silent
-    # "missing".
-    return [
-        verdicts.get(c) or _error_verdict(c, "No verdict returned.")
-        for c in criteria
-    ]
+        workflow_succeeded = all(
+            verdict.status != "error" for verdict in verdicts.values()
+        ) and len(verdicts) == len(criteria)
+        return [
+            verdicts.get(criterion)
+            or _error_verdict(criterion, "No verdict returned.")
+            for criterion in criteria
+        ]
+    finally:
+        execution.finish_workflow(succeeded=workflow_succeeded)
+
+
+def grounding_model_id() -> str:
+    """Expose the centrally selected model for the existing API response field."""
+
+    return plan_route(TaskKey.SEARCH_GROUNDING).selected_model_id
