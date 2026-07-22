@@ -67,5 +67,6 @@ describe('ShowcaseDock agent lanes', () => {
     expect(screen.getAllByText('Jordan Patel').length).toBeGreaterThan(0);
     expect(screen.getByText('95')).toBeInTheDocument();
     expect(screen.queryByText('312')).not.toBeInTheDocument();
+    expect(screen.queryByText('3 pending decisions')).not.toBeInTheDocument();
   });
 });

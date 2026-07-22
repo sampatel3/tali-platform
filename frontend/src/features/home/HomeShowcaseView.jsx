@@ -189,7 +189,7 @@ export const SHOWCASE_KPIS = [
 export const SHOWCASE_AGENTS = [
   { role_id: 109, role_name: 'Senior Backend Engineer', group: 'on_paused', agent_enabled: true, unread_messages: 0, open_questions: 1, pending_decisions: 85, last_message_preview: 'Capped salary at AED 25k · re-screened 4', budget_cap_cents: 5000, budget_spent_cents: 1820 },
   { role_id: 110, role_name: 'Data Engineer', group: 'on_paused', agent_enabled: true, unread_messages: 0, open_questions: 0, pending_decisions: 12, last_message_preview: 'Idle · waiting for new candidates', budget_cap_cents: 5000, budget_spent_cents: 640 },
-  { role_id: 111, role_name: 'AI Delivery Lead', group: 'on_paused', agent_enabled: false, agent_paused: true, agent_paused_reason: 'paused by recruiter', pending_decisions: 3, last_message_preview: '' },
+  { role_id: 111, role_name: 'AI Delivery Lead', group: 'on_paused', agent_enabled: false, agent_paused: true, agent_paused_reason: 'paused by recruiter', pending_decisions: 0, last_message_preview: 'Paused · no pending decisions' },
   { role_id: 112, role_name: 'Platform Engineer', group: 'previously_on', agent_enabled: false, pending_decisions: 0, last_message_preview: 'Agent off · ran last week' },
   { role_id: 113, role_name: 'Senior Cloud Architect', group: 'starred', agent_enabled: false, pending_decisions: 0, last_message_preview: 'Agent off — tap to set up' },
   { role_id: 114, role_name: 'DataOps Engineer', group: 'active', agent_enabled: false, pending_decisions: 0, last_message_preview: 'Agent off — tap to set up' },
@@ -211,7 +211,7 @@ const SHOWCASE_FUNNEL_BY_ROLE = {
   },
   111: {
     stageCounts: { applied: 37, scored: 25, invited: 2, completed: 1, advanced: 7, rejected: 132, in_assessment: 1, invited_opened: 1, invited_delivered: 1 },
-    decisionsByType: { send_assessment: 2, reject: 2, advance_to_interview: 0, skip_assessment_reject: 0 },
+    decisionsByType: { send_assessment: 0, reject: 0, advance_to_interview: 0, skip_assessment_reject: 0 },
   },
 };
 
