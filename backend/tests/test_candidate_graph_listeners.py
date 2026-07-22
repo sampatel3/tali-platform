@@ -114,10 +114,13 @@ def _seed_application(
     return ids
 
 
-def _new_event(*, application_id: int, organization_id: int, reason: str):
+def _new_event(
+    *, application_id: int, organization_id: int, role_id: int, reason: str
+):
     return CandidateApplicationEvent(
         application_id=int(application_id),
         organization_id=int(organization_id),
+        role_id=int(role_id),
         event_type="application_outcome_changed",
         actor_type="system",
         reason=reason,
@@ -176,7 +179,7 @@ def test_flush_stages_and_root_commit_deduplicates_candidate(
 def test_interview_and_event_coverage_waits_for_root_commit(
     db, monkeypatch, queued
 ):
-    org_id, _role_id, _candidate_id, application_id = _seed_application(db)
+    org_id, role_id, _candidate_id, application_id = _seed_application(db)
     _register(monkeypatch)
 
     interview = ApplicationInterview(
@@ -190,6 +193,7 @@ def test_interview_and_event_coverage_waits_for_root_commit(
     pipeline_event = _new_event(
         application_id=application_id,
         organization_id=org_id,
+        role_id=role_id,
         reason="first event",
     )
     db.add_all([interview, pipeline_event])
@@ -212,7 +216,7 @@ def test_interview_and_event_coverage_waits_for_root_commit(
 def test_root_rollback_emits_nothing_and_session_reuse_has_no_stale_ids(
     db, monkeypatch, queued
 ):
-    org_id, _role_id, candidate_id, application_id = _seed_application(db)
+    org_id, role_id, candidate_id, application_id = _seed_application(db)
     _register(monkeypatch)
 
     application = db.get(CandidateApplication, application_id)
@@ -221,6 +225,7 @@ def test_root_rollback_emits_nothing_and_session_reuse_has_no_stale_ids(
         _new_event(
             application_id=application_id,
             organization_id=org_id,
+            role_id=role_id,
             reason="rolled back rejection",
         )
     )
@@ -242,7 +247,7 @@ def test_root_rollback_emits_nothing_and_session_reuse_has_no_stale_ids(
 def test_implicit_session_reset_discards_staged_ids_before_reuse(
     db, monkeypatch, queued, reset_method
 ):
-    org_id, _role_id, candidate_id, application_id = _seed_application(db)
+    org_id, role_id, candidate_id, application_id = _seed_application(db)
     _register(monkeypatch)
 
     application = db.get(CandidateApplication, application_id)
@@ -251,6 +256,7 @@ def test_implicit_session_reset_discards_staged_ids_before_reuse(
         _new_event(
             application_id=application_id,
             organization_id=org_id,
+            role_id=role_id,
             reason=f"implicitly rolled back by Session.{reset_method}",
         )
     )
@@ -343,7 +349,7 @@ def test_strict_reject_failure_after_flush_queues_nothing_on_rollback(
 def test_savepoint_commit_defers_delivery_until_root_commit(
     db, monkeypatch, queued
 ):
-    org_id, _role_id, candidate_id, application_id = _seed_application(db)
+    org_id, role_id, candidate_id, application_id = _seed_application(db)
     _register(monkeypatch)
 
     application = db.get(CandidateApplication, application_id)
@@ -352,6 +358,7 @@ def test_savepoint_commit_defers_delivery_until_root_commit(
         pipeline_event = _new_event(
             application_id=application_id,
             organization_id=org_id,
+            role_id=role_id,
             reason="committed savepoint event",
         )
         db.add(pipeline_event)
@@ -396,6 +403,7 @@ def test_savepoint_rollback_discards_nested_ids_but_preserves_outer_id(
         _new_event(
             application_id=second_application_id,
             organization_id=org_id,
+            role_id=role_id,
             reason="nested-only event",
         )
     )
@@ -436,7 +444,7 @@ def test_parent_savepoint_rollback_discards_committed_child_lineage(
 def test_broker_exception_is_suppressed_and_other_kinds_still_dispatch(
     db, monkeypatch, queued, caplog
 ):
-    org_id, _role_id, _candidate_id, application_id = _seed_application(db)
+    org_id, role_id, _candidate_id, application_id = _seed_application(db)
     _register(monkeypatch)
 
     def _broker_down(_row_id):
@@ -448,6 +456,7 @@ def test_broker_exception_is_suppressed_and_other_kinds_still_dispatch(
     pipeline_event = _new_event(
         application_id=application_id,
         organization_id=org_id,
+        role_id=role_id,
         reason="must still enqueue",
     )
     db.add(pipeline_event)

@@ -20,6 +20,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.decision_feedback import DecisionFeedback
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.services.decision_staleness import StalenessReport
 
@@ -184,6 +185,24 @@ def test_pending_snapshots_include_complete_org_scoped_role_family(staleness, db
         label="related-family",
         decision_type="reject",
     )
+    related_application = db.get(
+        CandidateApplication,
+        int(related_decision.application_id),
+    )
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=int(org.id),
+            role_id=int(related_a.id),
+            candidate_id=int(related_application.candidate_id),
+            source_application_id=int(related_application.id),
+            status="done",
+            pipeline_stage="review",
+            application_outcome="open",
+            membership_source="direct_addition",
+            spec_fingerprint="related-family-spec",
+            role_fit_score=80,
+        )
+    )
     db.commit()
     staleness.return_value = StalenessReport(is_stale=False)
 
@@ -259,6 +278,118 @@ def test_get_pending_enforces_role_scope_and_pending_state(db):
     with pytest.raises(commands.DecisionCommandError) as not_pending:
         commands.get_pending_decision(db, role, user, int(processing.id))
     assert not_pending.value.code == "decision_not_pending"
+
+
+@patch.object(commands, "related_decision_staleness")
+def test_related_pending_decisions_use_live_independent_membership(
+    related_staleness,
+    db,
+):
+    """The ATS/source application is evidence, never related-role membership."""
+
+    org, user, owner, _other_role = _context(db)
+    owner.workable_job_id = "owner-workable-job"
+    related = Role(
+        organization_id=int(org.id),
+        name="Independent AI Platform Engineer",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=int(owner.id),
+    )
+    db.add(related)
+    db.flush()
+
+    source_decision = _decision(
+        db,
+        org,
+        owner,
+        label="related-member",
+        decision_type="advance_to_interview",
+    )
+    source_app = db.get(CandidateApplication, int(source_decision.application_id))
+    source_decision.status = "resolved"
+    membership = SisterRoleEvaluation(
+        organization_id=int(org.id),
+        role_id=int(related.id),
+        candidate_id=int(source_app.candidate_id),
+        source_application_id=int(source_app.id),
+        ats_application_id=int(source_app.id),
+        status="done",
+        pipeline_stage="assessment",
+        application_outcome="open",
+        membership_source="initial_snapshot",
+        spec_fingerprint="related-spec",
+        role_fit_score=91,
+        details={"summary": "Related-role evidence"},
+    )
+    db.add(membership)
+    db.flush()
+    related_decision = AgentDecision(
+        organization_id=int(org.id),
+        role_id=int(related.id),
+        application_id=int(source_app.id),
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status="pending",
+        reasoning="Meets this role's independent threshold",
+        confidence=0.91,
+        model_version="test-model",
+        prompt_version="test-prompt",
+        idempotency_key="decision-command:related-role-member",
+    )
+    db.add(related_decision)
+
+    # A decision row alone must not smuggle an owner candidate into this pool.
+    not_member = _decision(db, org, owner, label="not-related-member")
+    not_member.status = "resolved"
+    invisible = AgentDecision(
+        organization_id=int(org.id),
+        role_id=int(related.id),
+        application_id=int(not_member.application_id),
+        decision_type="reject",
+        recommendation="reject",
+        status="pending",
+        reasoning="Must be hidden without membership",
+        confidence=0.5,
+        model_version="test-model",
+        prompt_version="test-prompt",
+        idempotency_key="decision-command:related-role-nonmember",
+    )
+    db.add(invisible)
+    # Related membership remains authoritative even if evidence transport is
+    # soft-deleted from its original role.
+    source_app.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    related_staleness.return_value = StalenessReport(is_stale=False)
+
+    listing = commands.list_pending_decisions(db, related, user)
+    preview = commands.get_pending_decision(
+        db,
+        related,
+        user,
+        int(related_decision.id),
+    )
+
+    assert listing["count"] == 1
+    assert [row["decision_id"] for row in listing["decisions"]] == [
+        int(related_decision.id)
+    ]
+    assert preview == listing["decisions"][0]
+    assert preview["candidate_name"] == "Candidate related-member"
+    assert preview["approval_requires_workable_stage"] is True
+    assert related_staleness.call_args.args[2].id == membership.id
+
+    membership.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    assert commands.list_pending_decisions(db, related, user)["count"] == 0
+    with pytest.raises(commands.DecisionCommandError) as removed:
+        commands.get_pending_decision(
+            db,
+            related,
+            user,
+            int(related_decision.id),
+        )
+    assert removed.value.code == "decision_subject_not_found"
 
 
 def test_list_rejects_user_from_another_organization(db):

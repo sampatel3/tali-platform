@@ -15,6 +15,12 @@ from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
 from ...services.related_role_application_runtime import sync_shared_advance
 from ...services.sister_role_service import reconcile_related_roles_after_outcome
+from .pipeline_event_service import (
+    append_event as _append_event,
+    event_to_payload as _event_to_payload,
+    existing_idempotent_event as _existing_idempotent_event,
+    list_application_events,
+)
 
 # An application is described by TWO independent axes:
 #
@@ -305,47 +311,6 @@ def status_from_pipeline(stage: str, outcome: str) -> str:
     return normalized_stage
 
 
-def _event_to_payload(event: CandidateApplicationEvent) -> dict[str, Any]:
-    return {
-        "id": event.id,
-        "application_id": event.application_id,
-        "organization_id": event.organization_id,
-        "event_type": event.event_type,
-        "from_stage": event.from_stage,
-        "to_stage": event.to_stage,
-        "from_outcome": event.from_outcome,
-        "to_outcome": event.to_outcome,
-        "actor_type": event.actor_type,
-        "actor_id": event.actor_id,
-        "reason": event.reason,
-        "metadata": event.event_metadata or {},
-        "idempotency_key": event.idempotency_key,
-        "created_at": event.created_at,
-    }
-
-
-def list_application_events(
-    db: Session,
-    *,
-    organization_id: int,
-    application_id: int,
-    limit: int = 100,
-    offset: int = 0,
-) -> list[dict[str, Any]]:
-    rows = (
-        db.query(CandidateApplicationEvent)
-        .filter(
-            CandidateApplicationEvent.organization_id == organization_id,
-            CandidateApplicationEvent.application_id == application_id,
-        )
-        .order_by(CandidateApplicationEvent.created_at.desc(), CandidateApplicationEvent.id.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-    return [_event_to_payload(item) for item in rows]
-
-
 def stage_external_drift(app: CandidateApplication) -> bool:
     external = normalize_pipeline_key(app.external_stage_normalized or app.external_stage_raw or app.workable_stage)
     if not external:
@@ -453,58 +418,6 @@ def _legacy_compatibility_path(from_stage: str, to_stage: str) -> list[tuple[str
     return None
 
 
-def _existing_idempotent_event(
-    db: Session,
-    *,
-    application_id: int,
-    idempotency_key: str | None,
-) -> CandidateApplicationEvent | None:
-    token = str(idempotency_key or "").strip()
-    if not token:
-        return None
-    return (
-        db.query(CandidateApplicationEvent)
-        .filter(
-            CandidateApplicationEvent.application_id == application_id,
-            CandidateApplicationEvent.idempotency_key == token,
-        )
-        .first()
-    )
-
-
-def _append_event(
-    db: Session,
-    *,
-    app: CandidateApplication,
-    event_type: str,
-    actor_type: str,
-    actor_id: int | None = None,
-    from_stage: str | None = None,
-    to_stage: str | None = None,
-    from_outcome: str | None = None,
-    to_outcome: str | None = None,
-    reason: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    idempotency_key: str | None = None,
-) -> CandidateApplicationEvent:
-    event = CandidateApplicationEvent(
-        application_id=app.id,
-        organization_id=app.organization_id,
-        event_type=event_type,
-        from_stage=from_stage,
-        to_stage=to_stage,
-        from_outcome=from_outcome,
-        to_outcome=to_outcome,
-        actor_type=actor_type,
-        actor_id=actor_id,
-        reason=(reason or "").strip() or None,
-        event_metadata=metadata or None,
-        idempotency_key=(str(idempotency_key or "").strip() or None),
-    )
-    db.add(event)
-    return event
-
-
 def initialize_pipeline_event_if_missing(
     db: Session,
     *,
@@ -551,11 +464,16 @@ def append_application_event(
     to_stage: str | None = None,
     from_outcome: str | None = None,
     to_outcome: str | None = None,
+    role_id: int | None = None,
+    agent_decision_id: int | None = None,
+    target_stage: str | None = None,
+    effect_status: str | None = None,
 ) -> CandidateApplicationEvent:
     ensure_pipeline_fields(app)
     existing_idempotent = _existing_idempotent_event(
         db,
         application_id=app.id,
+        role_id=int(role_id or (metadata or {}).get("acting_role_id") or app.role_id),
         idempotency_key=idempotency_key,
     )
     if existing_idempotent:
@@ -573,6 +491,10 @@ def append_application_event(
         reason=reason,
         metadata=metadata,
         idempotency_key=idempotency_key,
+        role_id=role_id,
+        agent_decision_id=agent_decision_id,
+        target_stage=target_stage,
+        effect_status=effect_status,
     )
 
 
@@ -580,6 +502,7 @@ def _discard_live_decisions_for_terminal_application(
     db: Session,
     *,
     application_id: int,
+    role_id: int,
     reason: str,
 ) -> int:
     """Supersede pending and already-claimed cards in the same transaction."""
@@ -591,6 +514,7 @@ def _discard_live_decisions_for_terminal_application(
     return discard_pending_decisions_for_app(
         db,
         application_id=int(application_id),
+        role_id=int(role_id),
         reason=reason,
         include_processing=True,
     )
@@ -624,6 +548,7 @@ def transition_stage(
     existing_idempotent = _existing_idempotent_event(
         db,
         application_id=app.id,
+        role_id=int((metadata or {}).get("acting_role_id") or app.role_id),
         idempotency_key=idempotency_key,
     )
     if existing_idempotent:
@@ -672,6 +597,7 @@ def transition_stage(
         _discard_live_decisions_for_terminal_application(
             db,
             application_id=int(app.id),
+            role_id=int((metadata or {}).get("acting_role_id") or app.role_id),
             reason="superseded: application advanced",
         )
     sync_shared_advance(db, app, target, source_key)
@@ -832,6 +758,7 @@ def transition_outcome(
     existing_idempotent = _existing_idempotent_event(
         db,
         application_id=app.id,
+        role_id=int((metadata or {}).get("acting_role_id") or app.role_id),
         idempotency_key=idempotency_key,
     )
     if existing_idempotent:
@@ -888,6 +815,7 @@ def transition_outcome(
         _discard_live_decisions_for_terminal_application(
             db,
             application_id=int(app.id),
+            role_id=int((metadata or {}).get("acting_role_id") or app.role_id),
             reason=f"superseded: application closed ({target})",
         )
 

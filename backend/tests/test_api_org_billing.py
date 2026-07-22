@@ -9,7 +9,7 @@ from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.user import User
 from app.domains.billing_webhooks import billing_routes, webhook_routes
 from app.deps import get_current_user
@@ -51,6 +51,58 @@ def test_update_org_name(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["name"] == "Renamed Org"
+
+
+def test_update_org_threshold_is_creation_default_not_existing_role_mutation(
+    client, db, monkeypatch
+):
+    from app.services import role_threshold_reconciliation as threshold_service
+
+    headers, _ = auth_headers(client)
+    user = db.query(User).order_by(User.id.desc()).first()
+    ordinary = Role(
+        organization_id=user.organization_id,
+        name="Ordinary inherited threshold",
+        source="manual",
+        score_threshold=None,
+        auto_reject_threshold_mode="manual",
+        agentic_mode_enabled=True,
+    )
+    related = Role(
+        organization_id=user.organization_id,
+        name="Related inherited threshold",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        score_threshold=None,
+        auto_reject_threshold_mode="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add_all([ordinary, related])
+    db.commit()
+    seen: list[int] = []
+
+    def record(_db, *, role, organization_id, threshold=None):
+        seen.append(int(role.id))
+        return {"status": "ok", "role_id": int(role.id)}
+
+    monkeypatch.setattr(
+        threshold_service,
+        "reconcile_role_threshold_decisions",
+        record,
+    )
+
+    response = client.patch(
+        "/api/v1/organizations/me",
+        json={"default_score_threshold": 61},
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["default_score_threshold"] == 61
+    assert seen == []
+    db.expire_all()
+    assert db.get(Role, ordinary.id).score_threshold is None
+    assert db.get(Role, related.id).score_threshold is None
 
 
 def test_update_org_workspace_scoring_ai_and_notifications(client):

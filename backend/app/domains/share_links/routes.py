@@ -29,6 +29,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ...candidate_search.application_role_scope import (
+    strip_owner_role_judgments,
+)
+from ...candidate_search.role_scope import (
+    CandidateRoleScope,
+    resolve_candidate_role_scope,
+)
 from ...deps import get_current_user, get_optional_current_user
 from ...domains.assessments_runtime.role_support import get_application
 from ...models.candidate_application import CandidateApplication
@@ -38,6 +45,7 @@ from ...models.share_link import (
     SHARE_LINK_MODES,
     ShareLink,
 )
+from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.user import User
 from ...platform.database import get_db
 
@@ -76,6 +84,64 @@ def _generate_token() -> str:
     return f"shr_{secrets.token_urlsafe(24)}"
 
 
+def _resolve_share_application_context(
+    db: Session,
+    *,
+    organization_id: int,
+    application_id: int,
+    view_role_id: int | None,
+) -> tuple[
+    CandidateApplication,
+    CandidateRoleScope | None,
+    SisterRoleEvaluation | None,
+]:
+    """Resolve one exact live logical membership without role-family inference."""
+
+    if view_role_id is None:
+        return get_application(application_id, organization_id, db), None, None
+    try:
+        scope = resolve_candidate_role_scope(
+            db,
+            organization_id=int(organization_id),
+            role_id=int(view_role_id),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Candidate is not a live member of this role",
+        ) from exc
+    visible_id = scope.scope_visible_roster(
+        db.query(CandidateApplication.id).filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(organization_id),
+        )
+    ).scalar()
+    if visible_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Candidate is not a live member of this role",
+        )
+    application = get_application(
+        application_id,
+        organization_id,
+        db,
+        include_deleted=scope.is_related,
+    )
+    evaluation = (
+        scope.evaluation_map(db, application_ids=[int(application.id)]).get(
+            int(application.id)
+        )
+        if scope.is_related
+        else None
+    )
+    if scope.is_related and evaluation is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Candidate is not a live member of this role",
+        )
+    return application, scope, evaluation
+
+
 def _serialize_link(link: ShareLink) -> dict[str, Any]:
     now = _utcnow()
     expires_at = _as_aware(link.expires_at)
@@ -86,6 +152,7 @@ def _serialize_link(link: ShareLink) -> dict[str, Any]:
     return {
         "id": link.id,
         "application_id": link.application_id,
+        "view_role_id": link.view_role_id,
         "token": link.token,
         "mode": link.mode,
         "expiry_preset": link.expiry_preset,
@@ -110,11 +177,17 @@ class CreateShareLinkPayload(BaseModel):
         ...,
         description="Expiry preset key: '24h' | '7d' | '30d' | 'single-view'.",
     )
+    view_role_id: int | None = Field(
+        default=None,
+        ge=1,
+        description="Logical role whose candidate standing report is shared.",
+    )
 
 
 class ShareLinkResponse(BaseModel):
     id: int
     application_id: int
+    view_role_id: int | None = None
     token: str
     mode: str
     expiry_preset: str | None
@@ -146,6 +219,7 @@ class PublicShareViewResponse(BaseModel):
     """
 
     application_id: int
+    view_role_id: int | None = None
     mode: str
     view: str
     expires_at: str | None
@@ -167,12 +241,18 @@ def create_share_link(
     if payload.expiry not in _EXPIRY_PRESETS:
         raise HTTPException(status_code=400, detail="Invalid expiry preset")
 
-    app = get_application(application_id, current_user.organization_id, db)
+    app, _scope, _evaluation = _resolve_share_application_context(
+        db,
+        organization_id=int(current_user.organization_id),
+        application_id=int(application_id),
+        view_role_id=payload.view_role_id,
+    )
     expires_at = _utcnow() + _EXPIRY_PRESETS[payload.expiry]
 
     link = ShareLink(
         organization_id=app.organization_id,
         application_id=app.id,
+        view_role_id=payload.view_role_id,
         created_by_user_id=current_user.id,
         token=_generate_token(),
         mode=payload.mode,
@@ -315,10 +395,6 @@ def view_share_link(
             detail="Single-view link has already been consumed",
         )
 
-    link.view_count = (link.view_count or 0) + 1
-    link.last_viewed_at = now
-    db.commit()
-
     view = "client" if link.mode == SHARE_LINK_MODE_CLIENT else "recruiter"
 
     # Resolve the application with the same joinedload set the recruiter
@@ -326,16 +402,40 @@ def view_share_link(
     # the SPA gets every field it normally renders. ``client_safe=True``
     # scrubs recruiter notes / transcripts and switches in the client
     # share summary, matching the rendering rules in CandidateStandingReportPage.
-    from ..assessments_runtime.applications_routes import _load_application_for_detail
+    from ...services.sister_role_projection import project_sister_application
     from ..assessments_runtime.role_support import application_detail_payload
 
-    app = _load_application_for_detail(db=db, application_id=link.application_id)
-    if app is None:
-        raise HTTPException(status_code=404, detail="Candidate report unavailable.")
+    app, role_scope, evaluation = _resolve_share_application_context(
+        db,
+        organization_id=int(link.organization_id),
+        application_id=int(link.application_id),
+        view_role_id=link.view_role_id,
+    )
+
+    def project_logical_role(payload: dict[str, Any]) -> dict[str, Any]:
+        if role_scope is None or not role_scope.is_related:
+            return payload
+        assert role_scope.requested_role is not None
+        return strip_owner_role_judgments(
+            project_sister_application(
+                payload,
+                sister_role=role_scope.requested_role,
+                owner_role=role_scope.application_role,
+                evaluation=evaluation,
+                db=db,
+                application=app,
+            )
+        )
+
+    logical_role = role_scope.requested_role if role_scope is not None else app.role
     application_payload = application_detail_payload(
         app,
         include_cv_text=False,
         client_safe=(view == "client"),
+        payload_projector=project_logical_role,
+        client_share_role_name=(
+            str(logical_role.name) if logical_role is not None else None
+        ),
     )
 
     # Recruiter shares are the "full report" — surface the same recruiter
@@ -349,14 +449,24 @@ def view_share_link(
             db,
             organization_id=app.organization_id,
             application_id=app.id,
+            role_id=(
+                int(logical_role.id)
+                if logical_role is not None
+                else int(app.role_id)
+            ),
             limit=100,
         )
         application_payload["recruiter_notes_timeline"] = _recruiter_notes_timeline(
             db, app, application_payload
         )
 
+    link.view_count = (link.view_count or 0) + 1
+    link.last_viewed_at = now
+    db.commit()
+
     return {
         "application_id": link.application_id,
+        "view_role_id": link.view_role_id,
         "mode": link.mode,
         "view": view,
         "expires_at": expires_at.isoformat() if expires_at else None,

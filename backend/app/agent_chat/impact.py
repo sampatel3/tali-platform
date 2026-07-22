@@ -6,8 +6,8 @@ answer the recruiter's questions exactly:
 
 * "what happens if I drop the threshold to 65?" → :func:`simulate_threshold`
 * "what threshold brings 5 more candidates back?" → :func:`recommend_threshold`
-* the actual commit (retract stale advances + emit new rejects) lives in
-  :func:`apply_threshold` which wraps the canonical reconcile functions.
+* the actual commit lives in :func:`apply_threshold`, which routes ordinary
+  and related roles through the canonical role-aware reconciler.
 
 The gate is ``pre_screen_score_100`` vs the cutoff — the same signal the
 deterministic reject path uses (mirrored in :func:`_is_below`, kept in lockstep
@@ -22,6 +22,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..candidate_search.application_role_scope import application_outcome_expression
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..models.agent_decision import AgentDecision
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
@@ -78,11 +80,10 @@ def _is_below(
 
 
 def effective_threshold(db: Session, role: Role) -> float | None:
-    """The 0-100 cutoff the deterministic pre-screen reject actually uses —
-    the canonical resolver the reconcile path consumes."""
-    from ..services.pre_screening_service import resolved_auto_reject_config
+    """The 0-100 cutoff the logical role's decision runtime uses."""
+    from ..services.role_threshold_reconciliation import effective_role_threshold
 
-    return resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+    return effective_role_threshold(db, role=role)
 
 
 def load_open_candidates(
@@ -102,17 +103,27 @@ def load_open_candidates(
     # Only pull the full Candidate (and its JSON comment/activity blobs) when the
     # caller actually wants comments; otherwise select just the display name.
     name_or_candidate = Candidate if with_comments else Candidate.full_name
-    rows = (
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+    )
+    query = (
         db.query(CandidateApplication, name_or_candidate)
         .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
         .filter(
-            CandidateApplication.role_id == int(role.id),
             CandidateApplication.organization_id == int(role.organization_id),
-            CandidateApplication.application_outcome == "open",
-            CandidateApplication.deleted_at.is_(None),
         )
-        .all()
     )
+    query = role_scope.scope_visible_roster(query).filter(
+        application_outcome_expression(role_scope) == "open"
+    )
+    rows = query.all()
+    evaluations = role_scope.evaluation_map(
+        db,
+        application_ids=[int(application.id) for application, _ in rows],
+    )
+    adapter = role_scope.row_adapter(evaluations)
     pending_by_app: dict[int, str] = {}
     for app_id, dtype in (
         db.query(AgentDecision.application_id, AgentDecision.decision_type)
@@ -132,7 +143,8 @@ def load_open_candidates(
         from ..services.workable_context_service import workable_recruiter_comments
 
     out: list[CandidateRow] = []
-    for app, name_or_cand in rows:
+    for source_app, name_or_cand in rows:
+        app = adapter(source_app) if adapter is not None else source_app
         if with_comments:
             candidate = name_or_cand
             full_name = candidate.full_name
@@ -337,17 +349,15 @@ def apply_threshold(
 ) -> dict[str, Any]:
     """Commit a score-threshold change and reconcile the decision queue.
 
-    Sets ``role.score_threshold`` then runs the canonical
-    retract-advances-then-reconcile-rejects pair (the exact path the role
-    PATCH endpoint uses) so the Decision Hub, pending counts and "below
-    threshold" stat all agree with the new cutoff. No re-scoring — scores
-    are unchanged; only the verdict moves.
+    Sets ``role.score_threshold`` then runs the same canonical role-aware
+    reconciler as the role PATCH and autonomous cycle. Ordinary roles read
+    CandidateApplication state; related roles read SisterRoleEvaluation state.
+    No re-scoring occurs; only the role-local verdict moves.
 
     Returns the impact card with before/after counts.
     """
-    from ..services.pre_screen_decision_emitter import (
-        reconcile_pre_screen_reject_decisions,
-        retract_advances_below_threshold,
+    from ..services.role_threshold_reconciliation import (
+        reconcile_role_threshold_decisions,
     )
 
     before = effective_threshold(db, role)
@@ -357,13 +367,11 @@ def apply_threshold(
     db.flush()
     after = effective_threshold(db, role)
 
-    # Order matters: retract stale advances FIRST so the reject reconcile's
-    # emit loop can replace each with the correct skip_assessment_reject.
-    retracted = retract_advances_below_threshold(
-        db, role=role, organization_id=int(organization_id), threshold=after
-    )
-    reconciled = reconcile_pre_screen_reject_decisions(
-        db, role=role, organization_id=int(organization_id), threshold=after
+    reconciled = reconcile_role_threshold_decisions(
+        db,
+        role=role,
+        organization_id=int(organization_id),
+        threshold=after,
     )
     db.flush()
 
@@ -373,9 +381,21 @@ def apply_threshold(
         "type": "threshold_change",
         "before_threshold": before,
         "after_threshold": after,
-        "discarded_advances": int(retracted.get("discarded", 0)),
-        "created_rejects": int(reconciled.get("created", 0)),
-        "reconcile_discarded": int(reconciled.get("discarded", 0)),
+        "discarded_advances": int(
+            reconciled.get(
+                "discarded_advances",
+                reconciled.get("threshold_discarded_advances", 0),
+            )
+        ),
+        "created_rejects": int(
+            reconciled.get("created_rejects", reconciled.get("reject", 0))
+        ),
+        "reconcile_discarded": int(
+            reconciled.get(
+                "reconcile_discarded",
+                reconciled.get("threshold_discarded", 0),
+            )
+        ),
         "above_after": len(above),
         "below_after": len(below),
         "total_open": len(rows),

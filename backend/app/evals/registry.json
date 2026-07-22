@@ -1,6 +1,138 @@
 {
-  "schema_version": "feature-ai-evals/v2",
+  "schema_version": "feature-ai-evals/v4",
   "feature_enum": "app.services.pricing_service.Feature",
+  "capabilities": {
+    "candidate.pool_state": {
+      "risk": "critical",
+      "ground_truth_scope": "The exact logical-role roster and role-local current state are identical for ordinary and related roles; ATS owner/source rows are storage evidence and restrictions, never implicit membership or replacement state.",
+      "required_surfaces": [
+        "rest",
+        "public_mcp",
+        "taali_chat",
+        "agent_chat",
+        "autonomous_agent",
+        "frontend"
+      ],
+      "bindings": {
+        "rest": [
+          "GET /api/v1/roles/{role_id}/applications",
+          "GET /api/v1/applications?role_ids={role_ids}",
+          "GET /api/v1/applications/{application_id}?view_role_id={role_id}",
+          "GET /api/v1/roles/{role_id}/pipeline",
+          "GET /api/v1/analytics/reporting-summary?role_id={role_id}",
+          "GET /api/v1/analytics/decisions-breakdown?role_id={role_id}"
+        ],
+        "public_mcp": [
+          "search_role_candidates",
+          "get_role_candidate"
+        ],
+        "taali_chat": [
+          "search_role_candidates",
+          "get_role_candidate"
+        ],
+        "agent_chat": [
+          "search_role_candidates",
+          "get_role_candidate"
+        ],
+        "autonomous_agent": [
+          "search_role_candidates",
+          "get_role_candidate"
+        ],
+        "frontend": [
+          "src/shared/layout/GlobalSearch.test.jsx",
+          "src/features/jobs/JobPipelinePage.test.jsx",
+          "src/test/CandidateBackLink.test.jsx"
+        ]
+      },
+      "ordinary_role_test_case": "tests/postgres/test_candidate_capability_runtime_matrix.py::test_standard_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+      "related_role_test_case": "tests/postgres/test_candidate_capability_runtime_matrix.py::test_related_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+      "regression_test_cases": [
+        "tests/evals/test_candidate_capability_coverage.py::test_autonomous_governance_cannot_hide_grounding_reads",
+        "tests/test_candidate_search_tool_failure_contract.py::test_canonical_role_search_fails_closed_when_current_state_is_unavailable",
+        "tests/postgres/test_logical_application_scope.py::test_postgres_logical_membership_union_preserves_independent_role_state",
+        "tests/test_global_related_role_application_search.py::test_mixed_roles_preserve_owner_and_related_memberships_without_duplicates",
+        "tests/test_pipeline_analytics.py::test_pipeline_funnel_uses_logical_related_membership_truth",
+        "tests/test_pipeline_analytics.py::test_time_to_fill_uses_each_logical_memberships_own_timestamps"
+      ]
+    },
+    "candidate.action_history": {
+      "risk": "critical",
+      "ground_truth_scope": "Confirmed workflow actions are derived from the immutable occurrence ledger, ordered by occurred_at and separated from pending recommendations, failed attempts, and current-state snapshots.",
+      "required_surfaces": [
+        "rest",
+        "public_mcp",
+        "taali_chat",
+        "agent_chat",
+        "autonomous_agent",
+        "frontend"
+      ],
+      "bindings": {
+        "rest": [
+          "GET /api/v1/applications/{application_id}/events"
+        ],
+        "public_mcp": [
+          "list_candidate_actions"
+        ],
+        "taali_chat": [
+          "list_candidate_actions"
+        ],
+        "agent_chat": [
+          "list_candidate_actions"
+        ],
+        "autonomous_agent": [
+          "list_candidate_actions"
+        ],
+        "frontend": [
+          "src/test/CandidateBackLink.test.jsx"
+        ]
+      },
+      "ordinary_role_test_case": "tests/postgres/test_candidate_capability_runtime_matrix.py::test_standard_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+      "related_role_test_case": "tests/postgres/test_candidate_capability_runtime_matrix.py::test_related_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+      "regression_test_cases": [
+        "tests/test_agent_activity_route.py::test_related_role_activity_uses_event_logical_role_not_transport_role",
+        "tests/test_agent_chat_command_tools.py::test_agent_chat_withholds_unsupported_historical_candidate_claim",
+        "tests/test_taali_chat_service.py::test_historical_candidate_claim_is_withheld_without_action_history"
+      ]
+    },
+    "candidate.decision_history": {
+      "risk": "critical",
+      "ground_truth_scope": "Agent recommendations are filtered independently by created and resolved time, ordered deterministically, and never presented as proof that a workflow action completed.",
+      "required_surfaces": [
+        "rest",
+        "public_mcp",
+        "taali_chat",
+        "agent_chat",
+        "autonomous_agent",
+        "frontend"
+      ],
+      "bindings": {
+        "rest": [
+          "GET /api/v1/agent-decisions?role_id={role_id}"
+        ],
+        "public_mcp": [
+          "list_recent_agent_decisions"
+        ],
+        "taali_chat": [
+          "list_recent_agent_decisions"
+        ],
+        "agent_chat": [
+          "list_recent_agent_decisions"
+        ],
+        "autonomous_agent": [
+          "list_recent_agent_decisions"
+        ],
+        "frontend": [
+          "src/test/CandidateBackLink.test.jsx",
+          "src/features/candidates/DecisionRail.test.jsx"
+        ]
+      },
+      "ordinary_role_test_case": "tests/postgres/test_candidate_capability_runtime_matrix.py::test_standard_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+      "related_role_test_case": "tests/postgres/test_candidate_capability_runtime_matrix.py::test_related_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+      "regression_test_cases": [
+        "tests/evals/test_candidate_capability_coverage.py::test_candidate_capability_schemas_preserve_time_and_claim_provenance"
+      ]
+    }
+  },
   "features": {
     "prescreen": {
       "risk": "critical",
@@ -25,25 +157,66 @@
     "taali_chat": {
       "risk": "critical",
       "coverage": "grounded_truth",
-      "ground_truth_scope": "Candidate-search role scope, ranking, and projection match the constructed sister-role truth case across Taali Chat and the shared handler.",
+      "ground_truth_scope": "Taali Chat exposes the same logical-role candidate roster, current state, confirmed action history, and agent-decision audit as the constructed ordinary and related role oracles.",
       "test_cases": [
-        "tests/evals/test_search_surface_parity.py::test_related_role_top_candidates_preserve_local_truth_across_agent_surfaces"
+        "tests/postgres/test_candidate_capability_runtime_matrix.py::test_standard_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+        "tests/postgres/test_candidate_capability_runtime_matrix.py::test_related_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+        "tests/evals/test_candidate_capability_coverage.py::test_candidate_capabilities_are_exposed_on_every_agent_surface",
+        "tests/evals/test_candidate_capability_coverage.py::test_candidate_tool_definitions_are_generated_from_the_shared_catalogue",
+        "tests/evals/test_candidate_capability_coverage.py::test_canonical_candidate_tools_execute_the_same_handlers_on_every_surface",
+        "tests/evals/test_candidate_capability_coverage.py::test_candidate_capability_schemas_preserve_time_and_claim_provenance",
+        "tests/evals/test_candidate_capability_coverage.py::test_tool_descriptions_forbid_history_claims_from_the_wrong_source",
+        "tests/test_taali_chat_service.py::test_text_only_turn_persists_and_streams",
+        "tests/test_taali_chat_service.py::test_historical_candidate_claim_is_withheld_without_action_history"
+      ],
+      "required_capabilities": [
+        "candidate.pool_state",
+        "candidate.action_history",
+        "candidate.decision_history"
       ]
     },
     "agent_autonomous": {
       "risk": "critical",
       "coverage": "grounded_truth",
-      "ground_truth_scope": "Autonomous candidate search returns the same sister-role roster, local scores, and exclusions as the constructed cross-surface oracle.",
+      "ground_truth_scope": "Autonomous candidate tools expose the same logical-role candidate roster, current state, confirmed action history, and agent-decision audit as the constructed ordinary and related role oracles.",
       "test_cases": [
-        "tests/evals/test_search_surface_parity.py::test_related_role_top_candidates_preserve_local_truth_across_agent_surfaces"
+        "tests/postgres/test_candidate_capability_runtime_matrix.py::test_standard_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+        "tests/postgres/test_candidate_capability_runtime_matrix.py::test_related_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+        "tests/evals/test_candidate_capability_coverage.py::test_candidate_capabilities_are_exposed_on_every_agent_surface",
+        "tests/evals/test_candidate_capability_coverage.py::test_candidate_tool_definitions_are_generated_from_the_shared_catalogue",
+        "tests/evals/test_candidate_capability_coverage.py::test_canonical_candidate_tools_execute_the_same_handlers_on_every_surface",
+        "tests/evals/test_candidate_capability_coverage.py::test_candidate_capability_schemas_preserve_time_and_claim_provenance",
+        "tests/evals/test_candidate_capability_coverage.py::test_tool_descriptions_forbid_history_claims_from_the_wrong_source",
+        "tests/test_agent_runtime_orchestrator.py::test_run_cycle_calls_agent_run_complete_immediately",
+        "tests/test_agent_data_readiness.py::test_related_cv_readiness_and_reject_use_independent_membership",
+        "tests/agent_runtime_policy/test_policy_evaluator.py::test_sister_role_policy_defers_to_role_local_runtime_before_owner_cache"
+      ],
+      "required_capabilities": [
+        "candidate.pool_state",
+        "candidate.action_history",
+        "candidate.decision_history"
       ]
     },
     "agent_chat": {
       "risk": "critical",
       "coverage": "grounded_truth",
-      "ground_truth_scope": "Agent Chat candidate search returns the same sister-role roster, local scores, and exclusions as the constructed cross-surface oracle.",
+      "ground_truth_scope": "Agent Chat exposes the same logical-role candidate roster, current state, confirmed action history, and agent-decision audit as the constructed ordinary and related role oracles.",
       "test_cases": [
-        "tests/evals/test_search_surface_parity.py::test_related_role_top_candidates_preserve_local_truth_across_agent_surfaces"
+        "tests/postgres/test_candidate_capability_runtime_matrix.py::test_standard_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+        "tests/postgres/test_candidate_capability_runtime_matrix.py::test_related_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
+        "tests/evals/test_candidate_capability_coverage.py::test_candidate_capabilities_are_exposed_on_every_agent_surface",
+        "tests/evals/test_candidate_capability_coverage.py::test_candidate_tool_definitions_are_generated_from_the_shared_catalogue",
+        "tests/evals/test_candidate_capability_coverage.py::test_canonical_candidate_tools_execute_the_same_handlers_on_every_surface",
+        "tests/evals/test_candidate_capability_coverage.py::test_candidate_capability_schemas_preserve_time_and_claim_provenance",
+        "tests/evals/test_candidate_capability_coverage.py::test_tool_descriptions_forbid_history_claims_from_the_wrong_source",
+        "tests/test_agent_chat_command_tools.py::test_paid_boundaries_never_hold_the_agent_chat_transaction",
+        "tests/test_agent_chat_command_tools.py::test_agent_chat_withholds_unsupported_historical_candidate_claim",
+        "tests/test_related_role_agent_rescreen.py::test_related_rescreen_uses_membership_and_isolates_role_state"
+      ],
+      "required_capabilities": [
+        "candidate.pool_state",
+        "candidate.action_history",
+        "candidate.decision_history"
       ]
     },
     "cv_parse": {
@@ -63,7 +236,7 @@
       "ground_truth_scope": "Direct, cited capability evidence is separated from mentions, adjacent skills, team attribution, negation, and structured-but-uncited sister-role matches.",
       "test_cases": [
         "tests/evals/test_runtime_ground_truth.py::test_production_hybrid_path_matches_oracle_derived_agentforce_truth",
-        "tests/postgres/test_candidate_search_runtime_matrix.py::test_related_role_top_candidates_uses_owner_applications_and_grounded_truth"
+        "tests/postgres/test_candidate_search_runtime_matrix.py::test_related_role_top_candidates_uses_explicit_membership_and_grounded_truth"
       ]
     },
     "search_parse": {
@@ -71,7 +244,7 @@
       "coverage": "grounded_truth",
       "ground_truth_scope": "The exact PySpark query produces the expected structured population filter inside the real PostgreSQL sister-role search path.",
       "test_cases": [
-        "tests/postgres/test_candidate_search_runtime_matrix.py::test_related_role_top_candidates_uses_owner_applications_and_grounded_truth"
+        "tests/postgres/test_candidate_search_runtime_matrix.py::test_related_role_top_candidates_uses_explicit_membership_and_grounded_truth"
       ]
     },
     "archetype_synthesis": {

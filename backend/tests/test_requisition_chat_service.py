@@ -48,7 +48,7 @@ def test_related_draft_reference_never_leaks_a_cross_org_role_name():
         ),
     )
 
-    assert _source_role_reference(brief) == "the original ATS role"
+    assert _source_role_reference(brief) == "the selected source role"
 
 
 def test_record_answer_extracts_number_from_natural_language_chip(db):
@@ -927,7 +927,7 @@ def test_related_role_full_replacement_changes_only_draft_and_canonical_spec(
         "I've replaced the role content in this related-role draft."
     )
     assert f"Original Java Engineer #{source.id}" in result.value.assistant_reply
-    assert "shared candidate pool are unchanged" in result.value.assistant_reply
+    assert "initial roster snapshot are unchanged" in result.value.assistant_reply
 
 
 def test_related_role_requirement_refinement_uses_semantic_operations(db, monkeypatch):
@@ -1467,7 +1467,7 @@ def test_recent_role_titles_newest_first_excludes_blank_and_current(db):
     update_brief_fields(db, first, title="Backend Engineer")
     second = create_brief(db, organization_id=org.id)
     update_brief_fields(db, second, title="Data Scientist")
-    blank = create_brief(db, organization_id=org.id)  # no title → skipped
+    create_brief(db, organization_id=org.id)  # no title → skipped
     current = create_brief(db, organization_id=org.id)
     update_brief_fields(db, current, title="Product Manager")
 

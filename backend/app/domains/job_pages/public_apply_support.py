@@ -10,7 +10,7 @@ from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 
 from ...models.candidate_application import CandidateApplication
-from ...models.role import Role
+from ...models.role import ROLE_KIND_SISTER, Role
 
 logger = logging.getLogger("taali.job_pages")
 
@@ -66,12 +66,26 @@ def attach_resume(
 ) -> None:
     """Validate, extract and attach a resume through the shared CV path."""
     from ...services.document_hygiene import stash_pdf_hygiene_on_application
+    from ...services.candidate_cv_input_lifecycle import (
+        capture_candidate_cv_input_snapshot,
+        invalidate_changed_candidate_cv_inputs,
+    )
     from ...services.document_service import (
         load_stored_document_bytes,
         process_document_upload,
         sanitize_text_for_storage,
     )
 
+    candidate = application.candidate
+    cv_snapshot = (
+        capture_candidate_cv_input_snapshot(
+            db,
+            candidate=candidate,
+            organization_id=int(org_id),
+        )
+        if candidate is not None
+        else None
+    )
     filename = (upload.filename or "").strip()
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
     if ext not in _RESUME_ALLOWED_EXTENSIONS:
@@ -92,11 +106,24 @@ def attach_resume(
     application.cv_filename = result["filename"]
     application.cv_text = text
     application.cv_uploaded_at = now
-    if application.candidate:
-        application.candidate.cv_file_url = result["file_url"]
-        application.candidate.cv_filename = result["filename"]
-        application.candidate.cv_text = text
-        application.candidate.cv_uploaded_at = now
+    if candidate:
+        candidate.cv_file_url = result["file_url"]
+        candidate.cv_filename = result["filename"]
+        candidate.cv_text = text
+        candidate.cv_uploaded_at = now
+        role = db.get(Role, int(application.role_id))
+        invalidate_changed_candidate_cv_inputs(
+            db,
+            candidate=candidate,
+            before=cv_snapshot,
+            reason="candidate_cv_replaced",
+            queue_related_application_ids=(
+                {int(application.id)}
+                if role is not None
+                and str(role.role_kind or "") == ROLE_KIND_SISTER
+                else None
+            ),
+        )
     try:
         content = load_stored_document_bytes(result["file_url"])
         if content:

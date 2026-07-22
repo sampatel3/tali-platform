@@ -187,9 +187,8 @@ const roleReferenceLabel = (reference) => {
 };
 
 // Build one stable catalogue sequence while keeping related roles next to the
-// original whose candidate application they share. The API supplies complete
-// role-family references, while the relationship fields remain as a fallback
-// for older cached/mock payloads.
+// role that owns their ATS evidence/write-back link. This is visual grouping
+// only: every role keeps an independent candidate pool and lifecycle.
 export const buildRoleFamilyCatalogue = (roles = []) => {
   const rolesById = new Map(roles.map((role) => [Number(role?.id), role]));
   const groups = new Map();
@@ -821,8 +820,8 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     return { activeRoles: nextActive, inactiveRoles: nextInactive };
   }, [filteredRoleCatalogue]);
 
-  // Related roles remain ordinary full-size cards, but sit together in one
-  // visual family and explicitly name every role/reference in the shared pool.
+  // Related roles remain independent full-size cards. They sit together only
+  // to make the ATS transport relationship discoverable.
   const activeRoleCatalogue = useMemo(
     () => buildRoleFamilyCatalogue(activeRoles),
     [activeRoles],
@@ -1508,7 +1507,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                           className={`job-family-group is-size-${familyGridSize}`}
                           data-role-family={familyGroup.ownerId || undefined}
                           data-family-size={familyGridSize}
-                          aria-label="Shared candidate pool"
+                          aria-label="Related ATS-linked roles"
                         >
                           <div className="job-family-grid">{roleCards}</div>
                         </m.section>
@@ -1627,7 +1626,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                             {isRoleFamily ? (
                               <div className="job-card-compact-family">
                                 <Link2 size={11} strokeWidth={2.2} aria-hidden="true" />
-                                <span>Shared pool · {familyRelationship}</span>
+                                <span>ATS link · {familyRelationship}</span>
                               </div>
                             ) : null}
                             <div className="role-meta">{compactMeta}</div>

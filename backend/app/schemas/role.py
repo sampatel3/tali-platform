@@ -200,10 +200,14 @@ class RoleResponse(BaseModel):
     criteria: list[RoleCriterionResponse] = Field(default_factory=list)
     source: Optional[str] = "manual"
     role_kind: Literal["standard", "sister"] = "standard"
-    # Sister roles own an alternate job spec + scores, while this role owns the
-    # shared ATS application roster and all Workable write-backs.
+    # Optional provider transport/restriction link. It does not define this
+    # role's candidate membership or local workflow state.
     ats_owner_role_id: Optional[int] = None
     ats_owner_role_name: Optional[str] = None
+    # The logical role whose candidate pool was copied once at creation. This
+    # may itself be a related role and is not a live/fan-out relationship.
+    related_source_role_id: Optional[int] = None
+    related_source_role_name: Optional[str] = None
     # Additive contract: serializers populate this for every role while the
     # default keeps direct schema construction by older internal callers valid.
     role_family: Optional[RoleFamilyResponse] = None
@@ -301,9 +305,9 @@ class JobStatusUpdate(BaseModel):
     """Recruiter sets a Taali-owned job's lifecycle status.
 
     The endpoint rejects linked Workable/Bullhorn jobs because their lifecycle
-    is derived from the external ATS, and rejects sister scoring views because
-    lifecycle belongs to their owner role. ``draft`` and ``open`` are active;
-    the remaining values are terminal outcomes for native roles.
+    is derived from the external ATS. A related role owns its own Taali
+    lifecycle; its optional ATS owner affects external writes only. ``draft``
+    and ``open`` are active; the remaining values are terminal outcomes.
     """
 
     status: Literal["draft", "open", "filled", "filled_external", "cancelled"]
@@ -456,7 +460,7 @@ class ApplicationResponse(BaseModel):
     sister_role_id: Optional[int] = None
     source_role_score: Optional[float] = None
     related_role_availability: Optional[Literal[
-        "active", "external_advanced", "disqualified"
+        "active", "restricted", "external_advanced", "disqualified"
     ]] = None
     source: Optional[str] = "manual"
     workable_candidate_id: Optional[str] = None
@@ -583,6 +587,8 @@ class ApplicationEventResponse(BaseModel):
     id: int
     application_id: int
     organization_id: int
+    role_id: int
+    agent_decision_id: Optional[int] = None
     event_type: str
     from_stage: Optional[str] = None
     to_stage: Optional[str] = None
@@ -591,6 +597,8 @@ class ApplicationEventResponse(BaseModel):
     actor_type: str
     actor_id: Optional[int] = None
     reason: Optional[str] = None
+    target_stage: Optional[str] = None
+    effect_status: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     idempotency_key: Optional[str] = None
     created_at: datetime
@@ -598,6 +606,10 @@ class ApplicationEventResponse(BaseModel):
 
 class ApplicationNoteCreate(BaseModel):
     note: str = Field(min_length=1, max_length=5000)
+    # The physical application may be shared by several explicit logical-role
+    # memberships. Callers viewing a projected related role identify that role
+    # here; the route validates membership before attributing the event.
+    role_id: Optional[int] = Field(default=None, gt=0)
     # Default-visible to the recruiting agent: a per-candidate note is almost
     # always guidance the agent should weigh ("already interviewed — not
     # suitable"). Untick for pure team chatter the agent shouldn't read.

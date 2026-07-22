@@ -144,28 +144,6 @@ const nativeLifecycleActions = (status) => {
 export function RoleLifecycleControl({ role, onChange, busy }) {
   const atsType = roleAtsType(role);
 
-  if (atsType === 'sister') {
-    const ownerName = String(role?.ats_owner_role_name || '').trim();
-    const ownerId = Number(role?.ats_owner_role_id || 0);
-    const ownerLabel = ownerName
-      ? `${ownerName}${ownerId ? ` #${ownerId}` : ''}`
-      : (ownerId ? `role #${ownerId}` : 'the original role');
-    return (
-      <div className="job-status-control role-lifecycle-control is-read-only" role="group" aria-label="Role lifecycle">
-        <div className="jsc-main">
-          <div className="jsc-head">
-            <span className="jsc-label">Role lifecycle</span>
-            <span className="job-status-badge is-draft">Shared</span>
-          </div>
-          <p className="jsc-copy">
-            <strong>Managed on the original role</strong>
-            {' '}Archive or reopen {ownerLabel} to manage this shared candidate pool.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   if (atsType === 'workable' || atsType === 'bullhorn') {
     const provider = roleAtsProvider(role);
     const providerLabel = atsProviderLabel(provider);
@@ -199,7 +177,9 @@ export function RoleLifecycleControl({ role, onChange, busy }) {
             {JOB_STATUS_LABEL[status]}
           </span>
         </div>
-        <p className="jsc-copy">Managed in Taali for this Full ATS role.</p>
+        <p className="jsc-copy">
+          Managed in Taali for this role. Any ATS link does not control this role&apos;s lifecycle.
+        </p>
       </div>
       <div className="jsc-actions">
         {actions.map((action) => (

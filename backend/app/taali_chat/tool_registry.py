@@ -23,6 +23,7 @@ from ..domains.assessments_runtime.job_authorization import (
 )
 from ..mcp import handlers, operations
 from ..mcp.catalog import TAALI_CHAT, ToolSpec, get_tool_spec, tools_for
+from ..mcp.shared_reads import dispatch_shared_read, shared_read_specs_for
 from ..models.taali_chat_conversation import TaaliChatConversation
 from ..models.user import User
 from ..services import related_role_service as _related_roles
@@ -35,6 +36,16 @@ TAALI_CHAT_SPECS: tuple[ToolSpec, ...] = tuple(tools_for(TAALI_CHAT))
 TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
     spec.anthropic_definition() for spec in TAALI_CHAT_SPECS
 ]
+
+# These catalogue-backed reads are the authoritative candidate-state and
+# history contract shared by public MCP, both recruiter chats, and the
+# autonomous agent.  Taali Chat must dispatch them through the same adapter so
+# a role-bound conversation receives the same server-owned authorization scope
+# as every other role agent.
+_SHARED_TAALI_READ_SPECS = shared_read_specs_for(TAALI_CHAT)
+_SHARED_TAALI_READ_NAMES = frozenset(
+    spec.name for spec in _SHARED_TAALI_READ_SPECS
+)
 
 
 def _preview_with_receipt(
@@ -79,6 +90,9 @@ def _preview_with_receipt(
             "role_id": int(role_id),
             "name": clean_name,
             "spec_fingerprint": text_fingerprint(clean_spec),
+            "source_snapshot_fingerprint": str(
+                result.get("source_snapshot_fingerprint") or ""
+            ),
             "max_total": int(result.get("candidates_total") or 0),
             "max_scorable": int(result.get("candidates_with_cv") or 0),
         },
@@ -127,6 +141,8 @@ def _create_with_confirmation(
         and str(check.payload.get("name") or "") == clean_name
         and str(check.payload.get("spec_fingerprint") or "")
         == text_fingerprint(clean_spec)
+        and str(check.payload.get("source_snapshot_fingerprint") or "")
+        == str(current.get("source_snapshot_fingerprint") or "")
         and int(current.get("candidates_total") or 0)
         <= int(check.payload.get("max_total") or 0)
         and int(current.get("candidates_with_cv") or 0)
@@ -151,6 +167,9 @@ def _create_with_confirmation(
         creator_user_id=int(user.id),
         name=clean_name,
         job_spec_text=clean_spec,
+        expected_source_snapshot_fingerprint=str(
+            check.payload.get("source_snapshot_fingerprint") or ""
+        ),
     )
     result = _related_roles.related_role_created_payload(related, evaluation_counts)
     return mark_confirmation_consumed(result, check=check)
@@ -205,6 +224,44 @@ def dispatch_tool(
     spec = get_tool_spec(name)
     if TAALI_CHAT not in spec.exposures:
         raise KeyError(f"unknown Taali Chat tool: {name}")
+    bound_role_id = (
+        int(conversation.role_id)
+        if conversation is not None and conversation.role_id is not None
+        else None
+    )
+    if name in _SHARED_TAALI_READ_NAMES:
+        return dispatch_shared_read(
+            name,
+            arguments,
+            exposure=TAALI_CHAT,
+            db=db,
+            principal=user,
+            bound_role_id=bound_role_id,
+        )
+    # These legacy catalogue names remain useful to unbound global Chat and
+    # public MCP callers. In a role-bound conversation their physical
+    # CandidateApplication handlers are never authoritative: bind them to the
+    # same logical-role projection as the canonical candidate tools so a
+    # related role cannot silently fall back to its ATS transport owner's
+    # score, stage, outcome, or evidence.
+    if bound_role_id is not None and name in {
+        "get_application",
+        "compare_applications",
+    }:
+        safe_args = spec.validate(arguments)
+        if name == "get_application":
+            return handlers.get_role_candidate(
+                db,
+                user,
+                role_id=bound_role_id,
+                **safe_args,
+            )
+        return handlers.compare_role_applications(
+            db,
+            user,
+            role_id=bound_role_id,
+            **safe_args,
+        )
     handler = _HANDLER_BY_NAME.get(name)
     if handler is None:
         raise KeyError(f"no Taali Chat handler registered for: {name}")

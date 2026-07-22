@@ -21,7 +21,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.agent_decision import AgentDecision
 from ...models.organization import Organization
 from ...models.role import Role
-from ...services.agent_policy_settings import role_shares_ats_application
+from ...services.agent_policy_settings import role_is_related
 from ...services.job_page_lifecycle import role_accepts_native_applications
 from ...services.pre_screening_service import mark_auto_reject_state
 from ...services.role_execution_guard import (
@@ -50,8 +50,6 @@ def _live_eligible_role(db: Session, role: Role) -> Role | None:
         organization_id=int(role.organization_id),
     )
     if automatic_role_action_block_reason(live_role, db=db) is not None:
-        return None
-    if role_shares_ats_application(live_role, db=db):
         return None
     if not role_accepts_native_applications(live_role, db=db):
         return None
@@ -138,13 +136,14 @@ def _write_provider_reject(
 
 
 def _discard_pending_knockout_cards(
-    db: Session, *, application: CandidateApplication
+    db: Session, *, application: CandidateApplication, role_id: int
 ) -> int:
     """Remove stale HITL cards after policy now permits deterministic action."""
     cards = (
         db.query(AgentDecision)
         .filter(
             AgentDecision.application_id == int(application.id),
+            AgentDecision.role_id == int(role_id),
             AgentDecision.status == "pending",
             AgentDecision.decision_type == "skip_assessment_reject",
         )
@@ -183,6 +182,52 @@ def try_auto_resolve_knockout(
     live_role = _live_eligible_role(db, role)
     if live_role is None:
         return False
+
+    if role_is_related(live_role):
+        from ...services.related_role_action_service import (
+            transition_related_role_outcome_action,
+        )
+
+        try:
+            local_result = transition_related_role_outcome_action(
+                db,
+                application=application,
+                acting_role_id=int(live_role.id),
+                to_outcome="rejected",
+                source="agent",
+                actor_type="system",
+                reason="Auto-rejected by deterministic application screening",
+                metadata={
+                    "acting_role_id": int(live_role.id),
+                    "source": "knockout_screening",
+                    "failed_question_ids": list(failed_question_ids),
+                },
+                idempotency_key=(
+                    f"related_knockout_reject:{live_role.id}:{application.id}"
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "related-role knockout reject failed role_id=%s application_id=%s",
+                live_role.id,
+                application.id,
+            )
+            return False
+        if local_result is None:
+            return False
+        if int(application.role_id or 0) == int(live_role.id):
+            mark_auto_reject_state(
+                application,
+                state="rejected",
+                reason=reason,
+                triggered=True,
+            )
+        _discard_pending_knockout_cards(
+            db,
+            application=application,
+            role_id=int(live_role.id),
+        )
+        return True
 
     org = (
         db.query(Organization)
@@ -265,7 +310,11 @@ def try_auto_resolve_knockout(
         reason=reason,
         triggered=True,
     )
-    _discard_pending_knockout_cards(db, application=application)
+    _discard_pending_knockout_cards(
+        db,
+        application=application,
+        role_id=int(live_role.id),
+    )
     return True
 
 

@@ -5,15 +5,16 @@ authentication plumbing, but a shared tool must have one name, description,
 input contract, risk classification, and persistence policy.  This catalogue
 is that source of truth.  Transport adapters may expose a filtered subset.
 
-Role-agent and autonomous-runtime tools are intentionally not folded in yet:
-many of those tools have role-bound mutation semantics that first need durable
-invocation receipts.  New shared read tools should be added here, not declared
-again in ``taali_chat/tool_registry.py``.
+Role-agent and autonomous-runtime mutations retain their own confirmation and
+governance plumbing. Their authoritative candidate reads are generated from
+this catalogue, so every model-facing surface shares one typed contract.
 """
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
@@ -27,6 +28,13 @@ from ..models.api_key import (
 
 PUBLIC_MCP = "public_mcp"
 TAALI_CHAT = "taali_chat"
+AGENT_CHAT = "agent_chat"
+AUTONOMOUS_AGENT = "autonomous_agent"
+
+CANDIDATE_POOL_STATE = "candidate.pool_state"
+CANDIDATE_DETAIL = "candidate.detail"
+CANDIDATE_ACTION_HISTORY = "candidate.action_history"
+CANDIDATE_DECISION_HISTORY = "candidate.decision_history"
 
 
 class ToolInput(BaseModel):
@@ -106,7 +114,26 @@ class SearchApplicationsInput(ToolInput):
     offset: NonNegativeInt = 0
 
 
+class SearchRoleCandidatesInput(SearchApplicationsInput):
+    """Exact, role-bound candidate-pool query used by every agent surface."""
+
+    role_id: PositiveInt
+    ats_stage: str | None = Field(
+        default=None,
+        description=(
+            "Case-insensitive match against the current provider stage/status "
+            "or its normalized value."
+        ),
+    )
+
+
 class GetApplicationInput(ToolInput):
+    application_id: PositiveInt
+    include_cv_text: bool = False
+
+
+class GetRoleCandidateInput(ToolInput):
+    role_id: PositiveInt
     application_id: PositiveInt
     include_cv_text: bool = False
 
@@ -168,10 +195,55 @@ DecisionStatus = Literal[
 ]
 
 
+AgentDecisionType = Literal[
+    "advance_to_interview",
+    "reject",
+    "skip_assessment_reject",
+    "send_assessment",
+    "resend_assessment_invite",
+    "escalate_low_confidence",
+]
+
+
 class ListAgentDecisionsInput(ToolInput):
     role_id: PositiveInt | None = None
     status: DecisionStatus | None = None
+    application_id: PositiveInt | None = None
+    candidate_id: PositiveInt | None = None
+    decision_type: AgentDecisionType | None = None
+    created_after: datetime | None = Field(default=None, strict=False)
+    created_before: datetime | None = Field(default=None, strict=False)
+    resolved_after: datetime | None = Field(default=None, strict=False)
+    resolved_before: datetime | None = Field(default=None, strict=False)
     limit: PageLimit = 20
+    offset: NonNegativeInt = 0
+
+
+CandidateAction = Literal[
+    "advanced",
+    "rejected",
+    "hired",
+    "withdrawn",
+    "assessment_sent",
+    "assessment_resent",
+    "ats_moved",
+]
+CandidateActionStatus = Literal["confirmed", "failed", "skipped"]
+CandidateActionActor = Literal["recruiter", "agent", "system", "sync"]
+
+
+class ListCandidateActionsInput(ToolInput):
+    role_id: PositiveInt
+    application_id: PositiveInt | None = None
+    candidate_id: PositiveInt | None = None
+    action: CandidateAction | None = None
+    target_stage: str | None = None
+    status: CandidateActionStatus = "confirmed"
+    actor_type: CandidateActionActor | None = None
+    occurred_after: datetime | None = Field(default=None, strict=False)
+    occurred_before: datetime | None = Field(default=None, strict=False)
+    limit: PageLimit = 50
+    offset: NonNegativeInt = 0
 
 
 class ListAgentRunsInput(ToolInput):
@@ -215,7 +287,11 @@ class ListAssessmentsInput(ToolInput):
 
 class PreviewRelatedRoleInput(ToolInput):
     role_id: PositiveInt = Field(
-        description="The original ATS-linked role whose candidate roster will be shared."
+        description=(
+            "The logical source role whose current explicit candidate pool is "
+            "copied once. It may be a standard ATS-linked role or an existing "
+            "related role; this does not create future fan-out."
+        )
     )
     name: RelatedRoleName = Field(description="Name for the new related role.")
     job_spec_text: RelatedRoleJobSpec = Field(
@@ -258,16 +334,31 @@ class ToolSpec:
     execution: Literal["synchronous", "queued"] = "synchronous"
     persistence: Literal["standard", "sensitive", "ephemeral"] = "standard"
     renderer: str = "generic"
+    capabilities: frozenset[str] = frozenset()
+    role_scoped: bool = False
 
     @property
     def input_schema(self) -> dict[str, Any]:
         return _compact_schema(self.input_model.model_json_schema())
 
-    def anthropic_definition(self) -> dict[str, Any]:
+    def anthropic_definition(self, *, bound_role: bool = False) -> dict[str, Any]:
+        schema = self.input_schema
+        if bound_role and self.role_scoped:
+            schema = deepcopy(schema)
+            properties = schema.get("properties")
+            if isinstance(properties, dict):
+                properties.pop("role_id", None)
+            required = schema.get("required")
+            if isinstance(required, list):
+                remaining = [item for item in required if item != "role_id"]
+                if remaining:
+                    schema["required"] = remaining
+                else:
+                    schema.pop("required", None)
         return {
             "name": self.name,
             "description": self.description,
-            "input_schema": self.input_schema,
+            "input_schema": schema,
         }
 
     def validate(self, arguments: dict[str, Any] | None) -> dict[str, Any]:
@@ -290,6 +381,9 @@ class ToolSpec:
 
 _BOTH = frozenset({PUBLIC_MCP, TAALI_CHAT})
 _CHAT = frozenset({TAALI_CHAT})
+_ALL_AGENT_READS = frozenset(
+    {PUBLIC_MCP, TAALI_CHAT, AGENT_CHAT, AUTONOMOUS_AGENT}
+)
 _ROLES_READ = frozenset({SCOPE_ROLES_READ})
 _APPLICATIONS_READ = frozenset({SCOPE_APPLICATIONS_READ})
 _ASSESSMENTS_READ = frozenset({SCOPE_ASSESSMENTS_READ})
@@ -326,6 +420,17 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         renderer="candidate_grid",
     ),
     ToolSpec(
+        "search_role_candidates",
+        "Search one role's exact logical candidate pool by current role-local state, ATS stage, score, outcome, or simple identity text. Returns exact totals and current state; use qualitative search for skills or experience.",
+        SearchRoleCandidatesInput,
+        "search_role_candidates",
+        _ALL_AGENT_READS,
+        _APPLICATIONS_READ,
+        renderer="candidate_grid",
+        capabilities=frozenset({CANDIDATE_POOL_STATE}),
+        role_scoped=True,
+    ),
+    ToolSpec(
         "get_application",
         "Fetch one application with scores, evidence, rejection context, ATS state, and recruiter notes.",
         GetApplicationInput,
@@ -333,6 +438,17 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         _BOTH,
         _APPLICATIONS_READ,
         persistence="sensitive",
+    ),
+    ToolSpec(
+        "get_role_candidate",
+        "Fetch one candidate application as it exists in one logical role, including role-local score/evidence, current pipeline and ATS state, restrictions, and recruiter notes.",
+        GetRoleCandidateInput,
+        "get_role_candidate",
+        _ALL_AGENT_READS,
+        _APPLICATIONS_READ,
+        persistence="sensitive",
+        capabilities=frozenset({CANDIDATE_DETAIL, CANDIDATE_POOL_STATE}),
+        role_scoped=True,
     ),
     ToolSpec(
         "get_candidate",
@@ -404,11 +520,23 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "list_recent_agent_decisions",
-        "List recent autonomous-agent decisions, including status, reasoning, evidence, and recruiter resolution.",
+        "Audit autonomous-agent recommendations and recruiter resolutions. Use created dates for when the agent recommended something and resolved dates for when a recruiter approved or overrode it. This is not proof that a candidate movement completed; use list_candidate_actions for confirmed actions.",
         ListAgentDecisionsInput,
         "list_recent_agent_decisions",
-        _CHAT,
+        _ALL_AGENT_READS,
         _APPLICATIONS_READ,
+        capabilities=frozenset({CANDIDATE_DECISION_HISTORY}),
+        role_scoped=True,
+    ),
+    ToolSpec(
+        "list_candidate_actions",
+        "List confirmed or failed candidate workflow actions for one logical role, with exact totals, occurrence time, target stage/outcome, actor, linked decision when available, and each candidate's current state. Use for 'who was advanced/rejected/moved/sent an assessment and when'; pending recommendations are not completed actions.",
+        ListCandidateActionsInput,
+        "list_candidate_actions",
+        _ALL_AGENT_READS,
+        _APPLICATIONS_READ,
+        capabilities=frozenset({CANDIDATE_ACTION_HISTORY}),
+        role_scoped=True,
     ),
     ToolSpec(
         "list_recent_agent_runs",
@@ -431,9 +559,11 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         "Summarize recruiting operations for the organization or one role: roles, candidates, application funnel, assessment statuses, and attention counts.",
         RecruitingOverviewInput,
         "get_recruiting_overview",
-        _BOTH,
+        _ALL_AGENT_READS,
         _RECRUITING_OVERVIEW_READ,
         renderer="recruiting_overview",
+        capabilities=frozenset({CANDIDATE_POOL_STATE}),
+        role_scoped=True,
     ),
     ToolSpec(
         "list_assessments",
@@ -446,7 +576,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "preview_related_role",
-        "Preview a separate related Taali role over an original ATS-linked role's existing applicants using a complete alternate job specification. Returns the shared-roster size, scorable count, and estimated AI usage without creating anything. Show the preview and wait for a later explicit recruiter confirmation before creating it.",
+        "Preview a separate related Taali role seeded once from the selected logical role's explicit current pool (including another related role). Returns the initial-roster size, scorable count, and estimated AI usage without creating anything. The optional ATS owner is transport only. Show the preview and wait for a later explicit recruiter confirmation before creating it.",
         PreviewRelatedRoleInput,
         "preview_related_role",
         _CHAT,
@@ -455,7 +585,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "create_related_role",
-        "Create a previously previewed related role and queue fresh scores for its shared roster. Candidate stages and actions remain coupled to the original ATS role. The server requires explicit recruiter confirmation in a later message.",
+        "Create a previously previewed related role and queue fresh scores for its explicit roster. It is an independent logical role with role-local candidate state and action history; any shared ATS linkage appears only as operational context and action restrictions. The server requires explicit recruiter confirmation in a later message.",
         CreateRelatedRoleInput,
         "create_related_role",
         _CHAT,
@@ -484,6 +614,12 @@ def get_tool_spec(name: str) -> ToolSpec:
 
 
 __all__ = [
+    "AGENT_CHAT",
+    "AUTONOMOUS_AGENT",
+    "CANDIDATE_ACTION_HISTORY",
+    "CANDIDATE_DECISION_HISTORY",
+    "CANDIDATE_DETAIL",
+    "CANDIDATE_POOL_STATE",
     "PUBLIC_MCP",
     "TAALI_CHAT",
     "TOOL_SPECS",

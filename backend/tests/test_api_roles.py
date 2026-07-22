@@ -790,6 +790,140 @@ def test_reject_delete_role_with_existing_application(client):
     assert "applications" in delete_resp.json()["detail"].lower()
 
 
+def test_reject_delete_related_role_with_owned_membership(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    owner = Role(
+        organization_id=user.organization_id,
+        name="ATS transport role",
+        source="manual",
+    )
+    related = Role(
+        organization_id=user.organization_id,
+        name="Independent related role",
+        source="manual",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role=owner,
+    )
+    candidate = Candidate(
+        organization_id=user.organization_id,
+        email="related-delete-guard@example.com",
+        full_name="Related Delete Guard",
+    )
+    db.add_all([owner, related, candidate])
+    db.flush()
+    transport_application = CandidateApplication(
+        organization_id=user.organization_id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    db.add(transport_application)
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=user.organization_id,
+            role_id=related.id,
+            candidate_id=candidate.id,
+            source_application_id=transport_application.id,
+            ats_application_id=transport_application.id,
+            status="done",
+            pipeline_stage="applied",
+            pipeline_stage_source="initial_snapshot",
+            application_outcome="open",
+            application_outcome_source="initial_snapshot",
+            spec_fingerprint="delete-guard-spec",
+            membership_source="initial_snapshot",
+        )
+    )
+    db.commit()
+
+    delete_resp = client.delete(
+        f"/api/v1/roles/{related.id}",
+        params={"expected_version": _role_version(client, headers, related.id)},
+        headers=headers,
+    )
+
+    assert delete_resp.status_code == 400
+    assert "applications" in delete_resp.json()["detail"].lower()
+
+
+def test_delete_transport_owner_preserves_independent_related_role(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    owner = Role(
+        organization_id=user.organization_id,
+        name="Disposable ATS transport",
+        source="manual",
+    )
+    related = Role(
+        organization_id=user.organization_id,
+        name="Independent retained role",
+        source="manual",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role=owner,
+        related_source_role=owner,
+    )
+    candidate = Candidate(
+        organization_id=user.organization_id,
+        email="retained-related-member@example.com",
+        full_name="Retained Related Member",
+    )
+    db.add_all([owner, related, candidate])
+    db.flush()
+    related_application = CandidateApplication(
+        organization_id=user.organization_id,
+        candidate_id=candidate.id,
+        role_id=related.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    db.add(related_application)
+    db.flush()
+    membership = SisterRoleEvaluation(
+        organization_id=user.organization_id,
+        role_id=related.id,
+        candidate_id=candidate.id,
+        source_application_id=related_application.id,
+        status="done",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        application_outcome_source="recruiter",
+        spec_fingerprint="retained-related-role",
+        membership_source="direct",
+    )
+    db.add(membership)
+    db.commit()
+    owner_id = int(owner.id)
+    related_id = int(related.id)
+    application_id = int(related_application.id)
+    membership_id = int(membership.id)
+
+    delete_resp = client.delete(
+        f"/api/v1/roles/{owner_id}",
+        params={"expected_version": int(owner.version or 1)},
+        headers=headers,
+    )
+
+    assert delete_resp.status_code == 204, delete_resp.text
+    db.expire_all()
+    assert db.get(Role, owner_id) is None
+    retained = db.get(Role, related_id)
+    assert retained is not None
+    assert retained.ats_owner_role_id is None
+    assert retained.related_source_role_id is None
+    assert db.get(CandidateApplication, application_id) is not None
+    assert db.get(SisterRoleEvaluation, membership_id) is not None
+
+
 def test_reject_unlink_role_task_when_assessment_exists(client):
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, name="Unlink guard task").json()

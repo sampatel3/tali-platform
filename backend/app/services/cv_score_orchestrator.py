@@ -1586,6 +1586,7 @@ def mark_application_scores_stale(
         db,
         app.id,
         reason=reason,
+        role_id=int(app.role_id),
     )
     return added_stale_job
 

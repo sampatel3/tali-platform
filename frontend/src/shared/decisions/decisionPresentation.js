@@ -13,24 +13,23 @@ const formatScore = (value) => {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 };
 
-// A related role owns its score/report but reuses the owner's provider
-// application. The visible date is therefore when the candidate entered the
-// shared ATS pool, not when they applied to the related role. Prefer the
-// explicit frozen evidence flag; role-family metadata repairs older payloads
-// that predate that flag.
+// A related role owns its own membership, score, decision, and pipeline state.
+// The provider application date is still useful evidence, but it must never be
+// presented as proof that the roles share one candidate pool.
 export const applicationDateContext = (decision) => {
   const ownerRoleId = decision?.role_family?.owner?.id;
   const decisionRoleId = decision?.role_id;
   const crossesRoleBoundary = ownerRoleId != null
     && decisionRoleId != null
     && String(ownerRoleId) !== String(decisionRoleId);
-  const sharedAtsPool = decision?.evidence?.shared_ats_application === true
+  const linkedAtsEvidence = decision?.evidence?.ats_transport_linked === true
+    || decision?.evidence?.shared_ats_application === true
     || crossesRoleBoundary;
 
-  return sharedAtsPool
+  return linkedAtsEvidence
     ? {
-      label: 'In shared ATS pool since',
-      title: 'When the shared ATS application entered the candidate pool',
+      label: 'Linked ATS application dated',
+      title: 'When the linked ATS evidence application was submitted',
     }
     : {
       label: 'Applied',

@@ -60,6 +60,7 @@ def _try_workable_disqualify(
     org: Optional[Organization],
     actor: Actor,
     reason: Optional[str],
+    event_metadata: Optional[dict[str, Any]] = None,
 ) -> str:
     """Attempt to disqualify the candidate in Workable.
 
@@ -118,6 +119,7 @@ def _try_workable_disqualify(
             actor_id=actor.event_actor_id,
             reason="Workable req not live (archived/closed) — rejected in Taali only",
             metadata={
+                **(event_metadata or {}),
                 "action": "disqualify",
                 "source": "reject_application",
                 "workable_job_state": workable_job_state(getattr(app, "role", None)),
@@ -160,6 +162,7 @@ def _try_workable_disqualify(
             actor_id=actor.event_actor_id,
             reason="read-only mode — rejected in Taali only",
             metadata={
+                **(event_metadata or {}),
                 "action": result.get("action"),
                 "code": result.get("code"),
                 "workable_candidate_id": workable_candidate_id,
@@ -178,6 +181,7 @@ def _try_workable_disqualify(
             actor_id=actor.event_actor_id,
             reason=reason or result.get("message") or "Workable disqualified",
             metadata={
+                **(event_metadata or {}),
                 "action": result.get("action"),
                 "code": result.get("code"),
                 "workable_candidate_id": workable_candidate_id,
@@ -197,6 +201,7 @@ def _try_workable_disqualify(
         actor_id=actor.event_actor_id,
         reason=result.get("message") or "Workable disqualify failed",
         metadata={
+            **(event_metadata or {}),
             "action": result.get("action"),
             "code": result.get("code"),
             "workable_candidate_id": workable_candidate_id,
@@ -237,6 +242,7 @@ def _try_bullhorn_reject(
     org: Optional[Organization],
     actor: Actor,
     reason: Optional[str],
+    event_metadata: Optional[dict[str, Any]] = None,
 ) -> Optional[bool]:
     """Reject via the Bullhorn provider when the org routes to Bullhorn.
 
@@ -294,6 +300,7 @@ def _try_bullhorn_reject(
             actor_id=actor.event_actor_id,
             reason=reason or result.get("message") or "Rejected in Bullhorn",
             metadata={
+                **(event_metadata or {}),
                 "code": result.get("code"),
                 "bullhorn_status": result.get("config", {}).get("remote_status"),
                 "bullhorn_job_submission_id": app.bullhorn_job_submission_id,
@@ -309,6 +316,7 @@ def _try_bullhorn_reject(
             actor_id=actor.event_actor_id,
             reason=result.get("message") or "Bullhorn reject failed",
             metadata={
+                **(event_metadata or {}),
                 "code": result.get("code"),
                 "bullhorn_job_submission_id": app.bullhorn_job_submission_id,
                 "source": "reject_application",
@@ -331,6 +339,7 @@ def notify_rejection(
     app: CandidateApplication,
     actor: Actor,
     reason: Optional[str] = None,
+    event_metadata: Optional[dict[str, Any]] = None,
 ) -> bool:
     """Resolve a rejection in the ATS — Taali never emails the candidate.
 
@@ -352,7 +361,12 @@ def notify_rejection(
     # mode a failure raises WorkableWritebackError so the decision-batch aborts +
     # re-queues, identical to the Workable path. A no-op for non-Bullhorn orgs.
     bullhorn_result = _try_bullhorn_reject(
-        db, app=app, org=org, actor=actor, reason=reason
+        db,
+        app=app,
+        org=org,
+        actor=actor,
+        reason=reason,
+        event_metadata=event_metadata,
     )
     if bullhorn_result is not None:
         return bullhorn_result
@@ -365,6 +379,7 @@ def notify_rejection(
         org=org,
         actor=actor,
         reason=reason,
+        event_metadata=event_metadata,
     )
     return result == "handled"
 
@@ -395,6 +410,29 @@ def run(
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         application_lock = application_lock.with_for_update()
     app = application_lock.populate_existing().one()
+    from ..services.related_role_action_service import (
+        transition_related_role_outcome_action,
+    )
+
+    related_action = transition_related_role_outcome_action(
+        db,
+        application=app,
+        acting_role_id=(metadata or {}).get("acting_role_id"),
+        to_outcome="rejected",
+        source=(
+            "agent"
+            if actor.type != "recruiter" and (metadata or {}).get("agent_decision_id")
+            else "recruiter"
+        ),
+        actor_type=actor.type,
+        actor_id=actor.event_actor_id,
+        reason=reason or "Application rejected",
+        metadata=metadata,
+        idempotency_key=idempotency_key,
+        expected_version=expected_version,
+    )
+    if related_action is not None:
+        return app
     previous_outcome = app.application_outcome
     initialize_pipeline_event_if_missing(
         db,

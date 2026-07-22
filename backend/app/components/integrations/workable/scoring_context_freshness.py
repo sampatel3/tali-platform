@@ -146,20 +146,6 @@ def invalidate_scores_for_workable_context_change(
         and prior_digest is not None
         and prior_digest != current_digest
     )
-    if context_changed:
-        # Related-role evaluations consume the same rendered Workable context
-        # independently of whether the ATS-owner application has an owner score.
-        # Reset them first so the shared Application -> Evaluation -> Decision
-        # lock order precedes the owner's broader decision invalidation below.
-        from ....services.sister_role_evaluation_lifecycle import (
-            reset_related_evaluations_for_application,
-        )
-
-        reset_related_evaluations_for_application(
-            db,
-            application,
-            reason="workable_context_changed",
-        )
     if context_changed and has_context_score:
         # Lazy import keeps the Workable integration boundary acyclic.
         from ....services.cv_score_orchestrator import (

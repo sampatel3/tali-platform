@@ -471,10 +471,14 @@ def agent_recovery_sweep(self, cap: int = AGENT_RECOVERY_SWEEP_CAP) -> dict:
                 # delivery fails, compensate below back to a durable hold.
                 db.commit()
                 try:
-                    agent_cohort_tick_role.delay(
-                        dispatched_role_id,
+                    from ..services.role_agent_dispatch import (
+                        dispatch_role_agent_cycle,
+                    )
+
+                    dispatch_role_agent_cycle(
+                        role,
                         activation=False,
-                        dispatch_role_version=dispatched_role_version,
+                        role_version=dispatched_role_version,
                     )
                 except Exception:
                     logger.exception(
@@ -844,22 +848,13 @@ def agent_cohort_tick_role(
         # the no-op early-exit so the queue self-heals even on ticks where
         # the LLM cycle has nothing to do. Failures never abort the tick.
         try:
-            from ..services.pre_screen_decision_emitter import (
-                reconcile_pre_screen_reject_decisions,
-                retract_advances_below_threshold,
+            from ..services.role_threshold_reconciliation import (
+                effective_role_threshold,
+                reconcile_role_threshold_decisions,
             )
-            from ..services.pre_screening_service import resolved_auto_reject_config
 
-            _thr = resolved_auto_reject_config(None, role, db=db)["threshold_100"]
-            # Retract stale advances below the cutoff first, then let the reject
-            # reconcile emit the matching skip_assessment_reject in their place.
-            retract_advances_below_threshold(
-                db,
-                role=role,
-                organization_id=int(role.organization_id),
-                threshold=_thr,
-            )
-            reconcile_pre_screen_reject_decisions(
+            _thr = effective_role_threshold(db, role=role)
+            reconcile_role_threshold_decisions(
                 db,
                 role=role,
                 organization_id=int(role.organization_id),
@@ -1965,6 +1960,8 @@ def agent_expire_stale_decisions(self) -> dict:
                 CandidateApplicationEvent(
                     application_id=int(decision.application_id),
                     organization_id=int(decision.organization_id),
+                    role_id=int(decision.role_id),
+                    agent_decision_id=int(decision.id),
                     event_type="agent_decision_reescalated",
                     actor_type="system",
                     actor_id=None,

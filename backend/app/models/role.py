@@ -50,17 +50,27 @@ class Role(Base):
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     source = Column(String, default="manual", nullable=False)
-    # A sister role is a Taali-only scoring view over another role's live ATS
-    # applications. It deliberately has no workable_job_id of its own: the
-    # owner role remains the single write-back authority and source of truth for
-    # stage/outcome state.
+    # A related role is a full logical role with independent membership,
+    # scoring, pipeline, outcome, decisions, and history. ``ats_owner_role_id``
+    # identifies only an optional shared ATS transport/restriction boundary; it
+    # never makes the owner role authoritative for this role's local state.
     role_kind = Column(
         String(length=16), nullable=False, default=ROLE_KIND_STANDARD,
         server_default=ROLE_KIND_STANDARD, index=True,
     )
     ats_owner_role_id = Column(
         Integer,
-        ForeignKey("roles.id", ondelete="CASCADE"),
+        ForeignKey("roles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    # The logical role whose membership was copied exactly once when this role
+    # was created.  This is deliberately distinct from ``ats_owner_role_id``:
+    # the source may itself be a related role with a divergent candidate pool,
+    # while the ATS owner is only optional write-back/restriction transport.
+    related_source_role_id = Column(
+        Integer,
+        ForeignKey("roles.id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
@@ -265,7 +275,11 @@ class Role(Base):
         "Role",
         foreign_keys=[ats_owner_role_id],
         back_populates="ats_owner_role",
-        cascade="all, delete-orphan",
+    )
+    related_source_role = relationship(
+        "Role",
+        remote_side=[id],
+        foreign_keys=[related_source_role_id],
     )
     assessments = relationship("Assessment", back_populates="role")
     criteria = relationship(

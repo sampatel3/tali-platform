@@ -52,6 +52,30 @@ def run(
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         application_lock = application_lock.with_for_update()
     app = application_lock.populate_existing().one()
+    stage_source = (
+        "agent"
+        if actor.type != "recruiter" and (metadata or {}).get("agent_decision_id")
+        else "recruiter"
+    )
+    from ..services.related_role_action_service import (
+        transition_related_role_stage_action,
+    )
+
+    related_action = transition_related_role_stage_action(
+        db,
+        application=app,
+        acting_role_id=(metadata or {}).get("acting_role_id"),
+        to_stage=to_stage,
+        source=stage_source,
+        actor_type=actor.type,
+        actor_id=actor.event_actor_id,
+        reason=reason or "Stage advanced",
+        metadata=metadata,
+        idempotency_key=idempotency_key,
+        expected_version=expected_version,
+    )
+    if related_action is not None:
+        return app
     if is_resolved(app):
         raise HTTPException(
             status_code=409,
@@ -74,11 +98,6 @@ def run(
     # call this mutation directly) with an agent_decision_id in metadata. Keep
     # that provenance on the stage row/event instead of mislabelling the move
     # as recruiter-authored.
-    stage_source = (
-        "agent"
-        if actor.type != "recruiter" and (metadata or {}).get("agent_decision_id")
-        else "recruiter"
-    )
     transition_stage(
         db,
         app=app,

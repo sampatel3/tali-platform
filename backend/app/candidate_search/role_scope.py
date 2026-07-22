@@ -1,10 +1,11 @@
 """Role-aware candidate-search scope and presentation.
 
-Canonical ATS applications belong to the provider/owner role.  A related
-(``sister``) role deliberately does not clone those rows; its role-local score,
-pipeline stage, and evidence live in :class:`SisterRoleEvaluation`.  Search
-must therefore resolve both identities instead of assuming that the selected
-role id is also ``CandidateApplication.role_id``.
+Candidate evidence may be stored on an application created for this role or
+on an application linked only as an ATS transport. A related (``sister``) role
+still owns its roster, score, pipeline, outcome, decisions, and history through
+the explicit :class:`SisterRoleEvaluation` membership. Search must therefore
+resolve both identities instead of treating the evidence/transport row as the
+logical role or as membership authority.
 
 This module is the shared boundary used by every candidate-search surface.  It
 keeps tenant and lifecycle authority in PostgreSQL and exposes a read-only
@@ -20,7 +21,6 @@ from typing import Any, Callable
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Query, Session
 
-from ..domains.assessments_runtime.pipeline_service import _not_post_handover_sql
 from ..mcp.urls import application_url
 from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, Role
@@ -30,6 +30,7 @@ from ..models.sister_role_evaluation import (
 )
 from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..services.sister_role_projection import project_sister_application
+from .role_projection import strip_owner_role_judgments
 
 
 _ROLE_FIT_SCORE_FIELDS = frozenset(
@@ -42,9 +43,11 @@ _ROLE_FIT_SCORE_FIELDS = frozenset(
     }
 )
 
+_OWNER_ROLE_SCORE_FIELDS = frozenset({"workable_score"})
+
 
 class RelatedRoleSearchApplication:
-    """Read-only role-local view over one shared ATS application."""
+    """Read-only role-local view over one persisted evidence row."""
 
     def __init__(
         self,
@@ -73,43 +76,61 @@ class RelatedRoleSearchApplication:
         evaluation = self.evaluation
         if name in _ROLE_FIT_SCORE_FIELDS:
             return evaluation.role_fit_score if evaluation is not None else None
+        if name in _OWNER_ROLE_SCORE_FIELDS:
+            return None
         if name == "role_id":
             return self.related_role.id
         if name == "role":
             return self.related_role
+        if name in {"created_at", "applied_at"}:
+            return evaluation.created_at if evaluation is not None else None
+        if name in {"updated_at", "last_activity_at"}:
+            return evaluation.updated_at if evaluation is not None else None
         if name == "pipeline_stage":
-            if (
-                str(self.source_application.pipeline_stage or "").strip().lower()
-                == "advanced"
-            ):
-                return "advanced"
             return (
                 str(evaluation.pipeline_stage or "applied")
                 if evaluation is not None
                 else "applied"
             )
         if name == "pipeline_stage_updated_at":
-            if (
-                str(self.source_application.pipeline_stage or "").strip().lower()
-                == "advanced"
-            ):
-                return self.source_application.pipeline_stage_updated_at
             return (
                 evaluation.pipeline_stage_updated_at
                 if evaluation is not None
                 else None
             )
         if name == "pipeline_stage_source":
-            if (
-                str(self.source_application.pipeline_stage or "").strip().lower()
-                == "advanced"
-            ):
-                return self.source_application.pipeline_stage_source
             return (
                 str(evaluation.pipeline_stage_source or "system")
                 if evaluation is not None
                 else "system"
             )
+        if name == "application_outcome":
+            return (
+                str(evaluation.application_outcome or "open")
+                if evaluation is not None
+                else "open"
+            )
+        if name == "application_outcome_updated_at":
+            return (
+                evaluation.application_outcome_updated_at
+                if evaluation is not None
+                else None
+            )
+        if name == "application_outcome_source":
+            return (
+                str(evaluation.application_outcome_source or "system")
+                if evaluation is not None
+                else "system"
+            )
+        if name in {"ats_context", "action_restrictions"}:
+            from ..services.sister_role_projection import related_role_ats_state
+
+            ats_state = related_role_ats_state(
+                sister_role=self.related_role,
+                evaluation=evaluation,
+                source_application=self.source_application,
+            )
+            return ats_state[name]
         if name == "cv_match_details":
             return self._evaluation_details
         if name == "score_mode_cache":
@@ -127,7 +148,7 @@ class RelatedRoleSearchApplication:
 
 @dataclass(frozen=True)
 class CandidateRoleScope:
-    """The selected product role and its canonical application owner."""
+    """The selected product role and its optional ATS transport owner."""
 
     organization_id: int
     requested_role: Role | None
@@ -153,30 +174,66 @@ class CandidateRoleScope:
     def is_related(self) -> bool:
         return bool(
             self.requested_role is not None
-            and self.application_role is not None
-            and int(self.requested_role.id) != int(self.application_role.id)
+            and (
+                str(self.requested_role.role_kind or "") == ROLE_KIND_SISTER
+                or self.requested_role.ats_owner_role_id is not None
+            )
         )
 
     def scope_roster(self, query: Query) -> Query:
-        """Apply the canonical application-role boundary to ``query``."""
+        """Apply the selected role's explicit candidate-membership boundary."""
 
-        if self.application_role_id is None:
+        if self.role_id is None:
             return query
+        if self.is_related:
+            return query.join(
+                SisterRoleEvaluation,
+                and_(
+                    SisterRoleEvaluation.organization_id == self.organization_id,
+                    SisterRoleEvaluation.role_id == int(self.role_id),
+                    SisterRoleEvaluation.source_application_id
+                    == CandidateApplication.id,
+                    SisterRoleEvaluation.deleted_at.is_(None),
+                ),
+            )
         return query.filter(
-            CandidateApplication.role_id == int(self.application_role_id)
+            CandidateApplication.role_id == int(self.role_id)
         )
+
+    def scope_visible_roster(self, query: Query) -> Query:
+        """Apply role membership and the correct evidence-row lifecycle rule.
+
+        Ordinary-role membership is the live application row itself. Related-
+        role membership is the live evaluation row, so soft deletion of its
+        evidence or ATS transport cannot silently delete the candidate from
+        this independent role.
+        """
+
+        scoped = self.scope_roster(query)
+        if self.is_related:
+            return scoped
+        return scoped.filter(CandidateApplication.deleted_at.is_(None))
 
     def roster_size(self, db: Session) -> int:
         """Count non-deleted source applications in the selected role roster."""
 
+        if self.is_related and self.role_id is not None:
+            return int(
+                db.query(func.count(SisterRoleEvaluation.id))
+                .filter(
+                    SisterRoleEvaluation.organization_id == self.organization_id,
+                    SisterRoleEvaluation.role_id == int(self.role_id),
+                    SisterRoleEvaluation.deleted_at.is_(None),
+                )
+                .scalar()
+                or 0
+            )
         query = db.query(func.count(CandidateApplication.id)).filter(
             CandidateApplication.organization_id == self.organization_id,
             CandidateApplication.deleted_at.is_(None),
         )
-        if self.application_role_id is not None:
-            query = query.filter(
-                CandidateApplication.role_id == int(self.application_role_id)
-            )
+        if self.role_id is not None:
+            query = query.filter(CandidateApplication.role_id == int(self.role_id))
         return int(query.scalar() or 0)
 
     def evaluation_map(
@@ -190,6 +247,7 @@ class CandidateRoleScope:
         query = db.query(SisterRoleEvaluation).filter(
             SisterRoleEvaluation.organization_id == self.organization_id,
             SisterRoleEvaluation.role_id == int(self.role_id),
+            SisterRoleEvaluation.deleted_at.is_(None),
         )
         if application_ids is not None:
             if not application_ids:
@@ -309,22 +367,23 @@ def resolve_candidate_role_scope(
             requested_role=role,
             application_role=role,
         )
-    if role.ats_owner_role_id is None:
-        raise ValueError(f"related role {role_id} has no ATS owner role")
-    owner = (
-        db.query(Role)
-        .filter(
-            Role.id == int(role.ats_owner_role_id),
-            Role.organization_id == int(organization_id),
-            Role.deleted_at.is_(None),
+    owner = None
+    if role.ats_owner_role_id is not None:
+        owner = (
+            db.query(Role)
+            .filter(
+                Role.id == int(role.ats_owner_role_id),
+                Role.organization_id == int(organization_id),
+                Role.deleted_at.is_(None),
+            )
+            .one_or_none()
         )
-        .one_or_none()
-    )
-    if owner is None:
-        raise ValueError(f"ATS owner role {role.ats_owner_role_id} not found")
     return CandidateRoleScope(
         organization_id=int(organization_id),
         requested_role=role,
+        # A missing, deleted, or malformed transport link never changes the
+        # logical membership authority. Callers must handle no ATS owner
+        # explicitly instead of pretending the related role owns ATS rows.
         application_role=owner,
     )
 
@@ -340,14 +399,15 @@ def build_top_candidate_role_scope(
 
     base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == scope.organization_id,
-        CandidateApplication.deleted_at.is_(None),
-        CandidateApplication.application_outcome == "open",
-        func.lower(func.coalesce(CandidateApplication.pipeline_stage, ""))
-        != "advanced",
     )
     roster_size = scope.roster_size(db)
     if not scope.is_related:
-        base = scope.scope_roster(base)
+        base = scope.scope_roster(base).filter(
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "open",
+            func.lower(func.coalesce(CandidateApplication.pipeline_stage, ""))
+            != "advanced",
+        )
         score_expression = getattr(CandidateApplication, score_field)
         base = base.filter(
             score_expression.isnot(None),
@@ -370,10 +430,9 @@ def build_top_candidate_role_scope(
         )
 
     assert scope.requested_role is not None
-    assert scope.application_role_id is not None
-    if rank_by == "assessment":
+    if rank_by in {"assessment", "workable"}:
         raise ValueError(
-            "assessment ranking is not available for related-role searches"
+            f"{rank_by} ranking is not available for related-role searches"
         )
     cutoff = resolve_role_fit_threshold(db, role=scope.requested_role)
     if cutoff is None:
@@ -382,33 +441,11 @@ def build_top_candidate_role_scope(
             if scope.requested_role.score_threshold is not None
             else 50
         )
-    evaluation_join = and_(
-        SisterRoleEvaluation.organization_id == scope.organization_id,
-        SisterRoleEvaluation.role_id == int(scope.requested_role.id),
-        SisterRoleEvaluation.source_application_id == CandidateApplication.id,
-    )
-    score_expression = (
-        CandidateApplication.workable_score
-        if rank_by == "workable"
-        else SisterRoleEvaluation.role_fit_score
-    )
+    score_expression = SisterRoleEvaluation.role_fit_score
     base = (
-        base.join(SisterRoleEvaluation, evaluation_join)
+        scope.scope_roster(base)
         .filter(
-            CandidateApplication.role_id == int(scope.application_role_id),
-            func.coalesce(CandidateApplication.workable_disqualified, False).is_(
-                False
-            ),
-            func.lower(
-                func.trim(
-                    func.coalesce(
-                        CandidateApplication.external_stage_normalized,
-                        "",
-                    )
-                )
-            )
-            != "advanced",
-            _not_post_handover_sql(),
+            SisterRoleEvaluation.application_outcome == "open",
             SisterRoleEvaluation.status == SISTER_EVAL_DONE,
             SisterRoleEvaluation.role_fit_score.isnot(None),
             SisterRoleEvaluation.role_fit_score >= float(cutoff),
@@ -423,8 +460,6 @@ def build_top_candidate_role_scope(
             != "advanced",
         )
     )
-    if rank_by == "workable":
-        base = base.filter(CandidateApplication.workable_score.isnot(None))
     row_adapter = scope.bounded_row_adapter(db)
 
     def project_payload(
@@ -435,14 +470,17 @@ def build_top_candidate_role_scope(
         source_payload = dict(payload)
         source_payload.update(
             {
-                "role_id": int(scope.application_role.id),
-                "role_name": scope.application_role.name,
                 "taali_score": source.taali_score_cache_100,
-                "pipeline_stage": source.pipeline_stage,
-                "pipeline_stage_updated_at": source.pipeline_stage_updated_at,
                 "workable_disqualified": source.workable_disqualified,
             }
         )
+        if scope.application_role is not None:
+            source_payload.update(
+                {
+                    "role_id": int(scope.application_role.id),
+                    "role_name": scope.application_role.name,
+                }
+            )
         projected = project_sister_application(
             source_payload,
             sister_role=scope.requested_role,
@@ -460,7 +498,7 @@ def build_top_candidate_role_scope(
             int(source.id),
             role_id=int(scope.requested_role.id),
         )
-        return projected
+        return strip_owner_role_judgments(projected)
 
     return TopCandidateRoleScope(
         base_query=base,

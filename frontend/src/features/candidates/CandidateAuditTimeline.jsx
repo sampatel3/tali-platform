@@ -40,7 +40,7 @@ const renderMetadata = (metadata) => {
   );
 };
 
-export const CandidateAuditTimeline = ({ applicationId }) => {
+export const CandidateAuditTimeline = ({ applicationId, roleId = null }) => {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -50,7 +50,10 @@ export const CandidateAuditTimeline = ({ applicationId }) => {
     if (!applicationId) return;
     setLoading(true);
     try {
-      const res = await apiClient.roles.listApplicationEvents(applicationId, { limit: 100 });
+      const res = await apiClient.roles.listApplicationEvents(applicationId, {
+        limit: 100,
+        ...(roleId ? { role_id: roleId } : {}),
+      });
       setEvents(Array.isArray(res.data) ? res.data : []);
       setError(null);
     } catch (err) {
@@ -58,7 +61,7 @@ export const CandidateAuditTimeline = ({ applicationId }) => {
     } finally {
       setLoading(false);
     }
-  }, [applicationId]);
+  }, [applicationId, roleId]);
 
   useEffect(() => {
     fetchEvents();

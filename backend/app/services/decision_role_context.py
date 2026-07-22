@@ -1,10 +1,9 @@
-"""Role-local presentation and freshness for decisions over a shared ATS row.
+"""Role-local presentation and freshness for related-role decisions.
 
-Candidate identity and the provider application are intentionally shared across
-related roles. Scoring output is not. This module is the boundary used by the
-Decision Hub: once ``decision.role_id`` differs from ``application.role_id``,
-score-derived fields may come only from that role's ``SisterRoleEvaluation``
-or from immutable evidence frozen on the decision.
+Related-role membership is explicit and may use either an owner-role evidence
+row or a direct application. Score and funnel state always come from that
+role's ``SisterRoleEvaluation``; an optional ATS application is transport and
+restriction context only.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ from typing import Any, Iterable
 from sqlalchemy.orm import Session
 
 from ..cv_matching.holistic import is_engine_outdated, resolve_engine_version
-from ..domains.assessments_runtime.role_support import is_resolved
 from ..models.agent_decision import AgentDecision
 from ..models.assessment import Assessment, AssessmentStatus
 from ..models.candidate_application import CandidateApplication
@@ -40,6 +38,7 @@ from .decision_staleness import (
     criteria_content_fingerprint,
 )
 from .decision_policy_generation import policy_generation_drift
+from .related_role_application_runtime import role_application_is_resolved
 
 
 _IN_FLIGHT_STATUSES = {
@@ -101,14 +100,23 @@ def is_cross_role_decision(
     decision: AgentDecision,
     application: CandidateApplication | None,
 ) -> bool:
+    if application is None:
+        return False
+    if int(decision.role_id) != int(application.role_id):
+        return True
+    role = getattr(decision, "role", None) or getattr(application, "role", None)
+    if str(getattr(role, "role_kind", None) or "") == "sister":
+        return True
+    evidence = decision.evidence if isinstance(decision.evidence, dict) else {}
     return bool(
-        application is not None
-        and int(decision.role_id) != int(application.role_id)
+        evidence.get("related_role_id")
+        or evidence.get("related_role_membership_id")
+        or evidence.get("shared_ats_application")
     )
 
 
 def effective_workable_job_id(role: Role | None) -> str | None:
-    """Return the one ATS job backing a role's shared application pool."""
+    """Return the ATS job available as this role's optional write transport."""
 
     if role is None:
         return None
@@ -139,6 +147,7 @@ def load_related_evaluation(
             SisterRoleEvaluation.role_id == int(decision.role_id),
             SisterRoleEvaluation.source_application_id
             == int(decision.application_id),
+            SisterRoleEvaluation.deleted_at.is_(None),
         )
         .one_or_none()
     )
@@ -172,6 +181,7 @@ def load_related_evaluation_map(
             SisterRoleEvaluation.organization_id.in_(organization_ids),
             SisterRoleEvaluation.role_id.in_(role_ids),
             SisterRoleEvaluation.source_application_id.in_(application_ids),
+            SisterRoleEvaluation.deleted_at.is_(None),
         )
         .all()
     )
@@ -445,7 +455,11 @@ def related_decision_staleness(
 
     if application is None:
         application = db.get(CandidateApplication, int(decision.application_id))
-    if application is not None and is_resolved(application):
+    if application is not None and role_application_is_resolved(
+        db,
+        role_id=int(decision.role_id),
+        application=application,
+    ):
         return StalenessReport(is_stale=False)
     if role is None:
         role = (

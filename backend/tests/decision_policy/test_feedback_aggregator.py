@@ -142,6 +142,7 @@ def test_aggregator_pulls_three_sources(db):
     ev = CandidateApplicationEvent(
         application_id=app.id,
         organization_id=org.id,
+        role_id=role.id,
         event_type="assessment_invite_sent",
         actor_type="recruiter",
         actor_id=int(user.id),

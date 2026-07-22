@@ -612,6 +612,11 @@ def answer(
     # but don't undo the answer — the recruiter sees their reply resolved
     # either way, and a follow-up cycle can re-derive structure from the
     # raw response if needed.
+    _threshold_before = (
+        getattr(role, "score_threshold", None)
+        if row.kind == "threshold_ambiguous"
+        else None
+    )
     try:
         _apply_versioned_recruiter_answer(
             db,
@@ -627,6 +632,31 @@ def answer(
             row.kind,
             row.id,
         )
+
+    if (
+        row.kind == "threshold_ambiguous"
+        and getattr(role, "score_threshold", None) != _threshold_before
+    ):
+        try:
+            from ..services.role_threshold_reconciliation import (
+                reconcile_role_threshold_decisions,
+            )
+
+            db.flush()
+            reconcile_role_threshold_decisions(
+                db,
+                role=role,
+                organization_id=int(organization_id),
+            )
+        except Exception:
+            # The threshold answer and its audit event remain durable even if
+            # immediate queue reconciliation fails. The next deterministic
+            # role cycle uses the same canonical service and self-heals.
+            logger.exception(
+                "threshold answer reconcile failed (role_id=%s, row_id=%s)",
+                role.id,
+                row.id,
+            )
 
     return row
 

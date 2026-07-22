@@ -26,6 +26,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.services.workable_actions_service import (
     WorkableWritebackError,
     strict_workable_writes,
@@ -97,6 +98,33 @@ def _linked_app(db, org, *, submission_id, candidate_bh_id="900") -> CandidateAp
     db.add(app)
     db.commit()
     return app
+
+
+def _related_membership(
+    db,
+    app: CandidateApplication,
+    role: Role,
+    *,
+    source_application: CandidateApplication | None = None,
+) -> SisterRoleEvaluation:
+    """Create the explicit role/candidate membership required by ATS actions."""
+
+    source = source_application or app
+    evaluation = SisterRoleEvaluation(
+        organization_id=int(app.organization_id),
+        role_id=int(role.id),
+        candidate_id=int(source.candidate_id),
+        source_application_id=int(source.id),
+        ats_application_id=int(app.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        spec_fingerprint=f"bullhorn-related-{role.id}",
+        role_fit_score=80,
+    )
+    db.add(evaluation)
+    db.commit()
+    return evaluation
 
 
 def test_provider_exception_payload_is_never_returned_or_logged(db, caplog):
@@ -601,6 +629,7 @@ def test_related_role_note_failure_does_not_replay_confirmed_bullhorn_move(
     )
     db.add(related)
     db.commit()
+    evaluation = _related_membership(db, app, related)
 
     class _Provider:
         move_calls = 0
@@ -648,8 +677,10 @@ def test_related_role_note_failure_does_not_replay_confirmed_bullhorn_move(
     assert provider.move_calls == 1
     db.expire_all()
     moved = db.get(CandidateApplication, app.id)
-    assert moved.pipeline_stage == "advanced"
+    assert moved.pipeline_stage == "applied"
     assert moved.bullhorn_status == "Interview Scheduled"
+    db.refresh(evaluation)
+    assert evaluation.pipeline_stage == "advanced"
     assert (
         db.query(CandidateApplicationEvent)
         .filter(
@@ -715,6 +746,7 @@ def test_exact_target_bullhorn_move_handler_never_posts_related_role_note(
     )
     db.add(related)
     db.commit()
+    evaluation = _related_membership(db, app, related)
 
     class _Provider:
         move_calls = 0
@@ -759,7 +791,9 @@ def test_exact_target_bullhorn_move_handler_never_posts_related_role_note(
     assert provider.move_calls == 1
     post_note.assert_not_called()
     db.expire_all()
-    assert db.get(CandidateApplication, app.id).pipeline_stage == "advanced"
+    assert db.get(CandidateApplication, app.id).pipeline_stage == "applied"
+    db.refresh(evaluation)
+    assert evaluation.pipeline_stage == "advanced"
 
 
 def test_confirmed_advanced_bullhorn_move_posts_fixed_related_role_note(
@@ -779,6 +813,7 @@ def test_confirmed_advanced_bullhorn_move_posts_fixed_related_role_note(
     )
     db.add(related)
     db.commit()
+    evaluation = _related_membership(db, app, related)
 
     class _Provider:
         posted_bodies: list[str] = []
@@ -818,6 +853,102 @@ def test_confirmed_advanced_bullhorn_move_posts_fixed_related_role_note(
         f"Original ATS role: {app.role.name}\n"
         "Reason: The candidate met the advance criteria for the related role."
     ]
+    db.expire_all()
+    assert db.get(CandidateApplication, app.id).pipeline_stage == "applied"
+    db.refresh(evaluation)
+    assert evaluation.pipeline_stage == "advanced"
+
+
+def test_direct_related_membership_keeps_bullhorn_transport_out_of_local_state(
+    db, monkeypatch
+):
+    from app.components.integrations.bullhorn import op_handlers
+    from app.models.candidate_application_event import CandidateApplicationEvent
+    from app.models.role import ROLE_KIND_SISTER
+
+    org = _org(db)
+    ats_application = _linked_app(
+        db, org, submission_id="direct-321", candidate_bh_id="direct-654"
+    )
+    related = Role(
+        organization_id=org.id,
+        name="Independent AI Engineer",
+        source="manual",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=ats_application.role_id,
+    )
+    db.add(related)
+    db.flush()
+    direct_application = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=ats_application.candidate_id,
+        role_id=related.id,
+        status="review",
+        pipeline_stage="review",
+        application_outcome="open",
+        source="manual",
+        version=1,
+    )
+    db.add(direct_application)
+    db.commit()
+    evaluation = _related_membership(
+        db,
+        ats_application,
+        related,
+        source_application=direct_application,
+    )
+
+    class _Provider:
+        def move_application(self, **_kwargs):
+            ats_application.bullhorn_status = "Interview Scheduled"
+            return {
+                "success": True,
+                "code": "ok",
+                "config": {"remote_status": "Interview Scheduled"},
+            }
+
+    monkeypatch.setattr(
+        op_handlers, "_bullhorn_provider", lambda _db, _org, _app: _Provider()
+    )
+    post_note = Mock(return_value={"status": "ok"})
+    monkeypatch.setattr(
+        op_handlers, "_post_confirmed_related_role_bullhorn_note", post_note
+    )
+
+    result = op_handlers.run_move_stage(
+        db,
+        org,
+        ats_application,
+        {
+            "application_id": int(ats_application.id),
+            "role_application_id": int(direct_application.id),
+            "target_intent": "advanced",
+            "acting_role_id": int(related.id),
+        },
+    )
+
+    assert result == {
+        "status": "ok",
+        "application_id": int(ats_application.id),
+    }
+    db.expire_all()
+    assert db.get(CandidateApplication, ats_application.id).pipeline_stage == "applied"
+    assert db.get(CandidateApplication, direct_application.id).pipeline_stage == "review"
+    db.refresh(evaluation)
+    assert evaluation.pipeline_stage == "advanced"
+    events = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == direct_application.id,
+            CandidateApplicationEvent.role_id == related.id,
+        )
+        .all()
+    )
+    assert {event.event_type for event in events} >= {
+        "bullhorn_moved",
+        "role_pipeline_stage_changed",
+    }
+    assert post_note.call_args.kwargs["event_app"].id == direct_application.id
 
 
 def test_exact_target_manual_outcome_confirms_state_without_movement_event(
@@ -1037,6 +1168,7 @@ def test_related_role_bullhorn_note_requires_outbound_advanced_move(
     )
     db.add(related)
     db.commit()
+    _related_membership(db, app, related)
 
     class _Provider:
         def move_application(self, **_kwargs):
@@ -1087,6 +1219,7 @@ def test_bullhorn_note_failure_audit_error_cannot_replay_confirmed_move(
     )
     db.add(related)
     db.commit()
+    evaluation = _related_membership(db, app, related)
 
     class _Provider:
         move_calls = 0
@@ -1144,7 +1277,9 @@ def test_bullhorn_note_failure_audit_error_cannot_replay_confirmed_move(
     db.expire_all()
     moved = db.get(CandidateApplication, app.id)
     assert moved.bullhorn_status == "Interview Scheduled"
-    assert moved.pipeline_stage == "advanced"
+    assert moved.pipeline_stage == "applied"
+    db.refresh(evaluation)
+    assert evaluation.pipeline_stage == "advanced"
 
 
 def test_sequential_provider_writes_reuse_durably_rotated_refresh_token(

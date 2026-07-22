@@ -137,6 +137,7 @@ describe('DecisionRail recommendation attribution', () => {
 describe('DecisionRail reject consequence copy', () => {
   const rejectDecision = {
     id: 9,
+    role_id: 135,
     status: 'pending',
     decision_type: 'reject',
     confidence: 0.8,
@@ -159,8 +160,9 @@ describe('DecisionRail reject consequence copy', () => {
       />,
     );
     const reject = screen.getByRole('button', { name: /Reject/i });
-    expect(reject).toHaveAttribute('title', expect.stringMatching(/AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i));
-    expect(screen.getByText(/AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i)).toBeInTheDocument();
+    const consequence = /only for AI Platform Engineer #135 \(related\).*linked ATS application and other roles are unchanged/i;
+    expect(reject).toHaveAttribute('title', expect.stringMatching(consequence));
+    expect(screen.getByText(consequence)).toBeInTheDocument();
   });
 
   it('does not show the consequence note for a non-reject decision', () => {
@@ -193,7 +195,7 @@ describe('DecisionRail reject consequence copy', () => {
     const reject = screen.getByRole('button', { name: /Reject/i });
     expect(reject).toHaveAttribute('title', expect.stringMatching(/Inputs changed since this was decided/i));
     // The visible consequence note still renders under the button.
-    expect(screen.getByText(/AI Engineer #31 \(original\).*AI Platform Engineer #135 \(related\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/only for AI Platform Engineer #135 \(related\).*linked ATS application and other roles are unchanged/i)).toBeInTheDocument();
   });
 });
 

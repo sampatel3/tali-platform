@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 
 from ...actions import advance_stage as advance_stage_action
 from ...actions.types import Actor
+from ...candidate_search.role_scope import resolve_candidate_role_scope
 from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import (
     _enforce_artifact_first_task,
@@ -40,7 +41,7 @@ from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.application_interview import ApplicationInterview
 from ...models.cv_score_job import CvScoreJob, SCORE_JOB_DONE, SCORE_JOB_ERROR, SCORE_JOB_PENDING, SCORE_JOB_RUNNING
 from ...models.organization import Organization
-from ...models.role import Role
+from ...models.role import ROLE_KIND_SISTER, Role
 from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.task import Task
 from ...models.user import User
@@ -111,14 +112,27 @@ from ...services.interview_support_service import refresh_application_interview_
 from ...services.pre_screening_service import refresh_pre_screening_fields
 from ...services.pending_decision_projection import pending_decision_map as _pending_decision_map
 from ...services.related_role_application_runtime import project_related_role_page
-from ...services.taali_scoring import normalize_score_100
+from ...services.related_role_direct_membership import (
+    create_direct_related_membership,
+)
 from ...services.sister_role_service import project_sister_application
 from ...services.workable_op_runner import AtsJobRunPersistenceError
 from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
     revert_candidate_disqualification_in_workable,
 )
-from .application_search_support import enforce_provider_mode_request, page_retrieval_payload, preferred_application_order, release_metadata, run_search_for_route
+from .application_search_support import (
+    PIPELINE_STAGE_VALUES,
+    application_order_columns as _application_order_columns,
+    apply_application_source_filter as _apply_application_source_filter,
+    build_stage_counts as _build_stage_counts,
+    effective_application_outcome_sql as _effective_application_outcome_sql,
+    effective_pipeline_stage_sql as _effective_pipeline_stage_sql,
+    empty_stage_counts as _empty_stage_counts,
+    normalize_taali_score_for_filter as _normalize_taali_score_for_filter,
+    parse_choice_csv_filter as _parse_choice_csv_filter,
+)
+from .global_application_search_service import list_applications_global_data
 from .search_canary_auth import SearchCanaryPrincipal, get_applications_search_principal
 from .role_support import (
     application_list_payload,
@@ -148,14 +162,44 @@ from .pipeline_service import (
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
 
+
+def _direct_related_role_id(
+    db: Session,
+    *,
+    organization_id: int,
+    application_id: int,
+) -> int | None:
+    """Return the explicit role for a direct related-role application."""
+
+    return (
+        db.query(Role.id)
+        .join(
+            CandidateApplication,
+            CandidateApplication.role_id == Role.id,
+        )
+        .join(
+            SisterRoleEvaluation,
+            and_(
+                SisterRoleEvaluation.role_id == Role.id,
+                SisterRoleEvaluation.source_application_id
+                == CandidateApplication.id,
+                SisterRoleEvaluation.deleted_at.is_(None),
+            ),
+        )
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(organization_id),
+            Role.organization_id == int(organization_id),
+            Role.role_kind == "sister",
+            Role.deleted_at.is_(None),
+        )
+        .scalar()
+    )
+
 # `sourced` is a valid filterable stage (Phase 3a prospects) so the Home hub's
 # Sourced tracker can request pipeline_stage=sourced without a 422. It stays a
 # read-only filter here — sourced apps are un-scored and never in the decision
 # queue (see pipeline_service.PIPELINE_STAGES).
-PIPELINE_STAGE_VALUES = {"sourced", "applied", "invited", "in_assessment", "review"}
-APPLICATION_OUTCOME_VALUES = {"open", "rejected", "withdrawn", "hired"}
-
-
 def _require_application_job_permission(
     db: Session,
     *,
@@ -387,168 +431,6 @@ def _apply_min_taali_score_filter(
     return filtered
 
 
-def _normalize_taali_score_for_filter(value: float | int | None) -> float | None:
-    # Taali/Role-fit columns are 0-100 by definition. The old ``numeric
-    # <= 10 → ×10`` heuristic silently inflated real weak scores (e.g. 9.6
-    # → 96) so weak candidates passed ``min_taali_score`` filters they
-    # should have failed. Route through the shared normalizer instead.
-    return normalize_score_100(value)
-
-
-def _parse_csv_tokens(raw_value: str | None) -> list[str]:
-    if raw_value is None:
-        return []
-    return [
-        token.strip()
-        for token in str(raw_value).split(",")
-        if token and token.strip()
-    ]
-
-
-def _parse_int_csv_filter(raw_value: str | None, *, field_name: str) -> list[int]:
-    tokens = _parse_csv_tokens(raw_value)
-    values: list[int] = []
-    for token in tokens:
-        try:
-            parsed = int(token)
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid {field_name} value '{token}'. Expected comma-separated integers.",
-            ) from None
-        if parsed <= 0:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid {field_name} value '{token}'. Expected positive integers.",
-            )
-        values.append(parsed)
-    return values
-
-
-def _parse_choice_csv_filter(raw_value: str | None, *, allowed: set[str], field_name: str) -> list[str]:
-    tokens = [token.lower() for token in _parse_csv_tokens(raw_value)]
-    if not tokens:
-        return []
-    if "all" in tokens:
-        return []
-    invalid = [token for token in tokens if token not in allowed]
-    if invalid:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid {field_name} value(s): {', '.join(sorted(set(invalid)))}",
-        )
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for token in tokens:
-        if token in seen:
-            continue
-        seen.add(token)
-        ordered.append(token)
-    return ordered
-
-
-def _empty_stage_counts() -> dict[str, int]:
-    return {
-        "all": 0,
-        "applied": 0,
-        "invited": 0,
-        "in_assessment": 0,
-        "review": 0,
-    }
-
-
-def _build_stage_counts(stage_rows: list[tuple[str | None, int]]) -> dict[str, int]:
-    counts = _empty_stage_counts()
-    for stage, total in stage_rows:
-        key = str(stage or "").strip().lower()
-        if key in counts:
-            counts[key] = int(total or 0)
-    counts["all"] = int(sum(counts[key] for key in ("applied", "invited", "in_assessment", "review")))
-    return counts
-
-
-def _effective_pipeline_stage_sql(*, is_sister: bool):
-    """Return the stage visible in the requested role's local pipeline."""
-
-    if not is_sister:
-        return CandidateApplication.pipeline_stage
-    return case(
-        (
-            func.lower(
-                func.trim(func.coalesce(CandidateApplication.pipeline_stage, ""))
-            )
-            == "advanced",
-            "advanced",
-        ),
-        else_=func.coalesce(SisterRoleEvaluation.pipeline_stage, "applied"),
-    )
-
-
-def _application_order_columns(sort_by: str, sort_order: str):
-    reverse = sort_order != "asc"
-    if sort_by == "pre_screen_score":
-        primary = func.coalesce(
-            CandidateApplication.pre_screen_score_100,
-            -1.0 if reverse else 101.0,
-        )
-    elif sort_by == "taali_score":
-        # Coalesce to pre-screen so the sort matches the unified score column.
-        primary = func.coalesce(
-            CandidateApplication.taali_score_cache_100,
-            CandidateApplication.pre_screen_score_100,
-            -1.0 if reverse else 101.0,
-        )
-    elif sort_by == "cv_match_score":
-        primary = func.coalesce(
-            CandidateApplication.cv_match_score,
-            -1.0 if reverse else 101.0,
-        )
-    elif sort_by == "cv_match_scored_at":
-        # "Newest scored first" — recently scored apps float to the top.
-        # NULLs sort last in either direction so unscored candidates don't
-        # crowd the top during an active batch.
-        unscored_anchor = (
-            datetime.min.replace(tzinfo=timezone.utc)
-            if reverse
-            else datetime.max.replace(tzinfo=timezone.utc)
-        )
-        primary = func.coalesce(
-            CandidateApplication.cv_match_scored_at,
-            unscored_anchor,
-        )
-    elif sort_by == "created_at":
-        primary = CandidateApplication.created_at
-    else:
-        primary = func.coalesce(
-            CandidateApplication.pipeline_stage_updated_at,
-            CandidateApplication.updated_at,
-            CandidateApplication.created_at,
-        )
-    if reverse:
-        return [primary.desc(), CandidateApplication.created_at.desc(), CandidateApplication.id.desc()]
-    return [primary.asc(), CandidateApplication.created_at.asc(), CandidateApplication.id.asc()]
-
-
-def _apply_application_source_filter(query, source: str | None):
-    normalized = str(source or "").strip().lower()
-    if normalized == "workable":
-        return query.filter(
-            or_(
-                CandidateApplication.source == "workable",
-                CandidateApplication.workable_sourced.is_(True),
-            )
-        )
-    if normalized == "manual":
-        return query.filter(
-            CandidateApplication.source != "workable",
-            or_(
-                CandidateApplication.workable_sourced.is_(False),
-                CandidateApplication.workable_sourced.is_(None),
-            ),
-        )
-    return query
-
-
 def _create_application_assessment(
     *,
     app: CandidateApplication,
@@ -742,6 +624,12 @@ def create_sourced_candidate(
     )
     if existing is not None and existing.deleted_at is None:
         # Already on the role (sourced or further along) — idempotent no-op.
+        if str(role.role_kind or "") == ROLE_KIND_SISTER:
+            create_direct_related_membership(
+                db,
+                role=role,
+                application=existing,
+            )
         db.commit()
         app = get_application(existing.id, org_id, db)
         return application_to_response(app)
@@ -784,6 +672,12 @@ def create_sourced_candidate(
             actor_id=int(current_user.id),
             reason="Sourced candidate added to role",
         )
+        if str(role.role_kind or "") == ROLE_KIND_SISTER:
+            create_direct_related_membership(
+                db,
+                role=role,
+                application=app,
+            )
         db.commit()
     except IntegrityError:
         # Concurrent add for the same (candidate, role): adopt the winning row.
@@ -801,6 +695,13 @@ def create_sourced_candidate(
         if winner is None:
             raise HTTPException(status_code=409, detail="Could not add sourced candidate")
         app = winner
+        if str(role.role_kind or "") == ROLE_KIND_SISTER:
+            create_direct_related_membership(
+                db,
+                role=role,
+                application=app,
+            )
+            db.commit()
 
     # score=False — a sourced prospect is un-scored; this only schedules the
     # cheap, no-Claude bookkeeping. The auto-reject task itself hard-skips a
@@ -887,8 +788,12 @@ def list_role_applications(
     current_user: User = Depends(get_current_user),
 ):
     role = get_role(role_id, current_user.organization_id, db)
-    is_sister = bool(getattr(role, "ats_owner_role_id", None))
-    applications_role_id = int(role.ats_owner_role_id or role.id)
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(current_user.organization_id),
+        role_id=int(role.id),
+    )
+    is_sister = role_scope.is_related
     query = (
         db.query(CandidateApplication)
         .options(
@@ -914,27 +819,36 @@ def list_role_applications(
         )
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == applications_role_id,
-            CandidateApplication.deleted_at.is_(None),
         )
     )
     if is_sister:
-        query = query.outerjoin(
-            SisterRoleEvaluation,
-            and_(
-                SisterRoleEvaluation.role_id == role.id,
-                SisterRoleEvaluation.source_application_id == CandidateApplication.id,
-            ),
+        query = role_scope.scope_roster(query)
+    else:
+        query = role_scope.scope_roster(query).filter(
+            CandidateApplication.deleted_at.is_(None)
         )
     if source:
         query = query.filter(CandidateApplication.source == source)
     if status and status.strip().lower() != "all":
-        query = query.filter(CandidateApplication.status.ilike(status.strip()))
+        if is_sister:
+            effective_status = case(
+                (
+                    _effective_application_outcome_sql(is_sister=True) != "open",
+                    _effective_application_outcome_sql(is_sister=True),
+                ),
+                else_=_effective_pipeline_stage_sql(is_sister=True),
+            )
+            query = query.filter(effective_status == status.strip().lower())
+        else:
+            query = query.filter(CandidateApplication.status.ilike(status.strip()))
     if pipeline_stage and pipeline_stage.strip().lower() != "all":
         stage_column = _effective_pipeline_stage_sql(is_sister=is_sister)
         query = query.filter(stage_column == pipeline_stage.strip().lower())
     if application_outcome and application_outcome.strip().lower() != "all":
-        query = query.filter(CandidateApplication.application_outcome == application_outcome.strip().lower())
+        query = query.filter(
+            _effective_application_outcome_sql(is_sister=is_sister)
+            == application_outcome.strip().lower()
+        )
     if min_pre_screen_score is not None:
         threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
         if threshold is not None:
@@ -944,8 +858,24 @@ def list_role_applications(
             )
             query = query.filter(score_column >= threshold)
     if min_rank_score is not None:
-        query = query.filter(CandidateApplication.rank_score >= min_rank_score)
+        rank_column = (
+            SisterRoleEvaluation.role_fit_score
+            if is_sister
+            else CandidateApplication.rank_score
+        )
+        query = query.filter(rank_column >= min_rank_score)
     if min_workable_score is not None:
+        if is_sister:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "related_role_owner_score_unavailable",
+                    "message": (
+                        "Workable score belongs to the ATS owner role and cannot "
+                        "filter this role's independent candidate pool."
+                    ),
+                },
+            )
         query = query.filter(CandidateApplication.workable_score >= min_workable_score)
     if min_cv_match_score is not None:
         threshold = float(min_cv_match_score)
@@ -957,18 +887,35 @@ def list_role_applications(
         )
         query = query.filter(score_column >= threshold)
 
-    sort_col = (
-        SisterRoleEvaluation.role_fit_score
-        if is_sister and sort_by in {
-            "pre_screen_score", "rank_score", "cv_match_score", "taali_score"
-        }
-        else _SORT_COLUMN_MAP.get(sort_by, CandidateApplication.created_at)
-    )
+    if is_sister and sort_by == "workable_score":
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "related_role_owner_score_unavailable",
+                "message": (
+                    "Workable score belongs to the ATS owner role and cannot "
+                    "rank this role's independent candidate pool."
+                ),
+            },
+        )
+    if is_sister:
+        sort_col = (
+            SisterRoleEvaluation.role_fit_score
+            if sort_by
+            in {"pre_screen_score", "rank_score", "cv_match_score", "taali_score"}
+            else SisterRoleEvaluation.scored_at
+            if sort_by == "cv_match_scored_at"
+            else SisterRoleEvaluation.created_at
+        )
+        tie_breaker = SisterRoleEvaluation.created_at
+    else:
+        sort_col = _SORT_COLUMN_MAP.get(sort_by, CandidateApplication.created_at)
+        tie_breaker = CandidateApplication.created_at
     direction = desc if sort_order != "asc" else asc
     # NULLS LAST so unscored apps don't dominate the top of a desc sort.
     query = query.order_by(
         direction(sort_col).nullslast(),
-        direction(CandidateApplication.created_at).nullslast(),
+        direction(tie_breaker).nullslast(),
     )
 
     apps = query.offset(offset).limit(limit).all()
@@ -1017,41 +964,58 @@ def get_application_detail(
     view_role_id: int | None = Query(
         default=None,
         ge=1,
-        description="Project a coupled sister-role score while retaining the source application id",
+        description=(
+            "Project an independent related-role membership while retaining "
+            "the source evidence application id"
+        ),
     ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Get a single application; optionally include full cv_text for CV viewer sidebar."""
-    app = get_application(application_id, current_user.organization_id, db)
-    payload = application_detail_payload(app, include_cv_text=include_cv_text)
+    role_scope = None
+    evaluation = None
     if view_role_id is not None:
-        sister = (
-            db.query(Role)
-            .filter(
-                Role.id == view_role_id,
-                Role.organization_id == current_user.organization_id,
-                Role.ats_owner_role_id == app.role_id,
-                Role.deleted_at.is_(None),
+        try:
+            role_scope = resolve_candidate_role_scope(
+                db,
+                organization_id=int(current_user.organization_id),
+                role_id=int(view_role_id),
             )
-            .first()
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="Application not found") from exc
+        visible = role_scope.scope_visible_roster(
+            db.query(CandidateApplication.id).filter(
+                CandidateApplication.id == int(application_id),
+                CandidateApplication.organization_id
+                == int(current_user.organization_id),
+            )
+        ).scalar()
+        if visible is None:
+            raise HTTPException(status_code=404, detail="Application not found")
+        app = get_application(
+            application_id,
+            current_user.organization_id,
+            db,
+            include_deleted=role_scope.is_related,
         )
-        if sister is not None:
-            evaluation = (
-                db.query(SisterRoleEvaluation)
-                .filter(
-                    SisterRoleEvaluation.role_id == sister.id,
-                    SisterRoleEvaluation.source_application_id == app.id,
-                )
-                .first()
-            )
-            payload = project_sister_application(
-                payload,
-                sister_role=sister,
-                owner_role=app.role,
-                evaluation=evaluation,
-                db=db,
-            )
+        if role_scope.is_related:
+            evaluation = role_scope.evaluation_map(
+                db,
+                application_ids=[int(app.id)],
+            ).get(int(app.id))
+    else:
+        app = get_application(application_id, current_user.organization_id, db)
+    payload = application_detail_payload(app, include_cv_text=include_cv_text)
+    if role_scope is not None and role_scope.is_related:
+        assert role_scope.requested_role is not None
+        payload = project_sister_application(
+            payload,
+            sister_role=role_scope.requested_role,
+            owner_role=role_scope.application_role,
+            evaluation=evaluation,
+            db=db,
+        )
     return ApplicationDetailResponse(**payload)
 
 
@@ -1427,6 +1391,27 @@ def update_application(
         permission=JobPermission.EDIT_ROLE,
     )
     updates = data.model_dump(exclude_unset=True)
+    direct_related_role_id = _direct_related_role_id(
+        db,
+        organization_id=int(current_user.organization_id),
+        application_id=int(application_id),
+    )
+    if direct_related_role_id is not None and any(
+        key in updates
+        for key in ("status", "pipeline_stage", "application_outcome")
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "related_role_state_requires_role_endpoint",
+                "message": (
+                    "Related-role stage and outcome are role-owned. Use the "
+                    "dedicated stage or outcome action so role-local history "
+                    "and concurrency checks are preserved."
+                ),
+                "role_id": int(direct_related_role_id),
+            },
+        )
     try:
         ensure_pipeline_fields(app)
         initialize_pipeline_event_if_missing(
@@ -1609,359 +1594,31 @@ def list_applications_global(
     db: Session = Depends(get_db),
     current_user: User | SearchCanaryPrincipal = Depends(get_applications_search_principal),
 ):
-    started_at = perf_counter()
-
-    # Parse role scope before provider work and meter unambiguous single roles.
-    requested_role_ids = _parse_int_csv_filter(role_ids, field_name="role_ids")
-    if role_id is not None:
-        requested_role_ids = [int(role_id), *requested_role_ids]
-    unique_role_ids = sorted(set(requested_role_ids))
-
-    # Parse deterministic scope before provider work, then reuse the same SQL
-    # boundary for retrieval and the response so graph recall cannot widen it.
-    requested_outcomes = _parse_choice_csv_filter(
-        application_outcomes,
-        allowed=APPLICATION_OUTCOME_VALUES,
-        field_name="application_outcomes",
+    return list_applications_global_data(
+        db=db,
+        current_user=current_user,
+        role_id=role_id,
+        role_ids=role_ids,
+        source=source,
+        pipeline_stage=pipeline_stage,
+        pipeline_stages=pipeline_stages,
+        application_outcome=application_outcome,
+        application_outcomes=application_outcomes,
+        assessment_status=assessment_status,
+        search=search,
+        nl_query=nl_query,
+        view=view,
+        rerank=rerank,
+        provider_mode=provider_mode,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        min_pre_screen_score=min_pre_screen_score,
+        min_taali_score=min_taali_score,
+        include_stage_counts=include_stage_counts,
+        include_cv_text=include_cv_text,
+        limit=limit,
+        offset=offset,
     )
-    single_outcome = str(application_outcome or "").strip().lower()
-    if not single_outcome and not requested_outcomes:
-        single_outcome = "open"
-    if single_outcome and single_outcome != "all":
-        if single_outcome not in APPLICATION_OUTCOME_VALUES:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid application_outcome value '{single_outcome}'",
-            )
-        if single_outcome not in requested_outcomes:
-            requested_outcomes.append(single_outcome)
-
-    requested_stages = _parse_choice_csv_filter(
-        pipeline_stages,
-        allowed=PIPELINE_STAGE_VALUES,
-        field_name="pipeline_stages",
-    )
-    single_stage = str(pipeline_stage or "").strip().lower()
-    if single_stage and single_stage != "all":
-        if single_stage not in PIPELINE_STAGE_VALUES:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Invalid pipeline_stage value '{single_stage}'",
-            )
-        if single_stage not in requested_stages:
-            requested_stages.append(single_stage)
-
-    threshold = _normalize_taali_score_for_filter(min_taali_score)
-    pre_screen_threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
-    requested_assessment_statuses = _parse_choice_csv_filter(
-        assessment_status,
-        allowed={"pending", "in_progress", "completed", "expired"},
-        field_name="assessment_status",
-    )
-    status_by_value = {item.value: item for item in AssessmentStatus}
-    wanted_assessment_statuses = [
-        status_by_value[item]
-        for item in requested_assessment_statuses
-        if item in status_by_value
-    ]
-    if "completed" in requested_assessment_statuses:
-        wanted_assessment_statuses.append(AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT)
-
-    base_scope_query = db.query(CandidateApplication).filter(
-        CandidateApplication.organization_id == current_user.organization_id,
-        CandidateApplication.deleted_at.is_(None),
-    )
-    if len(unique_role_ids) == 1:
-        base_scope_query = base_scope_query.filter(
-            CandidateApplication.role_id == unique_role_ids[0]
-        )
-    elif unique_role_ids:
-        base_scope_query = base_scope_query.filter(
-            CandidateApplication.role_id.in_(unique_role_ids)
-        )
-    base_scope_query = _apply_application_source_filter(base_scope_query, source)
-    if requested_outcomes:
-        base_scope_query = base_scope_query.filter(
-            CandidateApplication.application_outcome.in_(requested_outcomes)
-        )
-    if search and not (nl_query or "").strip():
-        term = f"%{search.strip()}%"
-        base_scope_query = (
-            base_scope_query.join(
-                Candidate,
-                Candidate.id == CandidateApplication.candidate_id,
-            )
-            .outerjoin(Role, Role.id == CandidateApplication.role_id)
-            .filter(
-                Candidate.full_name.ilike(term)
-                | Candidate.email.ilike(term)
-                | Candidate.position.ilike(term)
-                | Role.name.ilike(term)
-            )
-        )
-    if threshold is not None:
-        base_scope_query = base_scope_query.filter(
-            CandidateApplication.taali_score_cache_100.is_not(None),
-            CandidateApplication.taali_score_cache_100 >= threshold,
-        )
-    if pre_screen_threshold is not None:
-        base_scope_query = base_scope_query.filter(
-            CandidateApplication.pre_screen_score_100.is_not(None),
-            CandidateApplication.pre_screen_score_100 >= pre_screen_threshold,
-        )
-
-    filtered_scope_query = base_scope_query
-    if requested_stages:
-        filtered_scope_query = filtered_scope_query.filter(
-            CandidateApplication.pipeline_stage.in_(requested_stages)
-        )
-    if wanted_assessment_statuses:
-        # max(id) selects the latest non-voided assessment across both DBs.
-        latest_assessment_id = (
-            db.query(func.max(Assessment.id))
-            .filter(
-                Assessment.application_id == CandidateApplication.id,
-                Assessment.is_voided.isnot(True),
-            )
-            .correlate(CandidateApplication)
-            .scalar_subquery()
-        )
-        filtered_scope_query = filtered_scope_query.filter(
-            db.query(Assessment.id)
-            .filter(
-                Assessment.id == latest_assessment_id,
-                Assessment.status.in_(wanted_assessment_statuses),
-            )
-            .correlate(CandidateApplication)
-            .exists()
-        )
-
-    nl_query_clean = (nl_query or "").strip()
-    enforce_provider_mode_request(
-        nl_query=nl_query_clean, provider_mode=provider_mode, rerank=rerank, view=view
-    )
-    parsed_filter_payload = None
-    nl_warnings: list[dict] = []
-    nl_subgraph_payload = None
-    nl_rerank_applied = False
-    nl_coverage_payload = None
-    nl_retrieval_payload = None
-    nl_search_plan_payload = None
-    nl_verification_payload: list[dict] = []
-    nl_ids: list[int] = []
-    if nl_query_clean:
-        from ...candidate_search import rate_limit as nl_rate_limit
-        from ...candidate_search.runner import MAX_RETRIEVAL_LIMIT
-
-        if not nl_rate_limit.check_and_record(int(current_user.organization_id)):
-            raise HTTPException(
-                status_code=429,
-                detail="Too many natural-language queries — try again in a minute.",
-            )
-
-        nl_base = filtered_scope_query.order_by(*preferred_application_order())
-        nl_result = run_search_for_route(
-            db=db,
-            organization_id=int(current_user.organization_id),
-            role_id=unique_role_ids[0] if len(unique_role_ids) == 1 else None,
-            nl_query=nl_query_clean,
-            base_query=nl_base,
-            rerank_enabled=bool(rerank),
-            include_subgraph=(view == "graph"),
-            retrieval_limit=MAX_RETRIEVAL_LIMIT,
-            provider_mode=provider_mode,
-        )
-        nl_ids = list(
-            dict.fromkeys(
-                int(application_id)
-                for application_id in nl_result.application_ids
-                if int(application_id) > 0
-            )
-        )
-        parsed_filter_payload = nl_result.parsed_filter.model_dump(mode="json")
-        nl_warnings = [w.model_dump(mode="json") for w in nl_result.warnings]
-        nl_rerank_applied = nl_result.rerank_applied
-        nl_verification_payload = [
-            item.model_dump(mode="json")
-            for item in nl_result.verification_results
-        ]
-        nl_coverage_payload = {
-            "database_matches": (
-                nl_result.database_matches
-                if nl_result.database_matches is not None
-                else len(nl_result.application_ids)
-            ),
-            "retrieval_matches": (
-                nl_result.retrieval_matches
-                if nl_result.retrieval_matches is not None
-                else len(nl_result.application_ids)
-            ),
-            "deep_checked": nl_result.deep_checked,
-            "evidence_succeeded": nl_result.evidence_succeeded,
-            "evidence_failed": nl_result.evidence_failed,
-            "qualified": nl_result.qualified,
-            "capped": nl_result.capped,
-            "exhaustive": nl_result.exhaustive,
-        }
-        if getattr(nl_result, "is_exact_empty", None) is not None:
-            nl_coverage_payload["is_exact_empty"] = bool(nl_result.is_exact_empty)
-        nl_retrieval_payload = (
-            nl_result.retrieval.model_dump(mode="json")
-            if nl_result.retrieval is not None
-            else None
-        )
-        nl_search_plan_payload = nl_result.search_plan
-        nl_subgraph_payload = (
-            nl_result.subgraph.model_dump(mode="json")
-            if nl_result.subgraph is not None
-            else None
-        )
-
-    # Applying result ids to the same scope is a second authorization check.
-    base_query = base_scope_query
-    filtered_query = filtered_scope_query
-    if nl_query_clean:
-        constrained_ids = nl_ids or [-1]
-        base_query = base_query.filter(
-            CandidateApplication.id.in_(constrained_ids)
-        )
-        filtered_query = filtered_query.filter(
-            CandidateApplication.id.in_(constrained_ids)
-        )
-
-    stage_counts = _empty_stage_counts()
-    if include_stage_counts:
-        stage_rows = (
-            base_query.with_entities(
-                CandidateApplication.pipeline_stage,
-                func.count(CandidateApplication.id),
-            )
-            .group_by(CandidateApplication.pipeline_stage)
-            .all()
-        )
-        stage_counts = _build_stage_counts(stage_rows)
-
-    if nl_query_clean:
-        # Preserve person-deduplicated runner relevance after pipeline filters.
-        eligible_ids = {
-            int(row_id)
-            for (row_id,) in filtered_query.with_entities(CandidateApplication.id).all()
-        }
-        ordered_ids = [app_id for app_id in nl_ids if app_id in eligible_ids]
-        total = len(ordered_ids)
-        page_ids = ordered_ids[offset : offset + limit]
-        page_id_set = set(page_ids)
-        nl_verification_payload = [
-            item
-            for item in nl_verification_payload
-            if int(item["application_id"]) in page_id_set
-        ]
-        if nl_coverage_payload is not None:
-            nl_coverage_payload["filtered_matches"] = total
-        if nl_retrieval_payload is not None:
-            nl_retrieval_payload = page_retrieval_payload(
-                nl_retrieval_payload,
-                eligible_application_ids=ordered_ids,
-                page_application_ids=page_ids,
-                retrieval_matches=int(
-                    (nl_coverage_payload or {}).get("retrieval_matches") or 0
-                ),
-            )
-    else:
-        total = filtered_query.order_by(None).count()
-        page_ids = [
-            int(row_id)
-            for (row_id,) in (
-                filtered_query.with_entities(CandidateApplication.id)
-                .order_by(*_application_order_columns(sort_by, sort_order))
-                .offset(offset)
-                .limit(limit)
-                .all()
-            )
-        ]
-    rows: list[CandidateApplication] = []
-    if page_ids:
-        fetched = (
-            db.query(CandidateApplication)
-            .options(
-                joinedload(CandidateApplication.candidate),
-                joinedload(CandidateApplication.organization),
-                joinedload(CandidateApplication.role),
-                # selectinload avoids the multi-collection cartesian product.
-                # assessments stay loaded (no task join) — _last_activity_at
-                # iterates them for the "Last updated" column; dropping them
-                # would reintroduce a per-row lazy-load N+1.
-                selectinload(CandidateApplication.interviews),
-                selectinload(CandidateApplication.assessments).joinedload(
-                    Assessment.task
-                ),
-            )
-            .filter(CandidateApplication.id.in_(page_ids))
-            .all()
-        )
-        by_id = {int(item.id): item for item in fetched}
-        rows = [by_id[row_id] for row_id in page_ids if row_id in by_id]
-
-    items = [
-        application_list_payload(app, include_cv_text=include_cv_text)
-        for app in rows
-    ]
-    if nl_query_clean and nl_verification_payload:
-        verification_by_id = {
-            int(item["application_id"]): item
-            for item in nl_verification_payload
-        }
-        for app, item in zip(rows, items):
-            verification = verification_by_id.get(int(app.id))
-            if verification is not None:
-                item["deep_verification"] = verification
-    duration_ms = (perf_counter() - started_at) * 1000.0
-    logged_role_ids = sorted(set(requested_role_ids))
-    logger.info(
-        (
-            "list_applications_global org_id=%s role_id=%s stage=%s outcome=%s search=%s "
-            "source=%s total=%s limit=%s offset=%s sort_by=%s sort_order=%s include_stage_counts=%s duration_ms=%.1f request_id=%s"
-        ),
-        current_user.organization_id,
-        ",".join(str(item) for item in logged_role_ids) or None,
-        ",".join(requested_stages) or pipeline_stage,
-        ",".join(requested_outcomes) or single_outcome or "all",
-        bool(search and search.strip()),
-        source or "all",
-        total,
-        limit,
-        offset,
-        sort_by,
-        sort_order,
-        include_stage_counts,
-        duration_ms,
-        get_request_id(),
-    )
-    response_payload = {
-        "items": items,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
-    if include_stage_counts:
-        response_payload["stage_counts"] = stage_counts
-    response_payload.update(
-        release_metadata(provider_mode=provider_mode, nl_query=nl_query_clean)
-    )
-    if nl_query_clean:
-        response_payload["parsed_filter"] = parsed_filter_payload
-        response_payload["nl_warnings"] = nl_warnings
-        response_payload["nl_rerank_applied"] = nl_rerank_applied
-        response_payload["nl_provider_mode"] = provider_mode
-        response_payload["nl_coverage"] = nl_coverage_payload
-        if nl_retrieval_payload is not None:
-            response_payload["nl_retrieval"] = nl_retrieval_payload
-        if nl_search_plan_payload is not None:
-            response_payload["nl_search_plan"] = nl_search_plan_payload
-        response_payload["nl_verification"] = nl_verification_payload
-        if view == "graph" and nl_subgraph_payload is not None:
-            response_payload["subgraph"] = nl_subgraph_payload
-    return response_payload
 
 
 @router.get("/roles/{role_id}/pipeline")
@@ -1987,25 +1644,27 @@ def get_role_pipeline(
 ):
     started_at = perf_counter()
     role = get_role(role_id, current_user.organization_id, db)
-    is_sister = bool(getattr(role, "ats_owner_role_id", None))
-    applications_role_id = int(role.ats_owner_role_id or role.id)
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(current_user.organization_id),
+        role_id=int(role.id),
+    )
+    is_sister = role_scope.is_related
     base_query = (
         db.query(CandidateApplication)
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == applications_role_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
         )
     )
     if is_sister:
-        base_query = base_query.outerjoin(
-            SisterRoleEvaluation,
-            and_(
-                SisterRoleEvaluation.role_id == role.id,
-                SisterRoleEvaluation.source_application_id == CandidateApplication.id,
-            ),
+        base_query = role_scope.scope_roster(base_query)
+    else:
+        base_query = role_scope.scope_roster(base_query).filter(
+            CandidateApplication.deleted_at.is_(None)
         )
+    base_query = base_query.filter(
+        _effective_application_outcome_sql(is_sister=is_sister) == "open"
+    )
     effective_stage = _effective_pipeline_stage_sql(is_sister=is_sister)
     base_query = _apply_application_source_filter(base_query, source)
     if search:
@@ -2065,14 +1724,23 @@ def get_role_pipeline(
         filtered_query = filtered_query.filter(effective_stage.in_(requested_stages))
 
     total = filtered_query.order_by(None).count()
-    order_columns = (
-        (
-            (asc if sort_order == "asc" else desc)(SisterRoleEvaluation.role_fit_score).nullslast(),
-            (asc if sort_order == "asc" else desc)(CandidateApplication.created_at).nullslast(),
+    if is_sister:
+        related_sort_column = (
+            SisterRoleEvaluation.role_fit_score
+            if sort_by in {"pre_screen_score", "taali_score", "cv_match_score"}
+            else SisterRoleEvaluation.scored_at
+            if sort_by == "cv_match_scored_at"
+            else SisterRoleEvaluation.created_at
+            if sort_by == "created_at"
+            else SisterRoleEvaluation.pipeline_stage_updated_at
         )
-        if is_sister and sort_by in {"pre_screen_score", "taali_score", "cv_match_score"}
-        else _application_order_columns(sort_by, sort_order)
-    )
+        related_direction = asc if sort_order == "asc" else desc
+        order_columns = (
+            related_direction(related_sort_column).nullslast(),
+            related_direction(SisterRoleEvaluation.created_at).nullslast(),
+        )
+    else:
+        order_columns = _application_order_columns(sort_by, sort_order)
     page_ids = [
         int(row_id)
         for (row_id,) in (
@@ -2120,24 +1788,36 @@ def get_role_pipeline(
         if include_stage_counts
         else int(base_query.order_by(None).count())
     )
-    last_candidate_activity_at = (
-        db.query(
-            func.max(
-                func.coalesce(
-                    CandidateApplication.pipeline_stage_updated_at,
-                    CandidateApplication.updated_at,
-                    CandidateApplication.created_at,
-                )
-            )
+    activity_timestamp = (
+        func.coalesce(
+            SisterRoleEvaluation.application_outcome_updated_at,
+            SisterRoleEvaluation.pipeline_stage_updated_at,
+            SisterRoleEvaluation.updated_at,
+            SisterRoleEvaluation.created_at,
         )
+        if is_sister
+        else func.coalesce(
+            CandidateApplication.pipeline_stage_updated_at,
+            CandidateApplication.updated_at,
+            CandidateApplication.created_at,
+        )
+    )
+    activity_query = (
+        db.query(func.max(activity_timestamp))
+        .select_from(CandidateApplication)
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == applications_role_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
         )
-        .scalar()
     )
+    if is_sister:
+        activity_query = role_scope.scope_roster(activity_query)
+    else:
+        activity_query = role_scope.scope_roster(activity_query).filter(
+            CandidateApplication.deleted_at.is_(None)
+        )
+    last_candidate_activity_at = activity_query.filter(
+        _effective_application_outcome_sql(is_sister=is_sister) == "open"
+    ).scalar()
     duration_ms = (perf_counter() - started_at) * 1000.0
     logger.info(
         (
@@ -2188,6 +1868,11 @@ def update_application_stage(
         application_id=application_id,
         permission=JobPermission.EDIT_ROLE,
     )
+    direct_related_role_id = _direct_related_role_id(
+        db,
+        organization_id=int(current_user.organization_id),
+        application_id=int(application_id),
+    )
     try:
         app = advance_stage_action.run(
             db,
@@ -2198,6 +1883,11 @@ def update_application_stage(
             reason=data.reason or "Recruiter stage update",
             idempotency_key=data.idempotency_key,
             expected_version=data.expected_version,
+            metadata=(
+                {"acting_role_id": int(direct_related_role_id)}
+                if direct_related_role_id is not None
+                else None
+            ),
         )
         db.commit()
         db.refresh(app)
@@ -2209,7 +1899,34 @@ def update_application_stage(
         raise HTTPException(status_code=500, detail="Failed to update application stage")
     # Stage transitions don't change scoring inputs; reuse the cached
     # interview pack so this PATCH doesn't trigger a Claude regeneration.
-    return application_to_response(app, use_cached_score_summary=True)
+    response = application_to_response(app, use_cached_score_summary=True)
+    if direct_related_role_id is None:
+        return response
+    evaluation = (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.role_id == int(direct_related_role_id),
+            SisterRoleEvaluation.source_application_id == int(app.id),
+            SisterRoleEvaluation.deleted_at.is_(None),
+        )
+        .one()
+    )
+    related_role = db.get(Role, int(direct_related_role_id))
+    owner_role = (
+        db.get(Role, int(related_role.ats_owner_role_id))
+        if related_role.ats_owner_role_id is not None
+        else None
+    )
+    return ApplicationResponse(
+        **project_sister_application(
+            response.model_dump(mode="python"),
+            sister_role=related_role,
+            owner_role=owner_role,
+            evaluation=evaluation,
+            db=db,
+            application=app,
+        )
+    )
 
 
 @router.patch("/applications/{application_id}/outcome", response_model=ApplicationResponse)
@@ -2219,6 +1936,16 @@ def update_application_outcome(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    if data.acting_role_id is None:
+        direct_related_role_id = _direct_related_role_id(
+            db,
+            organization_id=int(current_user.organization_id),
+            application_id=int(application_id),
+        )
+        if direct_related_role_id is not None:
+            data = data.model_copy(
+                update={"acting_role_id": int(direct_related_role_id)}
+            )
     app = require_application_action_permission(
         db,
         current_user=current_user,
@@ -2226,6 +1953,61 @@ def update_application_outcome(
         acting_role_id=data.acting_role_id,
         allow_closed_related=True,
     )
+    if data.acting_role_id is not None:
+        from ...services.related_role_action_service import (
+            transition_related_role_outcome_action,
+        )
+        from ...services.sister_role_projection import project_sister_application
+
+        try:
+            related_result = transition_related_role_outcome_action(
+                db,
+                application=app,
+                acting_role_id=int(data.acting_role_id),
+                to_outcome=data.application_outcome,
+                source="recruiter",
+                actor_type="recruiter",
+                actor_id=int(current_user.id),
+                reason=data.reason or "Recruiter outcome update",
+                metadata={"acting_role_id": int(data.acting_role_id)},
+                idempotency_key=data.idempotency_key,
+                expected_version=data.expected_version,
+            )
+            if related_result is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Related-role membership is unavailable",
+                )
+            db.commit()
+            db.refresh(related_result.evaluation)
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception:
+            db.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to update related-role candidate outcome",
+            )
+        owner_role = (
+            db.get(Role, int(related_result.role.ats_owner_role_id))
+            if related_result.role.ats_owner_role_id is not None
+            else None
+        )
+        payload = application_to_response(
+            app,
+            use_cached_score_summary=True,
+        ).model_dump(mode="python")
+        return ApplicationResponse(
+            **project_sister_application(
+                payload,
+                sister_role=related_result.role,
+                owner_role=owner_role,
+                evaluation=related_result.evaluation,
+                db=db,
+                application=app,
+            )
+        )
     ats_writeback_job_run_id = None
     try:
         ensure_pipeline_fields(app)
@@ -2436,31 +2218,47 @@ class ApplicationWorkableNoteRequest(BaseModel):
 def _queue_application_ats_move(
     *,
     app: CandidateApplication,
+    role_application: CandidateApplication | None = None,
+    related_role: Role | None = None,
+    related_evaluation: SisterRoleEvaluation | None = None,
     data: WorkableMoveStageRequest,
     db: Session,
     current_user: User,
     provider_name: str,
 ) -> ApplicationResponse:
-    """Initialize the local pipeline and queue one provider-routed move."""
+    """Queue one provider move while preserving the logical role boundary.
+
+    ``app`` is the ATS transport row. For a related role,
+    ``role_application`` is the independent roster row returned to the caller;
+    the ATS transport must never initialize or transition the owner funnel.
+    """
     target_stage = str(data.target_stage or "").strip()
-    try:
-        ensure_pipeline_fields(app)
-        initialize_pipeline_event_if_missing(
-            db,
-            app=app,
-            actor_type="system",
-            actor_id=current_user.id,
-            reason=f"Pipeline initialized before {provider_name.title()} hand-back",
-        )
+    response_application = role_application or app
+    is_related_action = related_role is not None
+    if not is_related_action:
+        try:
+            ensure_pipeline_fields(app)
+            initialize_pipeline_event_if_missing(
+                db,
+                app=app,
+                actor_type="system",
+                actor_id=current_user.id,
+                reason=f"Pipeline initialized before {provider_name.title()} hand-back",
+            )
+            db.commit()
+        except HTTPException:
+            db.rollback()
+            raise
+        except Exception:
+            db.rollback()
+            raise HTTPException(
+                status_code=500, detail="Failed to initialize pipeline for hand-back"
+            )
+    else:
+        # Authorization is read-only and uses no row lock. End the request
+        # transaction before creating/publishing the durable background op so
+        # a fast worker can take the canonical Application -> Membership locks.
         db.commit()
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception:
-        db.rollback()
-        raise HTTPException(
-            status_code=500, detail="Failed to initialize pipeline for hand-back"
-        )
 
     # The historical runner name is retained, but it resolves the connected
     # provider before executing. Bullhorn receives a Taali intent and reverse-
@@ -2478,6 +2276,7 @@ def _queue_application_ats_move(
                 "target_intent": target_stage if provider_name == "bullhorn" else None,
                 "reason": data.reason,
                 "acting_role_id": data.acting_role_id,
+                "role_application_id": int(response_application.id),
             },
         )
     except AtsJobRunPersistenceError:
@@ -2488,11 +2287,28 @@ def _queue_application_ats_move(
                 "temporarily unavailable. No provider update was sent; try again."
             ),
         )
-    db.refresh(app)
-    response = application_to_response(app, use_cached_score_summary=True)
-    response.ats_writeback_status = "queued"
-    response.ats_writeback_job_run_id = job_run_id
-    return response
+    db.refresh(response_application)
+    response_payload = application_to_response(
+        response_application, use_cached_score_summary=True
+    ).model_dump(mode="python")
+    if is_related_action:
+        assert related_role is not None and related_evaluation is not None
+        owner_role = (
+            db.get(Role, int(related_role.ats_owner_role_id))
+            if related_role.ats_owner_role_id is not None
+            else None
+        )
+        response_payload = project_sister_application(
+            response_payload,
+            sister_role=related_role,
+            owner_role=owner_role,
+            evaluation=related_evaluation,
+            db=db,
+            application=response_application,
+        )
+    response_payload["ats_writeback_status"] = "queued"
+    response_payload["ats_writeback_job_run_id"] = job_run_id
+    return ApplicationResponse(**response_payload)
 
 
 @router.post("/applications/{application_id}/ats/move-stage", response_model=ApplicationResponse)
@@ -2503,12 +2319,84 @@ def move_application_in_active_ats(
     current_user: User = Depends(get_current_user),
 ):
     """Hand a candidate back through the workspace's connected ATS provider."""
-    app = require_application_action_permission(
+    if data.acting_role_id is None:
+        direct_related_role_id = _direct_related_role_id(
+            db,
+            organization_id=int(current_user.organization_id),
+            application_id=int(application_id),
+        )
+        if direct_related_role_id is not None:
+            data = data.model_copy(
+                update={"acting_role_id": int(direct_related_role_id)}
+            )
+    role_application = require_application_action_permission(
         db,
         current_user=current_user,
         application_id=application_id,
         acting_role_id=data.acting_role_id,
     )
+    app = role_application
+    related_role = None
+    related_evaluation = None
+    if data.acting_role_id is not None:
+        from ...services.related_role_action_service import (
+            lock_related_role_membership,
+        )
+
+        locked = lock_related_role_membership(
+            db,
+            application=role_application,
+            acting_role_id=int(data.acting_role_id),
+            for_update=False,
+        )
+        if locked is None:
+            raise HTTPException(
+                status_code=409,
+                detail="Related-role membership is unavailable",
+            )
+        related_role, related_evaluation = locked
+        app = related_evaluation.ats_application
+        if app is None and (
+            int(role_application.role_id or 0)
+            == int(related_role.ats_owner_role_id or 0)
+        ):
+            # Rolling-deploy fallback for memberships created before the
+            # explicit ATS transport column was populated.
+            app = role_application
+        if app is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "related_role_ats_write_restricted",
+                    "message": "This candidate has no writable ATS application link.",
+                    "restriction_codes": ["ats_application_unlinked"],
+                },
+            )
+        from ...services.related_role_action_service import (
+            RelatedRoleActionContractError,
+            resolve_related_role_ats_action_context,
+        )
+
+        try:
+            related_context = resolve_related_role_ats_action_context(
+                db,
+                organization_id=int(current_user.organization_id),
+                ats_application=app,
+                acting_role_id=int(data.acting_role_id),
+                source_application_id=int(role_application.id),
+                for_update=False,
+            )
+        except RelatedRoleActionContractError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "related_role_ats_write_restricted",
+                    "message": str(exc),
+                },
+            ) from exc
+        assert related_context is not None
+        related_role = related_context.role
+        related_evaluation = related_context.evaluation
     org = (
         db.query(Organization)
         .filter(Organization.id == current_user.organization_id)
@@ -2545,6 +2433,9 @@ def move_application_in_active_ats(
         )
     return _queue_application_ats_move(
         app=app,
+        role_application=role_application,
+        related_role=related_role,
+        related_evaluation=related_evaluation,
         data=data,
         db=db,
         current_user=current_user,
@@ -2570,6 +2461,15 @@ def move_application_in_workable(
     list reflects reality (post-handover candidates leave the active
     ``review`` bucket).
     """
+    if data.acting_role_id is not None:
+        # Preserve the legacy URL, but route related-role writes through the
+        # provider-neutral authorization and explicit membership contract.
+        return move_application_in_active_ats(
+            application_id=application_id,
+            data=data,
+            db=db,
+            current_user=current_user,
+        )
     app = _require_application_job_permission(
         db,
         current_user=current_user,
@@ -2621,16 +2521,56 @@ def post_workable_candidate_note(
 @router.get("/applications/{application_id}/events", response_model=list[ApplicationEventResponse])
 def get_application_events(
     application_id: int,
+    role_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(current_user.organization_id),
+        )
+        .one_or_none()
+    )
+    if app is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    requested_role_id = int(role_id or app.role_id)
+    requested_role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=requested_role_id,
+        permission=JobPermission.VIEW,
+    )
+    if str(requested_role.role_kind or "") == "sister":
+        membership = (
+            db.query(SisterRoleEvaluation.id)
+            .filter(
+                SisterRoleEvaluation.organization_id
+                == int(current_user.organization_id),
+                SisterRoleEvaluation.role_id == requested_role_id,
+                SisterRoleEvaluation.source_application_id == int(app.id),
+                SisterRoleEvaluation.deleted_at.is_(None),
+            )
+            .scalar()
+        )
+        if membership is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Candidate is not a member of this role",
+            )
+    elif requested_role_id != int(app.role_id):
+        raise HTTPException(
+            status_code=404,
+            detail="Candidate is not a member of this role",
+        )
     return list_application_events(
         db,
         organization_id=current_user.organization_id,
         application_id=app.id,
+        role_id=requested_role_id,
         limit=limit,
         offset=offset,
     )
@@ -2651,12 +2591,37 @@ def add_application_note(
     ``get_application`` payload as standing per-candidate guidance. It is never
     sent to Workable, Bullhorn, or the candidate.
     """
-    app = _require_application_job_permission(
+    base_query = db.query(CandidateApplication).filter(
+        CandidateApplication.id == int(application_id),
+        CandidateApplication.organization_id == int(current_user.organization_id),
+    )
+    stored_application = base_query.one_or_none()
+    if stored_application is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+    requested_role_id = int(data.role_id or stored_application.role_id)
+    try:
+        role_scope = resolve_candidate_role_scope(
+            db,
+            organization_id=int(current_user.organization_id),
+            role_id=requested_role_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Candidate is not a member of this role",
+        ) from exc
+    require_job_permission(
         db,
         current_user=current_user,
-        application_id=application_id,
+        role_id=requested_role_id,
         permission=JobPermission.EDIT_ROLE,
     )
+    app = role_scope.scope_visible_roster(base_query).one_or_none()
+    if app is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Candidate is not a member of this role",
+        )
     try:
         event = create_recruiter_note(
             db,
@@ -2668,6 +2633,7 @@ def add_application_note(
             ranking=data.ranking,
             link_url=data.link_url,
             link_label=data.link_label,
+            role_id=requested_role_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

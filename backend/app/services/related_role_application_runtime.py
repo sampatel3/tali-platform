@@ -1,16 +1,49 @@
-"""Application/assessment seams for roles sharing one ATS application."""
+"""Application/assessment seams for independent related-role applications."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import SimpleNamespace
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
 from ..models.agent_decision import AgentDecision
 from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
+from ..models.organization import Organization
 from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import SisterRoleEvaluation
+
+
+@dataclass(frozen=True)
+class RelatedRoleAssessmentContext:
+    """Locked role-local rows for one assessment-derived transition.
+
+    ``handled`` means the assessment must never fall through to the source
+    application's ordinary pipeline.  A handled context can be blocked (for
+    example, because the membership was deleted or already resolved) while the
+    provider/assessment receipt itself is still allowed to commit truthfully.
+    """
+
+    handled: bool
+    reason: str | None = None
+    role: Role | None = None
+    application: CandidateApplication | None = None
+    ats_application: CandidateApplication | None = None
+    evaluation: SisterRoleEvaluation | None = None
+    assessment: Assessment | None = None
+
+
+@dataclass(frozen=True)
+class RelatedRoleAssessmentTransitionResult:
+    """Outcome of a role-local assessment stage transition."""
+
+    handled: bool
+    changed: bool = False
+    reason: str | None = None
+    role_id: int | None = None
+    evaluation_id: int | None = None
 
 
 def related_role_for_application(
@@ -19,25 +52,348 @@ def related_role_for_application(
     role_id: int,
     application: CandidateApplication,
 ) -> Role | None:
-    return (
+    role = (
         db.query(Role)
         .filter(
             Role.id == int(role_id),
             Role.organization_id == int(application.organization_id),
             Role.role_kind == ROLE_KIND_SISTER,
-            Role.ats_owner_role_id == int(application.role_id),
             Role.deleted_at.is_(None),
+        )
+        .one_or_none()
+    )
+    if role is None:
+        return None
+    membership = (
+        db.query(SisterRoleEvaluation.id)
+        .filter(
+            SisterRoleEvaluation.organization_id
+            == int(application.organization_id),
+            SisterRoleEvaluation.role_id == int(role.id),
+            SisterRoleEvaluation.source_application_id == int(application.id),
+            SisterRoleEvaluation.deleted_at.is_(None),
+        )
+        .scalar()
+    )
+    return role if membership is not None else None
+
+
+def related_role_evaluation_for_application(
+    db: Session,
+    *,
+    role_id: int,
+    application: CandidateApplication,
+) -> SisterRoleEvaluation | None:
+    """Load the exact explicit membership for a related role candidate."""
+
+    role = related_role_for_application(
+        db,
+        role_id=int(role_id),
+        application=application,
+    )
+    if role is None:
+        return None
+    return (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.organization_id
+            == int(application.organization_id),
+            SisterRoleEvaluation.role_id == int(role.id),
+            SisterRoleEvaluation.source_application_id == int(application.id),
+            SisterRoleEvaluation.deleted_at.is_(None),
         )
         .one_or_none()
     )
 
 
+def role_application_is_resolved(
+    db: Session,
+    *,
+    role_id: int,
+    application: CandidateApplication,
+) -> bool:
+    """Return terminal state for the logical role, not its ATS transport.
+
+    Missing explicit membership fails closed for a related role. Ordinary
+    roles retain the canonical application-stage/outcome contract.
+    """
+
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(application.organization_id),
+            Role.deleted_at.is_(None),
+        )
+        .one_or_none()
+    )
+    if role is not None and str(role.role_kind or "") == ROLE_KIND_SISTER:
+        evaluation = related_role_evaluation_for_application(
+            db,
+            role_id=int(role.id),
+            application=application,
+        )
+        if evaluation is None:
+            return True
+        return bool(
+            str(evaluation.application_outcome or "open").strip().lower()
+            != "open"
+            or str(evaluation.pipeline_stage or "applied").strip().lower()
+            == "advanced"
+        )
+    from ..domains.assessments_runtime.role_support import is_resolved
+
+    return bool(is_resolved(application))
+
+
 def assessment_uses_related_role_pipeline(db: Session, assessment) -> bool:
+    """Whether an assessment must be kept off the source role's pipeline.
+
+    A malformed cross-role assessment also fails closed here.  Falling back to
+    the source application would mutate another role merely because the
+    intended related role or membership became unavailable.
+    """
+
     role_id = getattr(assessment, "role_id", None)
-    if not role_id:
+    application_id = getattr(assessment, "application_id", None)
+    organization_id = getattr(assessment, "organization_id", None)
+    if not role_id or not application_id or not organization_id:
         return False
-    role = db.get(Role, int(role_id))
-    return bool(role is not None and str(role.role_kind or "") == ROLE_KIND_SISTER)
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(organization_id),
+        )
+        .one_or_none()
+    )
+    application_role_id = (
+        db.query(CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(organization_id),
+        )
+        .scalar()
+    )
+    if role is None:
+        return application_role_id is not None
+    if str(role.role_kind or "") == ROLE_KIND_SISTER:
+        return True
+    return bool(
+        application_role_id is not None
+        and int(application_role_id) != int(role_id)
+    )
+
+
+def lock_related_role_assessment_context(
+    db: Session,
+    *,
+    assessment,
+    lock_assessment: bool = False,
+) -> RelatedRoleAssessmentContext:
+    """Lock a related assessment in canonical lifecycle order.
+
+    Locks are acquired as Organization -> ordered Roles -> logical source
+    Application -> optional ATS transport Application -> Evaluation ->
+    Assessment.  The ATS row is never execution authority for the local
+    transition; locking it only establishes a stable linkage snapshot for
+    callers that subsequently perform a provider handoff.
+    """
+
+    role_id = getattr(assessment, "role_id", None)
+    application_id = getattr(assessment, "application_id", None)
+    organization_id = getattr(assessment, "organization_id", None)
+    if not role_id or not application_id or not organization_id:
+        return RelatedRoleAssessmentContext(
+            handled=False,
+            reason="assessment_identity_incomplete",
+        )
+
+    def _lock_assessment_row() -> Assessment | None:
+        if not lock_assessment or getattr(assessment, "id", None) is None:
+            return None
+        return (
+            db.query(Assessment)
+            .filter(
+                Assessment.id == int(assessment.id),
+                Assessment.organization_id == int(organization_id),
+                Assessment.role_id == int(role_id),
+                Assessment.application_id == int(application_id),
+            )
+            .with_for_update(of=Assessment)
+            .populate_existing()
+            .one_or_none()
+        )
+
+    role_identity = (
+        db.query(Role.role_kind, Role.ats_owner_role_id, Role.deleted_at)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(organization_id),
+        )
+        .one_or_none()
+    )
+    if role_identity is None or str(role_identity.role_kind or "") != ROLE_KIND_SISTER:
+        # A role mismatch must never be interpreted as permission to mutate
+        # the source application's owner-role pipeline.
+        source_role_id = (
+            db.query(CandidateApplication.role_id)
+            .filter(
+                CandidateApplication.id == int(application_id),
+                CandidateApplication.organization_id == int(organization_id),
+            )
+            .scalar()
+        )
+        if role_identity is None:
+            # Without a tenant-owned Role row there is no authority to classify
+            # this as ordinary. Fail closed whenever the source application
+            # exists, even if corrupt legacy data repeats the same id.
+            cross_role = source_role_id is not None
+        else:
+            cross_role = bool(
+                source_role_id is not None
+                and int(source_role_id) != int(role_id)
+            )
+        return RelatedRoleAssessmentContext(
+            handled=cross_role,
+            reason=("assessment_role_unavailable" if cross_role else None),
+            assessment=(_lock_assessment_row() if cross_role else None),
+        )
+
+    membership_identity = (
+        db.query(
+            SisterRoleEvaluation.id,
+            SisterRoleEvaluation.ats_application_id,
+        )
+        .filter(
+            SisterRoleEvaluation.organization_id == int(organization_id),
+            SisterRoleEvaluation.role_id == int(role_id),
+            SisterRoleEvaluation.source_application_id == int(application_id),
+        )
+        .one_or_none()
+    )
+    membership_id = (
+        int(membership_identity.id) if membership_identity is not None else None
+    )
+    ats_application_id = (
+        int(membership_identity.ats_application_id)
+        if membership_identity is not None
+        and membership_identity.ats_application_id is not None
+        else None
+    )
+
+    organization = (
+        db.query(Organization.id)
+        .filter(Organization.id == int(organization_id))
+        .with_for_update(of=Organization)
+        .scalar()
+    )
+    if organization is None:
+        return RelatedRoleAssessmentContext(
+            handled=True,
+            reason="assessment_organization_unavailable",
+            assessment=_lock_assessment_row(),
+        )
+
+    from .decision_membership import lock_resolution_roles
+
+    role_ids = {int(role_id)}
+    if role_identity.ats_owner_role_id is not None:
+        role_ids.add(int(role_identity.ats_owner_role_id))
+    locked_roles = lock_resolution_roles(
+        db,
+        organization_id=int(organization_id),
+        role_ids=role_ids,
+    )
+    role = locked_roles.get(int(role_id))
+    if role is None or str(role.role_kind or "") != ROLE_KIND_SISTER:
+        return RelatedRoleAssessmentContext(
+            handled=True,
+            reason="assessment_role_unavailable",
+            assessment=_lock_assessment_row(),
+        )
+
+    application = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(organization_id),
+        )
+        .with_for_update(of=CandidateApplication)
+        .populate_existing()
+        .one_or_none()
+    )
+    if application is None:
+        return RelatedRoleAssessmentContext(
+            handled=True,
+            reason="assessment_application_unavailable",
+            role=role,
+            assessment=_lock_assessment_row(),
+        )
+
+    ats_application = application
+    if ats_application_id is not None and ats_application_id != int(application.id):
+        ats_application = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(ats_application_id),
+                CandidateApplication.organization_id == int(organization_id),
+            )
+            .with_for_update(of=CandidateApplication)
+            .populate_existing()
+            .one_or_none()
+        )
+
+    evaluation = None
+    if membership_id is not None:
+        evaluation = (
+            db.query(SisterRoleEvaluation)
+            .filter(
+                SisterRoleEvaluation.id == int(membership_id),
+                SisterRoleEvaluation.organization_id == int(organization_id),
+                SisterRoleEvaluation.role_id == int(role_id),
+                SisterRoleEvaluation.source_application_id == int(application.id),
+                SisterRoleEvaluation.deleted_at.is_(None),
+            )
+            .with_for_update(of=SisterRoleEvaluation)
+            .populate_existing()
+            .one_or_none()
+        )
+    locked_assessment = None
+    if lock_assessment:
+        locked_assessment = _lock_assessment_row()
+        if locked_assessment is None:
+            return RelatedRoleAssessmentContext(
+                handled=True,
+                reason="assessment_unavailable",
+                role=role,
+                application=application,
+                ats_application=ats_application,
+                evaluation=evaluation,
+            )
+
+    if evaluation is None:
+        reason = "related_membership_unavailable"
+    elif (
+        ats_application_id is not None
+        and evaluation.ats_application_id != ats_application_id
+    ):
+        reason = "related_ats_link_changed"
+    elif str(evaluation.application_outcome or "open").strip().lower() != "open":
+        reason = "related_membership_resolved"
+    elif str(evaluation.pipeline_stage or "applied").strip().lower() == "advanced":
+        reason = "related_membership_advanced"
+    else:
+        reason = None
+    return RelatedRoleAssessmentContext(
+        handled=True,
+        reason=reason,
+        role=role,
+        application=application,
+        ats_application=ats_application,
+        evaluation=evaluation,
+        assessment=locked_assessment,
+    )
 
 
 def transition_related_role_assessment_stage(
@@ -46,42 +402,117 @@ def transition_related_role_assessment_stage(
     assessment,
     to_stage: str,
     source: str,
-) -> bool:
-    if not getattr(assessment, "role_id", None) or not getattr(
-        assessment, "application_id", None
-    ):
-        return False
-    if not assessment_uses_related_role_pipeline(db, assessment):
-        return False
-    evaluation = (
-        db.query(SisterRoleEvaluation)
-        .filter(
-            SisterRoleEvaluation.role_id == int(assessment.role_id),
-            SisterRoleEvaluation.source_application_id
-            == int(assessment.application_id),
+    context: RelatedRoleAssessmentContext | None = None,
+    idempotency_key: str | None = None,
+    reason: str | None = None,
+    cleanup_decisions: bool = True,
+) -> RelatedRoleAssessmentTransitionResult:
+    """Apply one assessment-derived transition to its independent role.
+
+    The return value distinguishes an ordinary assessment (``handled=False``)
+    from a related assessment whose local transition was safely held.  That
+    distinction prevents callers from ever falling through and changing the
+    ATS owner's local pipeline after a membership is deleted or resolved.
+    """
+
+    context = context or lock_related_role_assessment_context(
+        db,
+        assessment=assessment,
+    )
+    if not context.handled:
+        return RelatedRoleAssessmentTransitionResult(
+            handled=False,
+            reason=context.reason,
         )
-        .one_or_none()
+    role_id = int(context.role.id) if context.role is not None else None
+    evaluation_id = (
+        int(context.evaluation.id) if context.evaluation is not None else None
     )
-    if evaluation is None:
-        return False
-    from .sister_role_service import (
-        source_application_is_globally_advanced,
-        source_application_is_globally_closed,
-        transition_related_role_stage,
+    event_key = str(idempotency_key or "").strip() or (
+        f"related-assessment-stage:{getattr(assessment, 'id', 0)}:"
+        f"{str(to_stage or '').strip().lower()}"
     )
+    metadata = {
+        "acting_role_id": role_id,
+        "assessment_id": int(getattr(assessment, "id", 0) or 0),
+        "assessment_status": str(
+            getattr(getattr(assessment, "status", None), "value", None)
+            or getattr(assessment, "status", "")
+        ),
+        "transition_source": source,
+    }
+    if context.reason is not None or context.application is None or role_id is None:
+        if context.application is not None and role_id is not None:
+            from ..domains.assessments_runtime.pipeline_service import (
+                append_application_event,
+            )
 
-    application = db.get(CandidateApplication, int(assessment.application_id))
-    if source_application_is_globally_closed(
-        application
-    ) or source_application_is_globally_advanced(application):
-        # This still counts as a handled related-role assessment. Returning
-        # False would make the caller fall through and mutate the canonical
-        # owner pipeline as though this were an ordinary assessment.
-        return True
+            append_application_event(
+                db,
+                app=context.application,
+                role_id=role_id,
+                event_type="role_pipeline_stage_transition_held",
+                actor_type="system",
+                reason=(
+                    reason
+                    or "Assessment stage was preserved because the role membership is no longer active"
+                ),
+                metadata={**metadata, "hold_reason": context.reason},
+                target_stage=str(to_stage or "").strip().lower(),
+                effect_status="held",
+                idempotency_key=f"{event_key}:held",
+            )
+        return RelatedRoleAssessmentTransitionResult(
+            handled=True,
+            changed=False,
+            reason=context.reason or "related_transition_unavailable",
+            role_id=role_id,
+            evaluation_id=evaluation_id,
+        )
 
-    transition_related_role_stage(evaluation, to_stage=to_stage, source=source)
-    db.add(evaluation)
-    return True
+    from .pre_screen_decision_emitter import discard_pending_decisions_for_app
+    from .related_role_action_service import transition_related_role_stage_action
+
+    try:
+        state = transition_related_role_stage_action(
+            db,
+            application=context.application,
+            acting_role_id=role_id,
+            to_stage=to_stage,
+            source=source,
+            actor_type="system",
+            reason=reason or "Assessment changed this role's local stage",
+            metadata=metadata,
+            idempotency_key=event_key,
+        )
+    except HTTPException as exc:
+        return RelatedRoleAssessmentTransitionResult(
+            handled=True,
+            changed=False,
+            reason=f"transition_held:{exc.detail}",
+            role_id=role_id,
+            evaluation_id=evaluation_id,
+        )
+    assert state is not None
+    # Any recommendation made before this assessment lifecycle transition is
+    # stale.  Cleanup is exact to the acting role; owner and sibling cards are
+    # independent and remain untouched.
+    if cleanup_decisions or bool(state.changed):
+        discard_pending_decisions_for_app(
+            db,
+            application_id=int(context.application.id),
+            role_id=role_id,
+            reason=(
+                "superseded: assessment changed this role's candidate lifecycle"
+            ),
+            include_processing=True,
+        )
+    return RelatedRoleAssessmentTransitionResult(
+        handled=True,
+        changed=bool(state.changed),
+        role_id=role_id,
+        evaluation_id=int(state.evaluation.id),
+    )
 
 
 def advance_shared_application_family(
@@ -90,34 +521,9 @@ def advance_shared_application_family(
     application: CandidateApplication,
     source: str,
 ) -> int:
-    # One canonical application means every role-local card becomes moot once
-    # that application is handed off. The decision currently being approved
-    # is restamped approved by its caller after this reconciliation.
-    from .pre_screen_decision_emitter import discard_pending_decisions_for_app
+    """Compatibility no-op: ATS movement never rewrites sibling role state."""
 
-    discard_pending_decisions_for_app(
-        db,
-        application_id=int(application.id),
-        reason="superseded: shared application advanced",
-        include_processing=True,
-    )
-    evaluations = (
-        db.query(SisterRoleEvaluation)
-        .join(Role, Role.id == SisterRoleEvaluation.role_id)
-        .filter(
-            SisterRoleEvaluation.source_application_id == int(application.id),
-            SisterRoleEvaluation.organization_id == int(application.organization_id),
-            Role.role_kind == ROLE_KIND_SISTER,
-            Role.ats_owner_role_id == int(application.role_id),
-            Role.deleted_at.is_(None),
-        )
-        .all()
-    )
-    from .sister_role_service import transition_related_role_stage
-
-    for evaluation in evaluations:
-        transition_related_role_stage(evaluation, to_stage="advanced", source=source)
-    return len(evaluations)
+    return 0
 
 
 def sync_shared_advance(
@@ -126,16 +532,9 @@ def sync_shared_advance(
     to_stage: str,
     source: str,
 ) -> int:
-    if (
-        str(to_stage or "").strip().lower() != "advanced"
-        or str(application.pipeline_stage or "").strip().lower() != "advanced"
-    ):
-        return 0
-    return advance_shared_application_family(
-        db,
-        application=application,
-        source=source,
-    )
+    """Compatibility no-op: shared ATS state is an action restriction only."""
+
+    return 0
 
 
 def complete_timeout_pipeline(db: Session, *, assessment, application) -> None:
@@ -228,7 +627,25 @@ def apply_related_role_runtime_projection(
         )
     active = [item for item in role_assessments if not bool(item.is_voided)]
     if application is not None:
-        summary = _score_summary_from_active_assessments(application, active)
+        # The physical application may belong to the ATS owner. Feed the score
+        # builder a role-local view so its provenance, integrity and fallback
+        # components cannot be inherited from that owner's score columns.
+        role_local_score_application = SimpleNamespace(
+            cv_match_details=(
+                evaluation.details
+                if evaluation is not None and isinstance(evaluation.details, dict)
+                else {}
+            ),
+            cv_match_score=role_fit_score,
+            cv_match_scored_at=(
+                evaluation.scored_at if evaluation is not None else None
+            ),
+            cv_sections=getattr(application, "cv_sections", None),
+            assessments=role_assessments,
+        )
+        summary = _score_summary_from_active_assessments(
+            role_local_score_application, active
+        )
         completed = any(
             str(getattr(item.status, "value", item.status))
             in {"completed", "completed_due_to_timeout"}
@@ -247,6 +664,12 @@ def apply_related_role_runtime_projection(
         summary["score_provenance"] = {
             "source": "sister_role_evaluation",
             "label": "Related role fit",
+            "scored_at": (
+                evaluation.scored_at.isoformat()
+                if evaluation is not None and evaluation.scored_at is not None
+                else None
+            ),
+            "model": evaluation.model_version if evaluation is not None else None,
         }
         projected["score_summary"] = summary
         projected["taali_score"] = summary.get("taali_score")
@@ -282,6 +705,36 @@ def apply_related_role_runtime_projection(
                 "status": pending.status,
             }
         )
+    activity_candidates = [
+        projected.get("last_activity_at"),
+        *(
+            value
+            for assessment in role_assessments
+            for value in (
+                getattr(assessment, "updated_at", None),
+                getattr(assessment, "completed_at", None),
+                getattr(assessment, "created_at", None),
+            )
+        ),
+        (
+            pending.get("created_at")
+            if isinstance(pending, dict)
+            else getattr(pending, "created_at", None)
+            if pending is not None
+            else None
+        ),
+    ]
+    comparable_activity = [
+        value for value in activity_candidates if value is not None
+    ]
+    if comparable_activity:
+        try:
+            projected["last_activity_at"] = max(comparable_activity)
+        except TypeError:
+            # Mixed naive/aware historical timestamps should not make a
+            # candidate projection unavailable. The evaluation timestamp set
+            # by the base projection remains the safe role-local fallback.
+            pass
     return projected
 
 
@@ -304,14 +757,13 @@ def project_related_role_page(
         if sister_role.ats_owner_role_id
         else None
     )
-    if owner_role is None:
-        return payloads
     application_ids = [int(application.id) for application in applications]
     evaluation_map = {
         int(evaluation.source_application_id): evaluation
         for evaluation in db.query(SisterRoleEvaluation).filter(
             SisterRoleEvaluation.role_id == int(sister_role.id),
             SisterRoleEvaluation.source_application_id.in_(application_ids),
+            SisterRoleEvaluation.deleted_at.is_(None),
         )
     }
     assessment_map: dict[int, list[Assessment]] = {}
@@ -383,12 +835,17 @@ def project_related_role_page(
 
 
 __all__ = [
+    "RelatedRoleAssessmentContext",
+    "RelatedRoleAssessmentTransitionResult",
     "advance_shared_application_family",
     "apply_related_role_runtime_projection",
     "assessment_uses_related_role_pipeline",
     "complete_timeout_pipeline",
     "project_related_role_page",
+    "lock_related_role_assessment_context",
+    "related_role_evaluation_for_application",
     "related_role_for_application",
+    "role_application_is_resolved",
     "sync_shared_advance",
     "transition_related_role_assessment_stage",
 ]

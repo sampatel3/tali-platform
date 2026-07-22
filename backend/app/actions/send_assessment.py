@@ -34,7 +34,6 @@ from ..components.assessments.service import (
 from ..components.assessments.task_snapshot import freeze_assessment_task
 from ..domains.assessments_runtime.role_support import (
     get_application,
-    is_resolved,
     latest_valid_role_assessment,
 )
 from ..models.assessment import Assessment
@@ -102,12 +101,6 @@ def run(
         )
 
     app = get_application(application_id, organization_id, db)
-    if is_resolved(app):
-        return SendAssessmentResult(
-            None,
-            "blocked",
-            "Assessment send held: this application is already resolved",
-        )
     if app.role_id is None:
         raise HTTPException(
             status_code=422,
@@ -115,22 +108,34 @@ def run(
         )
 
     acting_role_id = int(role_id or app.role_id)
-    if acting_role_id != int(app.role_id):
-        from ..services.related_role_application_runtime import related_role_for_application
+    from ..services.related_role_application_runtime import (
+        related_role_for_application,
+        role_application_is_resolved,
+    )
 
-        related = related_role_for_application(
-            db,
-            role_id=acting_role_id,
-            application=app,
+    related = related_role_for_application(
+        db,
+        role_id=acting_role_id,
+        application=app,
+    )
+    if acting_role_id != int(app.role_id) and related is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"application {application_id} is not in role "
+                f"{acting_role_id}'s candidate pool"
+            ),
         )
-        if related is None:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"application {application_id} is not in role "
-                    f"{acting_role_id}'s shared candidate pool"
-                ),
-            )
+    if role_application_is_resolved(
+        db,
+        role_id=acting_role_id,
+        application=app,
+    ):
+        return SendAssessmentResult(
+            None,
+            "blocked",
+            "Assessment send held: this role application is already resolved",
+        )
 
     automatic_actor = actor.type in {ACTOR_AGENT, ACTOR_SYSTEM}
     if automatic_actor:
@@ -170,11 +175,15 @@ def run(
                 "Automatic assessment send held: application is unavailable",
             )
         app = locked_app
-        if is_resolved(app):
+        if role_application_is_resolved(
+            db,
+            role_id=acting_role_id,
+            application=app,
+        ):
             return SendAssessmentResult(
                 None,
                 "blocked",
-                "Automatic assessment send held: this application is already resolved",
+                "Automatic assessment send held: this role application is already resolved",
             )
         from ..components.scoring.freshness import (
             score_generation_is_current,

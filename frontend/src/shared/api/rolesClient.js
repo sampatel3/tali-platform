@@ -136,8 +136,14 @@ export const roles = {
   // others.
   listApplicationShareLinks: (applicationId) =>
     api.get(`/applications/${applicationId}/share-links`),
-  createApplicationShareLink: (applicationId, { mode, expiry }) =>
-    api.post(`/applications/${applicationId}/share-links`, { mode, expiry }),
+  createApplicationShareLink: (applicationId, { mode, expiry, viewRoleId }) =>
+    api.post(`/applications/${applicationId}/share-links`, {
+      mode,
+      expiry,
+      ...(Number.isInteger(viewRoleId) && viewRoleId > 0
+        ? { view_role_id: viewRoleId }
+        : {}),
+    }),
   revokeShareLink: (linkId) => api.delete(`/share-links/${linkId}`),
   // WS2 — curated multi-candidate client submittal packs. POST mints a frozen,
   // client-safe snapshot of the selected candidates for one role and returns

@@ -219,7 +219,7 @@ def test_real_ats_import_dispatches_only_after_commit_and_scores(
 
 
 @pytest.mark.parametrize("provider", ["workable", "bullhorn"])
-def test_related_role_fanout_is_committed_and_recovers_lost_broker_kick(
+def test_explicit_related_membership_is_committed_and_recovers_lost_broker_kick(
     db, monkeypatch, provider
 ):
     from app.platform.config import settings
@@ -267,12 +267,30 @@ def test_related_role_fanout_is_committed_and_recovers_lost_broker_kick(
     outbox_id = int(row.id)
     application_id = int(app.id)
 
-    # Both importers stop at the transactional application outbox. No related
-    # evaluation or task is allowed to escape the uncommitted transaction.
+    # Importing an owner-role applicant never enrols them in a related role.
     assert db.query(SisterRoleEvaluation).filter(
         SisterRoleEvaluation.source_application_id == application_id
     ).count() == 0
     assert published == []
+    db.commit()
+
+    # A separate, explicit role-membership operation owns enrolment. The
+    # application outbox may recover scoring for that membership after commit.
+    app = db.get(CandidateApplication, application_id)
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=org.id,
+            role_id=related.id,
+            candidate_id=app.candidate_id,
+            source_application_id=application_id,
+            ats_application_id=application_id,
+            status="pending",
+            pipeline_stage="applied",
+            application_outcome="open",
+            membership_source="explicit_test_membership",
+            spec_fingerprint="explicit-membership-spec",
+        )
+    )
     db.commit()
 
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
@@ -306,9 +324,8 @@ def test_related_role_fanout_is_committed_and_recovers_lost_broker_kick(
             committed_before_publish.append(int(visible.id))
         raise RuntimeError(secret)
 
-    # Authority can change after the importer commits. The cheap evaluation
-    # receipt must still be created; its worker will hold paid work until the
-    # source-role agent is turned back on.
+    # Authority can change after enrolment. The committed membership remains
+    # the recovery receipt; the worker rechecks authority before paid work.
     source = db.get(Role, source.id)
     source.agent_paused_at = datetime.now(timezone.utc)
     db.commit()
@@ -344,7 +361,7 @@ def test_related_role_fanout_is_committed_and_recovers_lost_broker_kick(
 
 @pytest.mark.parametrize("provider", ["workable", "bullhorn"])
 @pytest.mark.parametrize("owner_state", ["paused", "off"])
-def test_related_roster_materializes_when_owner_is_already_held_at_ingest(
+def test_new_owner_applicant_never_joins_related_pool_when_owner_is_held(
     db, monkeypatch, provider, owner_state
 ):
     from app.models.sister_role_evaluation import SisterRoleEvaluation
@@ -371,8 +388,8 @@ def test_related_roster_materializes_when_owner_is_already_held_at_ingest(
             "A complete related role specification requiring Python data "
             "platforms, distributed systems, reliability, and observability."
         ),
-        # Related-role scoring owns this independent authority check. The
-        # application outbox only materializes and publishes its cheap receipt.
+        # Related-role scoring owns this independent authority check, but no
+        # membership exists for this newly imported owner applicant.
         agentic_mode_enabled=False,
     )
     db.add(related)
@@ -422,16 +439,16 @@ def test_related_roster_materializes_when_owner_is_already_held_at_ingest(
     db.commit()
 
     assert dispatch_one(db, outbox_id=outbox_id)["status"] == "complete"
-    evaluation = (
+    assert (
         db.query(SisterRoleEvaluation)
         .filter(
             SisterRoleEvaluation.source_application_id == application_id,
             SisterRoleEvaluation.role_id == related.id,
         )
-        .one()
+        .one_or_none()
+        is None
     )
-    first_evaluation_id = int(evaluation.id)
-    assert published_related == [first_evaluation_id]
+    assert published_related == []
     assert owner_parses == []
     assert owner_scores == []
     assert (
@@ -439,13 +456,20 @@ def test_related_roster_materializes_when_owner_is_already_held_at_ingest(
         == 0
     )
 
-    # An existing pending evaluation is already a durable receipt owned by the
-    # recovery sweep. A routine resync must not reopen the application outbox
-    # and republish held related-role work for the whole roster.
+    # Routine owner resync still must not create membership or related work.
     _import_application(db, provider)
     db.refresh(row)
     assert row.status == APPLICATION_CREATED_COMPLETE
-    assert published_related == [first_evaluation_id]
+    assert published_related == []
+    assert (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.source_application_id == application_id,
+            SisterRoleEvaluation.role_id == related.id,
+        )
+        .count()
+        == 0
+    )
     db.commit()
 
 

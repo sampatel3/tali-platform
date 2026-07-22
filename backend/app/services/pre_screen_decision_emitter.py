@@ -454,6 +454,8 @@ def queue_pre_screen_reject(
             CandidateApplicationEvent(
                 application_id=int(application.id),
                 organization_id=int(organization_id),
+                role_id=int(role.id),
+                agent_decision_id=int(decision.id),
                 event_type="agent_decision_queued",
                 actor_type="system",
                 actor_id=None,
@@ -622,6 +624,8 @@ def queue_knockout_reject(
             CandidateApplicationEvent(
                 application_id=int(application.id),
                 organization_id=int(organization_id),
+                role_id=int(role.id),
+                agent_decision_id=int(decision.id),
                 event_type="agent_decision_queued",
                 actor_type="system",
                 actor_id=None,
@@ -1254,6 +1258,7 @@ def discard_pending_decisions_for_app(
     reason: str,
     decision_types: tuple[str, ...] | None = None,
     include_processing: bool = False,
+    role_id: int | None = None,
 ) -> int:
     """Discard pending agent decisions for an application — used when the
     application closes (rejected / hired / withdrawn). A closed candidate's
@@ -1282,6 +1287,8 @@ def discard_pending_decisions_for_app(
     )
     if decision_types:
         query = query.filter(AgentDecision.decision_type.in_(tuple(decision_types)))
+    if role_id is not None:
+        query = query.filter(AgentDecision.role_id == int(role_id))
     cards = query.all()
     now = datetime.now(timezone.utc)
     discarded = 0

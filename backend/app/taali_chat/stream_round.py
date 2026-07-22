@@ -46,6 +46,7 @@ def _stream_one_round(
     messages: list[dict[str, Any]],
     system: list[dict[str, Any]],
     metering: dict[str, Any],
+    emit_text_deltas: bool = True,
 ) -> Iterator[streaming.Frame]:
     """Stream one Anthropic call. Yields frames; returns (blocks, stop, usage)."""
     with client.messages.stream(
@@ -86,7 +87,8 @@ def _stream_one_round(
                     continue
                 dtype = getattr(delta, "type", None)
                 if dtype == "text_delta":
-                    yield streaming.text_delta(delta.text)
+                    if emit_text_deltas:
+                        yield streaming.text_delta(delta.text)
                 elif dtype == "input_json_delta":
                     block_index = getattr(event, "index", None)
                     # Match the running tool_use block by index → id.

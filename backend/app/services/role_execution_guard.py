@@ -77,10 +77,11 @@ def automatic_role_action_block_reason(
 ) -> str | None:
     """Why new autonomous work cannot run against ``role`` right now.
 
-    The local requisition and the linked ATS job are both execution
-    authorities.  A queued task may outlive either lifecycle transition, so
-    every paid model call and automatic side effect reuses this provider-neutral
-    predicate immediately before it starts.  ``job_status is None`` remains
+    The logical role is the execution authority. For an ordinary ATS-owned
+    role, its linked ATS job lifecycle is also authoritative. A related role's
+    ATS owner is only optional write transport: its lifecycle may restrict a
+    later provider write, but must not disable this role's local scoring,
+    decisions, or role-local actions. ``job_status is None`` remains
     permissive for legacy/manual roles that pre-date the managed requisition
     lifecycle.
     """
@@ -106,19 +107,10 @@ def automatic_role_action_block_reason(
     if job_status is not None and job_status != JOB_STATUS_OPEN:
         return f"job is not open (status: {job_status})"
 
-    lifecycle_role = role
-    if str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER:
-        lifecycle_role = getattr(role, "ats_owner_role", None)
-        if (
-            lifecycle_role is None
-            and db is not None
-            and getattr(role, "ats_owner_role_id", None) is not None
-        ):
-            lifecycle_role = db.get(Role, int(role.ats_owner_role_id))
-        if lifecycle_role is None:
-            return "linked ATS owner role is unavailable"
-
-    ats = ats_job_lifecycle(lifecycle_role)
+    # Related roles own their lifecycle. Their optional ATS owner is checked
+    # only by provider-write boundaries, where a closed/missing link is an
+    # action restriction rather than a reason to stop the Agent entirely.
+    ats = ats_job_lifecycle(role)
     if ats.external_job_id and ats.external_job_live is False:
         provider = ats.provider or "ATS"
         return f"linked {provider} job is not live"

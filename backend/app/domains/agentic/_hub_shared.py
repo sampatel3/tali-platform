@@ -435,7 +435,9 @@ def org_header_extras(
             CandidateApplication.id == CandidateApplicationEvent.application_id,
         )
         .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .outerjoin(Role, Role.id == CandidateApplication.role_id)
+        # The event owns the logical product role.  The application join is
+        # evidence/candidate transport only and may point at an ATS owner role.
+        .outerjoin(Role, Role.id == CandidateApplicationEvent.role_id)
         .filter(
             CandidateApplicationEvent.organization_id == organization_id,
             CandidateApplicationEvent.actor_type.in_(("agent", "recruiter")),

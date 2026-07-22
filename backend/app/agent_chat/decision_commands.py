@@ -16,12 +16,18 @@ from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from ..candidate_search.role_scope import (
+    CandidateRoleScope,
+    resolve_candidate_role_scope,
+)
 from ..models.agent_decision import AgentDecision
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from ..models.sister_role_evaluation import SisterRoleEvaluation
 from ..models.user import User
 from ..services import decision_staleness
+from ..services.decision_role_context import related_decision_staleness
 from .decision_teach import teach_decision
 
 
@@ -110,6 +116,60 @@ def _scoped_decision(
     return decision
 
 
+def _candidate_scope(
+    db: Session,
+    role: Role,
+    *,
+    organization_id: int,
+) -> CandidateRoleScope:
+    """Resolve the same membership authority used by every candidate tool."""
+
+    try:
+        return resolve_candidate_role_scope(
+            db,
+            organization_id=int(organization_id),
+            role_id=int(role.id),
+        )
+    except ValueError as exc:
+        raise DecisionCommandError(
+            "scope_mismatch",
+            "This role is not available in the recruiter's organization.",
+        ) from exc
+
+
+def _scoped_decision_subject(
+    db: Session,
+    *,
+    scope: CandidateRoleScope,
+    decision: AgentDecision,
+) -> tuple[CandidateApplication, Candidate | None, SisterRoleEvaluation | None]:
+    """Load the decision subject only through the logical role's live roster."""
+
+    query = (
+        db.query(CandidateApplication, Candidate)
+        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .filter(
+            CandidateApplication.id == int(decision.application_id),
+            CandidateApplication.organization_id == int(scope.organization_id),
+        )
+    )
+    subject = scope.scope_visible_roster(query).one_or_none()
+    if subject is None:
+        raise DecisionCommandError(
+            "decision_subject_not_found",
+            f"The candidate application for decision {int(decision.id)} is unavailable.",
+        )
+    application, candidate = subject
+    evaluation = (
+        scope.evaluation_map(db, application_ids=[int(application.id)]).get(
+            int(application.id)
+        )
+        if scope.is_related
+        else None
+    )
+    return application, candidate, evaluation
+
+
 def _require_pending(decision: AgentDecision, *, operation: str) -> None:
     if str(decision.status) != "pending":
         raise DecisionCommandError(
@@ -195,14 +255,26 @@ def _staleness(
     application: CandidateApplication,
     role: Role,
     cache: decision_staleness.StalenessCache,
+    related_evaluation: SisterRoleEvaluation | None = None,
 ) -> dict[str, Any]:
     try:
-        report = decision_staleness.evaluate(
-            db,
-            decision,
-            application=application,
-            role=role,
-            cache=cache,
+        report = (
+            related_decision_staleness(
+                db,
+                decision,
+                related_evaluation,
+                application=application,
+                role=role,
+                cache=cache,
+            )
+            if related_evaluation is not None
+            else decision_staleness.evaluate(
+                db,
+                decision,
+                application=application,
+                role=role,
+                cache=cache,
+            )
         )
     except Exception:  # pragma: no cover - the Hub also fails open on read
         return {"is_stale": False, "staleness_reasons": [], "staleness_summary": None}
@@ -222,6 +294,8 @@ def _pending_decision_row(
     *,
     cache: decision_staleness.StalenessCache,
     role_family: dict[str, Any],
+    related_evaluation: SisterRoleEvaluation | None = None,
+    approval_requires_workable_stage: bool = False,
 ) -> dict[str, Any]:
     """The single live projection shared by list and confirmation preview."""
     decision_type = str(decision.decision_type)
@@ -238,7 +312,8 @@ def _pending_decision_row(
         "snoozed_until": _iso(decision.snoozed_until),
         "can_approve": decision_type in APPROVABLE_DECISION_TYPES,
         "approval_requires_workable_stage": bool(
-            decision_type == "advance_to_interview" and getattr(role, "workable_job_id", None)
+            decision_type == "advance_to_interview"
+            and approval_requires_workable_stage
         ),
         "supported_alternatives": list(SUPPORTED_ALTERNATIVES.get(decision_type, ())),
         **_staleness(
@@ -247,6 +322,7 @@ def _pending_decision_row(
             application=application,
             role=role,
             cache=cache,
+            related_evaluation=related_evaluation,
         ),
     }
 
@@ -261,22 +337,12 @@ def get_pending_decision(
     org_id = _ensure_context(role, user)
     decision = _scoped_decision(db, role, user, decision_id)
     _require_pending(decision, operation="previewed")
-    subject = (
-        db.query(CandidateApplication, Candidate)
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplication.id == int(decision.application_id),
-            CandidateApplication.organization_id == int(role.organization_id),
-            CandidateApplication.role_id == int(role.id),
-        )
-        .one_or_none()
+    scope = _candidate_scope(db, role, organization_id=org_id)
+    application, candidate, evaluation = _scoped_decision_subject(
+        db,
+        scope=scope,
+        decision=decision,
     )
-    if subject is None:  # Defensive against a corrupt legacy FK.
-        raise DecisionCommandError(
-            "decision_subject_not_found",
-            f"The candidate application for decision {int(decision.id)} is unavailable.",
-        )
-    application, candidate = subject
     return _pending_decision_row(
         db,
         role,
@@ -288,6 +354,10 @@ def get_pending_decision(
             db,
             role,
             organization_id=org_id,
+        ),
+        related_evaluation=evaluation,
+        approval_requires_workable_stage=bool(
+            getattr(scope.application_role, "workable_job_id", None)
         ),
     )
 
@@ -302,6 +372,7 @@ def list_pending_decisions(
 ) -> dict[str, Any]:
     """List pending rows, hiding active snoozes unless explicitly requested."""
     org_id = _ensure_context(role, user)
+    scope = _candidate_scope(db, role, organization_id=org_id)
     cap = max(1, min(int(limit), 50))
     now = datetime.now(timezone.utc)
     query = (
@@ -317,6 +388,10 @@ def list_pending_decisions(
             AgentDecision.status == "pending",
         )
     )
+    # A pending decision is actionable only while its logical role membership
+    # is live. Related-role membership is the evaluation row; the source/ATS
+    # application may belong to another role or be soft-deleted evidence.
+    query = scope.scope_visible_roster(query)
     if not include_snoozed:
         query = query.filter(
             or_(
@@ -340,6 +415,7 @@ def list_pending_decisions(
         {application_id: latest_attempts.get(application_id) for application_id in application_ids}
     )
     role_family = _role_family_snapshot(db, role, organization_id=org_id)
+    evaluations = scope.evaluation_map(db, application_ids=application_ids)
     decisions = [
         _pending_decision_row(
             db,
@@ -349,6 +425,10 @@ def list_pending_decisions(
             candidate,
             cache=cache,
             role_family=role_family,
+            related_evaluation=evaluations.get(int(application.id)),
+            approval_requires_workable_stage=bool(
+                getattr(scope.application_role, "workable_job_id", None)
+            ),
         )
         for decision, application, candidate in rows
     ]
@@ -377,6 +457,12 @@ def approve_decision(
     """Approve one recommendation through the canonical Hub workflow."""
     decision = _scoped_decision(db, role, user, decision_id)
     _require_pending(decision, operation="approved")
+    scope = _candidate_scope(
+        db,
+        role,
+        organization_id=int(decision.organization_id),
+    )
+    _scoped_decision_subject(db, scope=scope, decision=decision)
     if str(decision.decision_type) not in APPROVABLE_DECISION_TYPES:
         raise DecisionCommandError(
             "decision_not_approvable",
@@ -387,7 +473,7 @@ def approve_decision(
         )
     if (
         str(decision.decision_type) == "advance_to_interview"
-        and getattr(role, "workable_job_id", None)
+        and getattr(scope.application_role, "workable_job_id", None)
         and not str(workable_target_stage or "").strip()
     ):
         raise DecisionCommandError(
@@ -434,6 +520,12 @@ def override_decision(
     """Reject the recommendation and execute one supported alternative."""
     decision = _scoped_decision(db, role, user, decision_id)
     _require_pending(decision, operation="overridden")
+    scope = _candidate_scope(
+        db,
+        role,
+        organization_id=int(decision.organization_id),
+    )
+    _scoped_decision_subject(db, scope=scope, decision=decision)
     action = str(alternative or "").strip()
     allowed = SUPPORTED_ALTERNATIVES.get(str(decision.decision_type), ())
     if action not in allowed:
@@ -453,7 +545,7 @@ def override_decision(
         )
     if (
         action == "advance"
-        and getattr(role, "workable_job_id", None)
+        and getattr(scope.application_role, "workable_job_id", None)
         and not str(workable_target_stage or "").strip()
     ):
         raise DecisionCommandError(
@@ -493,6 +585,12 @@ def snooze_decision(
     """Hide a pending decision for the Hub's canonical one-hour window."""
     decision = _scoped_decision(db, role, user, decision_id)
     _require_pending(decision, operation="snoozed")
+    scope = _candidate_scope(
+        db,
+        role,
+        organization_id=int(decision.organization_id),
+    )
+    _scoped_decision_subject(db, scope=scope, decision=decision)
 
     from ..domains.agentic import hub_feedback_routes
 
@@ -517,6 +615,12 @@ def re_evaluate_decision(
     """Refresh a pending card using the canonical score-or-agent rerun path."""
     decision = _scoped_decision(db, role, user, decision_id)
     _require_pending(decision, operation="re-evaluated")
+    scope = _candidate_scope(
+        db,
+        role,
+        organization_id=int(decision.organization_id),
+    )
+    _scoped_decision_subject(db, scope=scope, decision=decision)
 
     from ..domains.agentic import routes as agentic_routes
 

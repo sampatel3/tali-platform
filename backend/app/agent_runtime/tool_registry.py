@@ -30,19 +30,25 @@ from ..actions import (
 )
 from ..actions._decision_side_effects import apply_decision_side_effects
 from ..actions.types import Actor
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..mcp import handlers as mcp_handlers
+from ..mcp.catalog import AUTONOMOUS_AGENT
+from ..mcp.shared_reads import (
+    dispatch_shared_read,
+    shared_read_definitions,
+    shared_read_specs_for,
+)
 from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import NEEDS_INPUT_KINDS
 from ..models.agent_run import AgentRun
 from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
-from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.role import Role
 from ..services import cohort_signals_service
 from ..services.assessment_autosend_guard import check_auto_send
 from ..services.agent_policy_settings import (
     automation_enabled_for_decision,
-    role_shares_ats_application,
 )
 from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..services.decision_evidence_service import blocked_must_have_requirements
@@ -99,7 +105,9 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_application",
         "description": (
-            "Read full detail for one application: candidate, scores, CV summary, "
+            "Compatibility name for the canonical role-local candidate detail "
+            "read. Returns candidate, this role's current state and scores, ATS "
+            "context, action restrictions, CV summary, "
             "interview pack, recent events. Always call this before queueing a "
             "decision so your reasoning cites concrete evidence in plain words. The "
             "``recruiter_notes`` field holds standing guidance the recruiter "
@@ -117,9 +125,9 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_candidate",
         "description": (
-            "Read full candidate detail across all of their applications in this "
-            "org. Useful when triaging duplicates or evaluating someone who's "
-            "applied to multiple roles."
+            "Read candidate detail after verifying that the person belongs to "
+            "this agent's role. Useful when triaging a duplicate without "
+            "escaping the running role's candidate pool."
         ),
         "input_schema": {
             "type": "object",
@@ -131,7 +139,8 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         "name": "get_candidate_cv",
         "description": (
             "Parsed CV sections (work history, education, skills) plus raw text. "
-            "Use to verify specific experience claims before queueing advance."
+            "The candidate must belong to this agent's role. Use to verify "
+            "specific experience claims before queueing advance."
         ),
         "input_schema": {
             "type": "object",
@@ -292,8 +301,9 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "search_applications",
         "description": (
-            "Filter and rank applications for a role by score thresholds, "
-            "pipeline stage, and outcome. Returns up to 100 application "
+            "Compatibility name for the canonical role-local pool query. Filter "
+            "and rank candidates by this role's score thresholds, pipeline stage, "
+            "and outcome. Returns up to 100 application "
             "summaries sorted by the chosen score. Use this BEFORE queueing "
             "individual decisions to understand the cohort: e.g. find all "
             "open applications in 'review' with taali_score >= 70 to identify "
@@ -815,6 +825,27 @@ AGENT_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+# Canonical role-bound reads are generated from the same contracts used by
+# both recruiter chats and public MCP. Keep ``agent_run_complete`` last so its
+# existing prompt-cache breakpoint still covers the complete tool catalogue.
+_SHARED_AGENT_READ_SPECS = shared_read_specs_for(AUTONOMOUS_AGENT)
+_SHARED_AGENT_READ_NAMES = frozenset(
+    spec.name for spec in _SHARED_AGENT_READ_SPECS
+)
+_agent_run_complete_tool = next(
+    tool for tool in AGENT_TOOLS if tool.get("name") == "agent_run_complete"
+)
+AGENT_TOOLS = (
+    shared_read_definitions(AUTONOMOUS_AGENT, bound_role=True)
+    + [
+        tool
+        for tool in AGENT_TOOLS
+        if str(tool.get("name") or "") not in _SHARED_AGENT_READ_NAMES
+        and tool is not _agent_run_complete_tool
+    ]
+    + [_agent_run_complete_tool]
+)
+
 
 # Sentinel returned by agent_run_complete so the orchestrator knows to stop.
 _RUN_COMPLETE_SENTINEL = "__AGENT_RUN_COMPLETE__"
@@ -833,25 +864,59 @@ def _read_ctx(role: Role) -> _AgentReadCtx:
 
 
 def _tool_get_application(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
-    return mcp_handlers.get_application(
-        db, _read_ctx(role), application_id=int(args["application_id"])
+    return mcp_handlers.get_role_candidate(
+        db,
+        _read_ctx(role),
+        role_id=int(role.id),
+        application_id=int(args["application_id"]),
     )
 
 
+def _authorize_candidate_in_role(
+    db: Session,
+    *,
+    role: Role,
+    candidate_id: int,
+) -> None:
+    scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+    )
+    query = db.query(CandidateApplication.id).filter(
+        CandidateApplication.organization_id == int(role.organization_id),
+        CandidateApplication.candidate_id == int(candidate_id),
+    )
+    if scope.scope_visible_roster(query).first() is None:
+        raise ValueError(
+            f"candidate {candidate_id} is not in role {int(role.id)}'s candidate pool"
+        )
+
+
 def _tool_get_candidate(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
+    _authorize_candidate_in_role(
+        db,
+        role=role,
+        candidate_id=int(args["candidate_id"]),
+    )
     return mcp_handlers.get_candidate(
         db, _read_ctx(role), candidate_id=int(args["candidate_id"])
     )
 
 
 def _tool_get_candidate_cv(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
+    _authorize_candidate_in_role(
+        db,
+        role=role,
+        candidate_id=int(args["candidate_id"]),
+    )
     return mcp_handlers.get_candidate_cv(
         db, _read_ctx(role), candidate_id=int(args["candidate_id"])
     )
 
 
 def _tool_search_applications(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
-    return mcp_handlers.search_applications(
+    result = mcp_handlers.search_role_candidates(
         db,
         _read_ctx(role),
         # Autonomous cohort reads never accept a model-supplied role identity;
@@ -871,13 +936,18 @@ def _tool_search_applications(db: Session, *, agent_run: AgentRun, role: Role, a
         limit=int(args.get("limit") or 25),
         offset=max(0, int(args.get("offset") or 0)),
     )
+    # Preserve the legacy tool's list-shaped response while sourcing every row
+    # from the canonical role-local query. New reasoning should prefer
+    # ``search_role_candidates`` and its exact pagination envelope.
+    return result["items"]
 
 
 def _tool_compare_applications(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
     ids = args.get("application_ids") or []
-    return mcp_handlers.compare_applications(
+    return mcp_handlers.compare_role_applications(
         db,
         _read_ctx(role),
+        role_id=int(role.id),
         application_ids=[int(i) for i in ids],
     )
 
@@ -932,37 +1002,19 @@ def _tool_refresh_candidate_graph(
             "application_id": application_id,
             "episodes_sent": 0,
         }
-    expected_application_role_id = int(role.id)
-    if str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER:
-        if getattr(role, "ats_owner_role_id", None) is None:
-            return {
-                "status": "not_found",
-                "application_id": application_id,
-                "episodes_sent": 0,
-            }
-        expected_application_role_id = int(role.ats_owner_role_id)
-        owner_exists = (
-            db.query(Role.id)
-            .filter(
-                Role.id == expected_application_role_id,
-                Role.organization_id == int(role.organization_id),
-                Role.deleted_at.is_(None),
-            )
-            .one_or_none()
-        )
-        if owner_exists is None:
-            return {
-                "status": "not_found",
-                "application_id": application_id,
-                "episodes_sent": 0,
-            }
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+    )
+    app_query = db.query(CandidateApplication).filter(
+        CandidateApplication.id == application_id,
+        CandidateApplication.organization_id == int(role.organization_id),
+    )
     app = (
-        db.query(CandidateApplication)
+        role_scope.scope_visible_roster(app_query)
         .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == int(role.organization_id),
-            CandidateApplication.role_id == expected_application_role_id,
-            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.candidate_id.isnot(None),
         )
         .first()
     )
@@ -1122,18 +1174,22 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
             "application_id": application_id,
             "detail": "application not found in this organization",
         }
-    shared_with_running_role = bool(
-        app_row.role_id is not None
-        and str(getattr(role, "role_kind", "") or "") == "sister"
-        and int(getattr(role, "ats_owner_role_id", 0) or 0) == int(app_row.role_id)
+    from ..services.related_role_application_runtime import (
+        related_role_for_application,
     )
-    if (
-        app_row.role_id is None
-        or (
-            int(app_row.role_id) != int(role.id)
-            and not shared_with_running_role
-        )
-    ):
+
+    related_membership = related_role_for_application(
+        db,
+        role_id=int(role.id),
+        application=app_row,
+    )
+    visible_to_running_role = bool(
+        related_membership is not None
+        if str(getattr(role, "role_kind", "") or "") == "sister"
+        else app_row.role_id is not None
+        and int(app_row.role_id) == int(role.id)
+    )
+    if not visible_to_running_role:
         return {
             "status": "wrong_role",
             "application_id": application_id,
@@ -1796,12 +1852,24 @@ def _is_deterministic_full_score_reject(decision: Any, decision_type: str) -> bo
         return False
     evidence = getattr(decision, "evidence", None)
     evidence = evidence if isinstance(evidence, dict) else {}
-    return bool(
+    ordinary_contract = bool(
         str(getattr(decision, "model_version", "") or "") == "bulk-deterministic"
         and evidence.get("decision_source") == "policy"
         and evidence.get("decision_stage") == "full_scoring"
         and evidence.get("source") in {"score_time_decision", "bulk_decision"}
     )
+    related_contract = bool(
+        str(getattr(decision, "model_version", "") or "")
+        == "related-role-deterministic"
+        and evidence.get("decision_source") == "policy"
+        and evidence.get("decision_stage") == "full_scoring"
+        and evidence.get("source") == "related_role_runtime"
+        and evidence.get("role_state_is_independent") is True
+        and int(evidence.get("related_role_id") or 0)
+        == int(getattr(decision, "role_id", 0) or 0)
+        and int(evidence.get("sister_evaluation_id") or 0) > 0
+    )
+    return ordinary_contract or related_contract
 
 
 def _auto_execute_decision(
@@ -1826,15 +1894,6 @@ def _auto_execute_decision(
     caller could regress that; refuse here so the invariant holds at the
     side-effect boundary, not just the gate above it.
     """
-    if (
-        decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
-        and role_shares_ats_application(role, db=db)
-    ):
-        raise ValueError(
-            "refusing to auto-execute a rejection for a shared role family "
-            "because the ATS application is shared; leave it pending for "
-            "recruiter confirmation"
-        )
     if (
         decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
         and not _is_deterministic_full_score_reject(decision, decision_type)
@@ -1922,9 +1981,15 @@ def _auto_execute_decision(
         return False
     decision = live_decision
 
-    from ..domains.assessments_runtime.role_support import is_resolved
+    from ..services.related_role_application_runtime import (
+        role_application_is_resolved,
+    )
 
-    if is_resolved(score_app):
+    if role_application_is_resolved(
+        db,
+        role_id=int(decision.role_id),
+        application=score_app,
+    ):
         decision.status = "discarded"
         decision.resolved_at = datetime.now(timezone.utc)
         decision.resolution_note = "superseded: application already resolved"
@@ -2029,7 +2094,15 @@ def _auto_execute_decision(
         "model_version": decision.model_version,
         "prompt_version": decision.prompt_version,
         "auto_toggle": _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type),
+        "acting_role_id": int(role.id),
     }
+    from ..services.decision_resolution_provenance import record_resolution_request
+
+    record_resolution_request(
+        decision,
+        requested_action=decision_type,
+        target_stage=None,
+    )
     reason = f"Auto-approved per role.{metadata['auto_toggle']} (decision #{decision.id})"
     reject_notify = False
 
@@ -2199,10 +2272,6 @@ def maybe_auto_execute_decision(
     )
     human_confirm_required = bool(
         force_human_review
-        or (
-            decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
-            and role_shares_ats_application(role, db=db)
-        )
         or (
             decision_type in _HUMAN_CONFIRM_REQUIRED_DECISION_TYPES
             and not _is_deterministic_full_score_reject(
@@ -3068,6 +3137,15 @@ def dispatch(
     agent_run: AgentRun,
     role: Role,
 ) -> Any:
+    if name in _SHARED_AGENT_READ_NAMES:
+        return dispatch_shared_read(
+            name,
+            arguments,
+            exposure=AUTONOMOUS_AGENT,
+            db=db,
+            principal=_read_ctx(role),
+            bound_role_id=int(role.id),
+        )
     handler = _HANDLER_BY_NAME.get(name)
     if handler is None:
         raise KeyError(f"unknown agent tool: {name}")

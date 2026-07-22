@@ -12,33 +12,137 @@ from ..models.sister_role_evaluation import (
 )
 
 
-_POST_HANDOVER_STAGES = {
-    "phone_screen",
-    "phone_interview",
-    "first_stage",
-    "interview",
-    "technical",
-    "technical_interview",
-    "final_interview",
-    "onsite",
-    "presentation",
-    "assessment",
-    "offer",
-    "offer_extended",
-    "offer_accepted",
-    "hired",
-}
+def related_role_ats_state(
+    *,
+    sister_role: Role,
+    evaluation: SisterRoleEvaluation | None,
+    source_application: CandidateApplication | None,
+) -> dict:
+    """Return shared ATS state as restrictions, never as local state.
 
+    Migration 185 gives every persisted membership an explicit
+    ``ats_application_id``. The source-application fallback keeps mixed-version
+    rolling deploys and old test fixtures readable without restoring the old
+    owner-stage/outcome projection.
+    """
 
-def _stage(value: object) -> str:
-    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    ats_application = (
+        evaluation.ats_application
+        if evaluation is not None and evaluation.ats_application_id is not None
+        else None
+    )
+    if (
+        ats_application is None
+        and source_application is not None
+        and int(source_application.role_id or 0)
+        == int(sister_role.ats_owner_role_id or 0)
+    ):
+        ats_application = source_application
+
+    if ats_application is None:
+        ats_context = {
+            "provider": "native",
+            "raw_stage": None,
+            "normalized_stage": None,
+            "needs_mapping": False,
+            "post_handover": False,
+            "writeback_linked": False,
+            "application_outcome": None,
+            "workable_disqualified": False,
+        }
+        restriction_codes = ["ats_application_unlinked"]
+    elif getattr(ats_application, "deleted_at", None) is not None:
+        ats_context = {
+            "provider": "native",
+            "raw_stage": None,
+            "normalized_stage": None,
+            "needs_mapping": False,
+            "post_handover": False,
+            "writeback_linked": False,
+            "application_outcome": None,
+            "workable_disqualified": False,
+        }
+        restriction_codes = ["ats_application_deleted"]
+    elif int(ats_application.role_id or 0) != int(
+        sister_role.ats_owner_role_id or 0
+    ):
+        ats_context = {
+            "provider": "native",
+            "raw_stage": None,
+            "normalized_stage": None,
+            "needs_mapping": False,
+            "post_handover": False,
+            "writeback_linked": False,
+            "application_outcome": None,
+            "workable_disqualified": False,
+        }
+        restriction_codes = ["ats_application_wrong_owner"]
+    elif (
+        sister_role.ats_owner_role is None
+        or getattr(sister_role.ats_owner_role, "deleted_at", None) is not None
+    ):
+        ats_context = {
+            "provider": "native",
+            "raw_stage": None,
+            "normalized_stage": None,
+            "needs_mapping": False,
+            "post_handover": False,
+            "writeback_linked": False,
+            "application_outcome": None,
+            "workable_disqualified": False,
+        }
+        restriction_codes = ["ats_owner_role_unavailable"]
+    else:
+        # Lazy import avoids the pipeline_service -> sister_role_service ->
+        # projection -> ats_context_service -> pipeline_service import cycle.
+        from .ats_context_service import application_ats_context
+
+        ats_context = application_ats_context(ats_application)
+        ats_outcome = str(
+            ats_application.application_outcome or "open"
+        ).strip().lower()
+        ats_context.update(
+            {
+                "application_outcome": ats_outcome,
+                "workable_disqualified": bool(
+                    ats_application.workable_disqualified
+                ),
+            }
+        )
+        restriction_codes: list[str] = []
+        if ats_outcome != "open":
+            restriction_codes.append(f"shared_ats_outcome_{ats_outcome}")
+        if bool(ats_application.workable_disqualified):
+            restriction_codes.append("shared_ats_disqualified")
+        if bool(ats_context.get("post_handover")):
+            restriction_codes.append("shared_ats_post_handover")
+        if not bool(ats_context.get("writeback_linked")):
+            restriction_codes.append("ats_writeback_unlinked")
+
+    can_advance_in_ats = not restriction_codes
+    restrictions = {
+        "restricted": bool(restriction_codes),
+        "codes": restriction_codes,
+        # Local decisions belong to this logical role and remain available
+        # regardless of shared ATS state. Reject is deliberately never written
+        # to the shared ATS application because that would alter another role.
+        "can_advance_locally": True,
+        "can_reject_locally": True,
+        "can_write_to_ats": can_advance_in_ats,
+        "can_advance_in_ats": can_advance_in_ats,
+        "can_reject_in_ats": False,
+    }
+    return {
+        "ats_context": ats_context,
+        "action_restrictions": restrictions,
+    }
 
 
 def project_sister_application(
     payload: dict,
     *,
     sister_role: Role,
-    owner_role: Role,
+    owner_role: Role | None,
     evaluation: SisterRoleEvaluation | None,
     db: Session | None = None,
     application: CandidateApplication | None = None,
@@ -49,52 +153,92 @@ def project_sister_application(
     """Overlay role-local score/funnel state on the shared ATS application."""
 
     projected = dict(payload)
-    original_score = payload.get("taali_score")
     score = evaluation.role_fit_score if evaluation is not None else None
     status = evaluation.status if evaluation is not None else SISTER_EVAL_PENDING
     details = evaluation.details if evaluation is not None else None
-    summary = dict(payload.get("score_summary") or {})
-    summary.update(
-        {
-            "taali_score": score,
-            "role_fit_score": score,
+    requirements_score = (
+        details.get("requirements_match_score_100")
+        if isinstance(details, dict)
+        else None
+    )
+    if not isinstance(requirements_score, (int, float)):
+        requirements_score = score
+    # Build this from the role-owned evaluation, never by extending the source
+    # application's score summary. Extending it retained owner integrity,
+    # component, provenance and assessment judgments under otherwise-correct
+    # related-role headline scores.
+    summary = {
+        "taali_score": score,
+        "role_fit_score": score,
+        "cv_fit_score": score,
+        "requirements_fit_score": requirements_score,
+        "assessment_score": None,
+        "assessment_id": None,
+        "assessment_status": None,
+        "mode": "sister_role",
+        "score_mode": "sister_role",
+        "score_provenance": {
+            "source": "sister_role_evaluation",
+            "label": "Related role fit",
+            "scored_at": (
+                evaluation.scored_at.isoformat()
+                if evaluation is not None and evaluation.scored_at is not None
+                else None
+            ),
+            "model": evaluation.model_version if evaluation is not None else None,
+        },
+        "role_fit_components": {
             "cv_fit_score": score,
-            "assessment_score": None,
-            "assessment_id": None,
-            "assessment_status": None,
-            "score_mode": "sister_role",
-            "score_provenance": {
-                "source": "sister_role_evaluation",
-                "label": "Related role fit",
-            },
-        }
-    )
-    canonical_outcome = str(payload.get("application_outcome") or "open").strip().lower()
-    globally_unavailable = (
-        canonical_outcome != "open"
-        or bool(payload.get("workable_disqualified"))
-    )
-    globally_advanced = _stage(payload.get("pipeline_stage")) == "advanced"
+            "requirements_fit_score": requirements_score,
+        },
+    }
     local_stage = (
-        "advanced"
-        if globally_advanced
-        else (
-            str(evaluation.pipeline_stage or "applied")
-            if evaluation is not None
-            else "applied"
-        )
+        str(evaluation.pipeline_stage or "applied")
+        if evaluation is not None
+        else "applied"
     )
-    external_advanced = globally_advanced or _stage(
-        payload.get("workable_stage")
-    ) in _POST_HANDOVER_STAGES
+    local_outcome = (
+        str(evaluation.application_outcome or "open").strip().lower()
+        if evaluation is not None
+        else "open"
+    )
+    source_application = application
+    if source_application is None and evaluation is not None:
+        source_application = evaluation.source_application
+    ats_state = related_role_ats_state(
+        sister_role=sister_role,
+        evaluation=evaluation,
+        source_application=source_application,
+    )
+    ats_context = ats_state["ats_context"]
+    owner_is_available = bool(
+        owner_role is not None
+        and sister_role.ats_owner_role_id is not None
+        and int(owner_role.id) == int(sister_role.ats_owner_role_id)
+        and int(owner_role.organization_id) == int(sister_role.organization_id)
+        and owner_role.deleted_at is None
+    )
+    if (
+        str(ats_context.get("application_outcome") or "open") != "open"
+        or bool(ats_context.get("workable_disqualified"))
+    ):
+        legacy_availability = "disqualified"
+    elif bool(ats_context.get("post_handover")):
+        legacy_availability = "external_advanced"
+    else:
+        legacy_availability = "active"
     projected.update(
         {
             "role_id": sister_role.id,
             "role_name": sister_role.name,
-            "operational_role_id": owner_role.id,
-            "operational_role_name": owner_role.name,
+            "operational_role_id": owner_role.id if owner_is_available else None,
+            "operational_role_name": owner_role.name if owner_is_available else None,
             "sister_role_id": sister_role.id,
-            "source_role_score": original_score,
+            # The source application's score is a judgment from another role.
+            # Keep ATS linkage in ``ats_context`` but never expose that verdict
+            # through the related-role candidate payload.
+            "source_role_score": None,
+            "status": local_stage,
             "pipeline_stage": local_stage,
             "pipeline_stage_updated_at": (
                 evaluation.pipeline_stage_updated_at
@@ -106,17 +250,29 @@ def project_sister_application(
                 if evaluation is not None
                 else "system"
             ),
-            # Outcome is canonical shared ATS state. Availability carries the
-            # broader action lock, so hired/withdrawn/disqualified candidates
-            # are never relabeled as rejections in only the related projection.
-            "application_outcome": canonical_outcome,
-            "related_role_availability": (
-                "disqualified"
-                if globally_unavailable
-                else ("external_advanced" if external_advanced else "active")
+            "application_outcome": local_outcome,
+            "application_outcome_updated_at": (
+                evaluation.application_outcome_updated_at
+                if evaluation is not None
+                else None
             ),
+            "application_outcome_source": (
+                evaluation.application_outcome_source
+                if evaluation is not None
+                else "system"
+            ),
+            "version": int(evaluation.version or 1) if evaluation is not None else 1,
+            # Shared external state is a restriction boundary only. It never
+            # becomes this role's membership, pipeline stage, or outcome.
+            "ats_context": ats_context,
+            "action_restrictions": ats_state["action_restrictions"],
+            # Backward-compatible summary enum. The detailed restriction map
+            # above is authoritative and local actions remain available.
+            "related_role_availability": legacy_availability,
             "taali_score": score,
+            "rank_score": score,
             "pre_screen_score": score,
+            "requirements_fit_score": requirements_score,
             "cv_match_score": score,
             "cv_match_details": details,
             "cv_match_scored_at": (
@@ -130,6 +286,47 @@ def project_sister_application(
             "assessment_preview": None,
             "assessment_history": [],
             "pending_decision": None,
+            # Application-column judgments and history belong to the physical
+            # source role. Related notes/actions live in role-attributed events;
+            # related assessments and pending decisions are overlaid below.
+            "manual_decision": None,
+            "notes": None,
+            "pre_screen_recommendation": None,
+            "pre_screen_evidence": None,
+            "auto_reject_state": None,
+            "auto_reject_reason": None,
+            "auto_reject_triggered_at": None,
+            "workable_score": None,
+            "workable_score_raw": None,
+            "workable_score_source": None,
+            "workable_disqualified": False,
+            "workable_disqualified_at": None,
+            "candidate_interview_kit": None,
+            "screening_pack": None,
+            "tech_interview_pack": None,
+            "screening_interview_summary": None,
+            "tech_interview_summary": None,
+            "interview_evidence_summary": None,
+            "interviews": [],
+            "interview_feedback": [],
+            "workable_comments": [],
+            "workable_questionnaire_answers": [],
+            "workable_activity_log": [],
+            "pipeline_external_drift": False,
+            # Membership time, not the source application's age, is this role's
+            # application history boundary.
+            "created_at": evaluation.created_at if evaluation is not None else None,
+            "applied_at": evaluation.created_at if evaluation is not None else None,
+            "updated_at": evaluation.updated_at if evaluation is not None else None,
+            "last_activity_at": (
+                evaluation.updated_at
+                or evaluation.application_outcome_updated_at
+                or evaluation.pipeline_stage_updated_at
+                or evaluation.scored_at
+                or evaluation.created_at
+                if evaluation is not None
+                else None
+            ),
         }
     )
     if db is not None:
@@ -152,4 +349,4 @@ def project_sister_application(
     return projected
 
 
-__all__ = ["project_sister_application"]
+__all__ = ["project_sister_application", "related_role_ats_state"]

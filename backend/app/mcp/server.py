@@ -16,6 +16,7 @@ handler; this module only adapts the public transport.
 # Context-injection convention, which only works when annotations are real
 # classes rather than stringified PEP 563 forward references.
 
+from datetime import datetime
 from typing import Any, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
@@ -34,7 +35,12 @@ from .catalog import (
     ApplicationOutcome,
     AssessmentAttention,
     AssessmentStatus,
+    AgentDecisionType,
+    CandidateAction,
+    CandidateActionActor,
+    CandidateActionStatus,
     ComparisonApplicationIds,
+    DecisionStatus,
     NonEmptyString,
     NonNegativeInt,
     PageLimit,
@@ -225,6 +231,42 @@ def search_applications(
         return handlers.search_applications(db, user, **args)
 
 
+@_catalog_tool("search_role_candidates")
+def search_role_candidates(
+    ctx: Context,
+    role_id: PositiveInt,
+    min_score: Optional[ScoreThreshold] = None,
+    score_type: ScoreType = "taali",
+    pipeline_stage: Optional[PipelineStage] = None,
+    application_outcome: Optional[ApplicationOutcome] = "open",
+    q: Optional[str] = None,
+    sort_by: SortBy = "taali_score",
+    sort_order: SortOrder = "desc",
+    limit: PageLimit = 25,
+    offset: NonNegativeInt = 0,
+    ats_stage: Optional[str] = None,
+) -> dict[str, Any]:
+    args = get_tool_spec("search_role_candidates").validate(
+        {
+            "role_id": role_id,
+            "min_score": min_score,
+            "score_type": score_type,
+            "pipeline_stage": pipeline_stage,
+            "application_outcome": application_outcome,
+            "q": q,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+            "limit": limit,
+            "offset": offset,
+            "ats_stage": ats_stage,
+        }
+    )
+    with _open_session(
+        ctx, get_tool_spec("search_role_candidates").required_scopes
+    ) as (db, user):
+        return handlers.search_role_candidates(db, user, **args)
+
+
 @_catalog_tool("get_application")
 def get_application(
     ctx: Context,
@@ -239,6 +281,26 @@ def get_application(
         user,
     ):
         return handlers.get_application(db, user, **args)
+
+
+@_catalog_tool("get_role_candidate")
+def get_role_candidate(
+    ctx: Context,
+    role_id: PositiveInt,
+    application_id: PositiveInt,
+    include_cv_text: bool = False,
+) -> dict[str, Any]:
+    args = get_tool_spec("get_role_candidate").validate(
+        {
+            "role_id": role_id,
+            "application_id": application_id,
+            "include_cv_text": include_cv_text,
+        }
+    )
+    with _open_session(
+        ctx, get_tool_spec("get_role_candidate").required_scopes
+    ) as (db, user):
+        return handlers.get_role_candidate(db, user, **args)
 
 
 @_catalog_tool("get_candidate")
@@ -317,6 +379,78 @@ def get_candidate_cv(ctx: Context, candidate_id: PositiveInt) -> dict[str, Any]:
         user,
     ):
         return handlers.get_candidate_cv(db, user, **args)
+
+
+@_catalog_tool("list_recent_agent_decisions")
+def list_recent_agent_decisions(
+    ctx: Context,
+    role_id: Optional[PositiveInt] = None,
+    status: Optional[DecisionStatus] = None,
+    application_id: Optional[PositiveInt] = None,
+    candidate_id: Optional[PositiveInt] = None,
+    decision_type: Optional[AgentDecisionType] = None,
+    created_after: Optional[datetime] = None,
+    created_before: Optional[datetime] = None,
+    resolved_after: Optional[datetime] = None,
+    resolved_before: Optional[datetime] = None,
+    limit: PageLimit = 20,
+    offset: NonNegativeInt = 0,
+) -> dict[str, Any]:
+    args = get_tool_spec("list_recent_agent_decisions").validate(
+        {
+            "role_id": role_id,
+            "status": status,
+            "application_id": application_id,
+            "candidate_id": candidate_id,
+            "decision_type": decision_type,
+            "created_after": created_after,
+            "created_before": created_before,
+            "resolved_after": resolved_after,
+            "resolved_before": resolved_before,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+    with _open_session(
+        ctx, get_tool_spec("list_recent_agent_decisions").required_scopes
+    ) as (db, user):
+        return handlers.list_recent_agent_decisions(db, user, **args)
+
+
+@_catalog_tool("list_candidate_actions")
+def list_candidate_actions(
+    ctx: Context,
+    role_id: PositiveInt,
+    application_id: Optional[PositiveInt] = None,
+    candidate_id: Optional[PositiveInt] = None,
+    action: Optional[CandidateAction] = None,
+    target_stage: Optional[str] = None,
+    status: CandidateActionStatus = "confirmed",
+    actor_type: Optional[CandidateActionActor] = None,
+    occurred_after: Optional[datetime] = None,
+    occurred_before: Optional[datetime] = None,
+    limit: PageLimit = 50,
+    offset: NonNegativeInt = 0,
+) -> dict[str, Any]:
+    args = get_tool_spec("list_candidate_actions").validate(
+        {
+            "role_id": role_id,
+            "application_id": application_id,
+            "candidate_id": candidate_id,
+            "action": action,
+            "target_stage": target_stage,
+            "status": status,
+            "actor_type": actor_type,
+            "occurred_after": occurred_after,
+            "occurred_before": occurred_before,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+    with _open_session(
+        ctx, get_tool_spec("list_candidate_actions").required_scopes
+    ) as (db, user):
+        return handlers.list_candidate_actions(db, user, **args)
 
 
 @_catalog_tool("get_recruiting_overview")

@@ -14,7 +14,8 @@ from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.task import Task
 from app.shared.utils import utcnow
 
@@ -351,6 +352,53 @@ def test_recruiting_overview_uses_org_and_optional_role_scope(db, operations_dat
         )
 
 
+def test_recruiting_overview_uses_related_membership_when_evidence_is_deleted(
+    db, operations_data
+):
+    data = operations_data
+    source_application = data["rows"]["expiring"].application
+    related = Role(
+        organization_id=data["org"].id,
+        name="Independent related overview",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=data["backend"].id,
+    )
+    db.add(related)
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=data["org"].id,
+            role_id=related.id,
+            candidate_id=source_application.candidate_id,
+            source_application_id=source_application.id,
+            ats_application_id=source_application.id,
+            status="done",
+            pipeline_stage="advanced",
+            application_outcome="open",
+            membership_source="initial_snapshot",
+            spec_fingerprint="overview-related-spec",
+        )
+    )
+    db.commit()
+
+    organization_overview = get_recruiting_overview(db, data["user"])
+    assert organization_overview["applications"]["total"] == 7
+    assert organization_overview["applications"]["pipeline_stages"]["invited"] == 2
+    assert organization_overview["applications"]["pipeline_stages"]["advanced"] == 1
+
+    source_application.deleted_at = utcnow()
+    db.commit()
+
+    scoped = get_recruiting_overview(db, data["user"], role_id=related.id)
+
+    assert scoped["applications"]["total"] == 1
+    assert scoped["candidates"]["total"] == 1
+    assert scoped["applications"]["pipeline_stages"]["advanced"] == 1
+    assert scoped["applications"]["pipeline_stages"]["invited"] == 0
+    assert scoped["applications"]["open"] == 1
+
+
 @pytest.mark.parametrize(
     "kwargs, message",
     [
@@ -395,4 +443,4 @@ def test_operations_use_bounded_queries_and_narrow_projections(db, operations_da
         get_recruiting_overview(db, operations_data["user"])
     finally:
         event.remove(engine, "before_cursor_execute", capture_statement)
-    assert len(statements) == 4  # role, application, candidate, assessment aggregates
+    assert len(statements) == 5  # role, ordinary + related membership, candidate, assessment

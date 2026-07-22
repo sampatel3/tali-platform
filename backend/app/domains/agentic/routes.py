@@ -38,13 +38,15 @@ from ...domains.assessments_runtime.job_authorization import (
     has_job_permission_for_role,
     require_job_permission,
 )
-from ...domains.assessments_runtime.role_support import is_resolved, role_family_response, roles_with_families
+from ...domains.assessments_runtime.role_support import role_family_response, roles_with_families
 from ...services.decision_presentation_service import (
     build_decision_explanation,
     candidate_summary_for,
 )
 from ...services import decision_membership
 from ...services.decision_reevaluation_service import (
+    RelatedApplicationResolvedError,
+    RelatedDecisionNotActionableError,
     RelatedEvaluationUnavailableError,
     count_outdated_pending_decisions,
     re_evaluate_related_decision,
@@ -57,6 +59,9 @@ from ...services.decision_role_context import (
     load_related_evaluation_map,
     related_decision_staleness,
     resolve_decision_presentation,
+)
+from ...services.related_role_application_runtime import (
+    role_application_is_resolved,
 )
 from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
 from ...services.role_concurrency import (
@@ -975,7 +980,11 @@ def re_evaluate(
         .filter(CandidateApplication.id == decision.application_id)
         .first()
     )
-    if application is not None and is_resolved(application):
+    if application is not None and role_application_is_resolved(
+        db,
+        role_id=int(decision.role_id),
+        application=application,
+    ):
         raise HTTPException(
             status_code=409,
             detail={
@@ -1015,6 +1024,28 @@ def re_evaluate(
             detail={
                 "code": "related_role_evaluation_missing",
                 "message": "This role's evaluation is unavailable and cannot be refreshed.",
+            },
+        )
+    except RelatedApplicationResolvedError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "application_resolved",
+                "message": (
+                    "This candidate has left this role's active flow. The "
+                    "decision is a frozen audit record and cannot be refreshed."
+                ),
+            },
+        )
+    except RelatedDecisionNotActionableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "decision_not_actionable",
+                "message": (
+                    f"This decision is now {exc.status} and can no longer be "
+                    "re-evaluated. Refresh the queue."
+                ),
             },
         )
     if related_result is not None:

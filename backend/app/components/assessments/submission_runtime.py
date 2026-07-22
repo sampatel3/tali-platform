@@ -2248,16 +2248,26 @@ def submit_assessment_impl(
             transition_related_role_assessment_stage,
         )
 
-        related_pipeline = assessment_uses_related_role_pipeline(db, assessment)
-        if related_pipeline:
-            if not grading_incomplete:
-                transition_related_role_assessment_stage(
-                    db,
-                    assessment=assessment,
-                    to_stage="review",
-                    source="system",
-                )
-        else:
+        related_transition = None
+        if not grading_incomplete:
+            related_transition = transition_related_role_assessment_stage(
+                db,
+                assessment=assessment,
+                to_stage="review",
+                source="system",
+                idempotency_key=f"assessment-submit-stage:{assessment.id}",
+                reason=(
+                    "Assessment grading completed"
+                    if retry_scoring
+                    else "Assessment completed"
+                ),
+            )
+        related_pipeline = (
+            bool(related_transition.handled)
+            if related_transition is not None
+            else assessment_uses_related_role_pipeline(db, assessment)
+        )
+        if not related_pipeline:
             ensure_pipeline_fields(application_row)
             initialize_pipeline_event_if_missing(
                 db,

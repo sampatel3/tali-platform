@@ -134,6 +134,7 @@ def _emit_cycle_abort_event(
             CandidateApplicationEvent(
                 application_id=int(application_id),
                 organization_id=int(run.organization_id),
+                role_id=int(run.role_id),
                 event_type="agent_cycle_aborted",
                 actor_type="agent",
                 actor_id=int(run.id) if run.id else None,
@@ -260,8 +261,8 @@ def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str
             f"application_id={application_id}, but events are debounced — other "
             f"applications for this role may have arrived in the same window. "
             f"Suggested flow:\n"
-            "1. get_application on the focus id.\n"
-            "2. search_applications (stage='applied' or 'review', sort_by=created_at desc) "
+            "1. get_role_candidate on the focus id.\n"
+            "2. search_role_candidates (stage='applied' or 'review', sort_by=created_at desc) "
             "to surface any other recent arrivals worth a look.\n"
             "3. For each candidate worth acting on: if the score is fresh, call "
             "evaluate_policy once and queue its matching verdict. If it returns "
@@ -277,7 +278,7 @@ def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str
         return (
             f"Focus on application_id={application_id}.\n\n"
             "Suggested flow:\n"
-            "1. get_application — read its scores, stage, evidence.\n"
+            "1. get_role_candidate — read its role-local scores, stage, evidence.\n"
             "2. If no fresh CV-match score, call score_cv and then agent_run_complete "
             "(the next cycle can act on the result).\n"
             "3. If the score is borderline, use compare_applications or "
@@ -292,7 +293,7 @@ def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str
             "7. Always end with agent_run_complete."
         )
     return (
-        "Cycle tick — no specific application focus. Use search_applications "
+        "Cycle tick — no specific application focus. Use search_role_candidates "
         "to find ready candidates (e.g. min_score=70 in stage='review'), then "
         "call evaluate_policy and act on at most one. If it returns "
         "escalate_low_confidence, queue_escalate_decision rather than dropping "

@@ -27,3 +27,15 @@ CI executes the registered targets with model, embedding, and sandbox provider
 credentials blank, including Anthropic/Claude, OpenAI, Voyage, and E2B. Live,
 model-graded, or paid evals are deliberately outside this gate and must not be
 added or run without explicit approval.
+
+## Cross-surface candidate capabilities
+
+Candidate pool state, confirmed action history, and agent-decision history are
+critical product capabilities rather than chat-specific features. Each one must
+register distinct ordinary-role and related-role PostgreSQL truth cases across
+REST, public MCP, Taali Chat, Agent Chat, the autonomous agent, and frontend.
+
+Bindings are an allowlist, not descriptive labels. The gate rejects invented or
+unreviewed endpoint/tool names, missing frontend test files, and frontend tests
+that are not executed by CI. When a production surface changes, update the
+approved binding, its deterministic oracle, and the CI command together.

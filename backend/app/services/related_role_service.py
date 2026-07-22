@@ -1,10 +1,4 @@
-"""Create a Taali related-role scoring view over an ATS candidate pool.
-
-The persisted model and API routes retain their historical ``sister`` names,
-but product surfaces use the clearer term "related role".  Keeping creation in
-one service lets the HTTP dialog, role agent, and global chat share the same
-validation, roster accounting, and worker-dispatch behaviour.
-"""
+"""Create independent related roles through every product surface."""
 
 from __future__ import annotations
 
@@ -12,39 +6,42 @@ from copy import deepcopy
 import logging
 from typing import Any
 
-from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from ..models.candidate import Candidate
-from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.job_hiring_team import (
     TEAM_ROLE_HIRING_MANAGER,
     JobHiringTeam,
 )
 from ..models.org_criterion import BUCKET_CONSTRAINT, BUCKET_MUST, BUCKET_PREFERRED
-from ..models.role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role
+from ..models.role import (
+    JOB_STATUS_OPEN,
+    ROLE_KIND_SISTER,
+    Role,
+)
 from ..models.role_brief import RoleBrief
 from ..tasks.sister_role_tasks import score_sister_role
 from .agent_policy_settings import apply_workspace_agent_defaults
 from .ats_role_lifecycle import ats_job_lifecycle
 from .requisition_chat_capture import compute_completeness
-from .related_role_policy import disable_owner_auto_reject_for_new_family
-from .related_role_receipts import created_role_family
+from .related_role_payloads import related_role_created_payload
+from .related_role_preview import (
+    RelatedRoleError,
+    get_related_role_source,
+    preview_related_role,
+    related_role_roster_counts,
+)
 from .related_role_spec_hydration import hydrate_related_role_draft_from_saved_spec
 from .role_brief_service import create_brief, materialize_brief_to_role
 from .role_criteria_service import sync_derived_criteria
-from .sister_role_service import ensure_sister_evaluations
+from .sister_role_service import (
+    ensure_sister_evaluations,
+    related_role_ats_owner,
+    related_role_source_fingerprint,
+    select_related_role_source_members,
+)
 
 logger = logging.getLogger("taali.related_roles")
-
-# Same holistic scoring path and planning estimate used by role-chat rescoring.
-ESTIMATED_SCORE_COST_USD = 0.083
-
-
-class RelatedRoleError(ValueError):
-    """A user-correctable related-role validation error."""
-
 
 _BRIEF_CLONE_FIELDS = (
     "summary",
@@ -77,93 +74,6 @@ _BRIEF_CLONE_FIELDS = (
 )
 
 
-def get_related_role_source(
-    db: Session,
-    *,
-    role_id: int,
-    organization_id: int,
-    lock_for_update: bool = False,
-) -> Role:
-    query = db.query(Role).filter(
-        Role.id == int(role_id),
-        Role.organization_id == int(organization_id),
-        Role.deleted_at.is_(None),
-    )
-    if lock_for_update:
-        # Hiring-team mutations acquire the same Role lock first. This keeps
-        # the copied membership set stable until the related role commits.
-        query = query.with_for_update(of=Role)
-    role = query.first()
-    if role is None:
-        raise RelatedRoleError("Role not found.")
-    if str(role.role_kind or ROLE_KIND_STANDARD) == ROLE_KIND_SISTER:
-        raise RelatedRoleError(
-            "Create a related role from the original ATS role, not from another related role."
-        )
-    if not ats_job_lifecycle(role).external_job_id:
-        raise RelatedRoleError(
-            "Related roles require a Workable- or Bullhorn-linked original role."
-        )
-    return role
-
-
-def related_role_roster_counts(db: Session, source: Role) -> dict[str, int]:
-    filters = (
-        CandidateApplication.organization_id == source.organization_id,
-        CandidateApplication.role_id == source.id,
-        CandidateApplication.deleted_at.is_(None),
-    )
-    total = int(
-        db.query(func.count(CandidateApplication.id)).filter(*filters).scalar() or 0
-    )
-    with_cv = int(
-        db.query(func.count(CandidateApplication.id))
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            *filters,
-            or_(
-                func.length(
-                    func.trim(func.coalesce(CandidateApplication.cv_text, ""))
-                )
-                > 0,
-                func.length(func.trim(func.coalesce(Candidate.cv_text, ""))) > 0,
-            ),
-        )
-        .scalar()
-        or 0
-    )
-    return {"total": total, "with_cv": with_cv, "missing_cv": total - with_cv}
-
-
-def preview_related_role(
-    db: Session, *, role_id: int, organization_id: int
-) -> dict[str, Any]:
-    source = get_related_role_source(
-        db, role_id=role_id, organization_id=organization_id
-    )
-    counts = related_role_roster_counts(db, source)
-    source_ats_provider = ats_job_lifecycle(source).provider
-    provider_label = "Bullhorn" if source_ats_provider == "bullhorn" else "Workable"
-    return {
-        "type": "related_role_preview",
-        "source_role_id": int(source.id),
-        "source_role_name": source.name,
-        "source_ats_provider": source_ats_provider,
-        "candidates_total": counts["total"],
-        "candidates_with_cv": counts["with_cv"],
-        "candidates_missing_cv": counts["missing_cv"],
-        "estimated_cost_usd": round(
-            counts["with_cv"] * ESTIMATED_SCORE_COST_USD, 2
-        ),
-        "message": (
-            f"The related role will share {counts['total']} candidates with "
-            f"{source.name} #{source.id}; {counts['with_cv']} can be scored now. It will have "
-            "its own Taali funnel and scoring Agent. The ATS application remains "
-            f"shared in {provider_label}, so rejection applies to every linked role."
-        ),
-    }
-
-
 def create_related_role_draft(
     db: Session,
     *,
@@ -177,8 +87,8 @@ def create_related_role_draft(
     """Clone an ATS role into the existing conversational job-draft model.
 
     The clone is a snapshot: subsequent chat/edit turns change only this draft.
-    ``source_role_id`` remains the durable coupling pointer used when the draft
-    is finally converted into a related scoring role.
+    ``source_role_id`` remains the durable one-time source selection used when
+    the draft is finally converted. It is not an ATS or fan-out authority.
     """
     source = get_related_role_source(
         db,
@@ -186,6 +96,7 @@ def create_related_role_draft(
         organization_id=organization_id,
         lock_for_update=True,
     )
+    source_counts = related_role_roster_counts(db, source)
     clean_name = str(name or "").strip()
     if len(clean_name) > 200:
         raise RelatedRoleError("The related-role name must be 200 characters or fewer.")
@@ -263,6 +174,8 @@ def create_related_role_draft(
             "role_id": int(source.id),
             "role_name": source.name,
             "role_version": int(source.version or 1),
+            "candidate_count": int(source_counts["total"]),
+            "fingerprint": source_counts["snapshot_fingerprint"],
         }
     }
     if cloned_spec:
@@ -272,8 +185,14 @@ def create_related_role_draft(
         state["job_spec_last_change_mode"] = "clone"
     brief.agent_state = state
 
-    provider = ats_job_lifecycle(source).provider
-    provider_label = "Bullhorn" if provider == "bullhorn" else "Workable"
+    provider = ats_job_lifecycle(related_role_ats_owner(db, source)).provider
+    provider_label = (
+        "Bullhorn"
+        if provider == "bullhorn"
+        else "Workable"
+        if provider == "workable"
+        else "ATS"
+    )
     copied_note = (
         "including its complete job specification"
         if cloned_spec
@@ -288,10 +207,11 @@ def create_related_role_draft(
                 "read from it. Tell me what should change for this version. "
                 "You can describe only the differences; I'll save those into the "
                 "brief and ask only about details the source does not answer. When "
-                "you're ready, review the shared candidate count and use **Create "
+                "you're ready, review the initial candidate snapshot and use **Create "
                 "and score candidates** to create the new scoring "
-                f"role. Candidate stages and actions will stay coupled to "
-                f"**{source.name} #{source.id}**, the original {provider_label} job."
+                "role. The new role will then own its membership, stages, "
+                f"decisions, and Agent. The original {provider_label} job "
+                f"(**{source.name} #{source.id}**) is only an optional write-back link."
             ),
             "attachments": [],
             "suggested_replies": [],
@@ -330,6 +250,7 @@ def create_related_role(
     name: str,
     job_spec_text: str,
     brief: RoleBrief | None = None,
+    expected_source_snapshot_fingerprint: str | None = None,
 ) -> tuple[Role, dict[str, int]]:
     """Persist, assign a team, commit, and queue a related scoring role.
 
@@ -344,6 +265,16 @@ def create_related_role(
         organization_id=organization_id,
         lock_for_update=True,
     )
+    source_members = select_related_role_source_members(db, source)
+    source_snapshot_fingerprint = related_role_source_fingerprint(source_members)
+    if (
+        expected_source_snapshot_fingerprint
+        and expected_source_snapshot_fingerprint != source_snapshot_fingerprint
+    ):
+        raise RelatedRoleError(
+            "The source candidate snapshot changed. Refresh the preview and confirm again."
+        )
+    ats_owner = related_role_ats_owner(db, source)
     clean_name = str(name or "").strip()
     clean_spec = str(job_spec_text or "").strip()
     if not clean_name:
@@ -357,17 +288,15 @@ def create_related_role(
     if len(clean_spec) > 100_000:
         raise RelatedRoleError("The job specification is too long.")
 
-    disable_owner_auto_reject_for_new_family(
-        db, source=source, creator_user_id=int(creator_user_id)
-    )
-
     related = Role(
         organization_id=int(organization_id),
         name=clean_name,
         description=f"Related Taali role based on {source.name} #{source.id}",
         source="sister",
         role_kind=ROLE_KIND_SISTER,
-        ats_owner_role_id=source.id,
+        related_source_role_id=int(source.id),
+        ats_owner_role_id=int(ats_owner.id) if ats_owner is not None else None,
+        job_status=JOB_STATUS_OPEN,
         job_spec_text=clean_spec,
         job_spec_filename="Taali related role specification",
         auto_reject_threshold_mode="manual",
@@ -377,10 +306,9 @@ def create_related_role(
         auto_promote=False,
         auto_skip_assessment=True,
     )
-    # A related role is an independent Taali workflow with its own scoring
-    # authority and spend cap. It does not inherit the source role's Agent
-    # switch or budget. Automatic rejection stays off because it closes the
-    # shared ATS application across the whole role family.
+    # A related role is an independent workflow with its own membership,
+    # scoring authority, funnel, decisions, settings, and spend cap. The source
+    # role is not modified merely because this role was created.
     apply_workspace_agent_defaults(
         related, db.get(Organization, int(organization_id))
     )
@@ -403,6 +331,15 @@ def create_related_role(
             if brief.role_id is not None:
                 raise RelatedRoleError("This related-role draft has already been created.")
             brief.role_id = int(related.id)
+            brief_state = dict(brief.agent_state or {})
+            brief_state["related_role_source_snapshot"] = {
+                "role_id": int(source.id),
+                "role_name": source.name,
+                "role_version": int(source.version or 1),
+                "candidate_count": len(source_members),
+                "fingerprint": source_snapshot_fingerprint,
+            }
+            brief.agent_state = brief_state
             # Reuse the normal requisition materializer so structured fields,
             # recruiter criteria, and the rich brief remain identical whether
             # a job started natively or as a related scoring view.
@@ -413,7 +350,7 @@ def create_related_role(
                 job_spec_text=clean_spec,
             )
         sync_derived_criteria(db, related)
-        source_members = (
+        source_team_members = (
             db.query(JobHiringTeam)
             .filter(
                 JobHiringTeam.organization_id == int(organization_id),
@@ -422,7 +359,7 @@ def create_related_role(
             .order_by(JobHiringTeam.id.asc())
             .all()
         )
-        if source_members:
+        if source_team_members:
             db.add_all(
                 [
                     JobHiringTeam(
@@ -431,7 +368,7 @@ def create_related_role(
                         user_id=int(member.user_id),
                         team_role=member.team_role,
                     )
-                    for member in source_members
+                    for member in source_team_members
                 ]
             )
         else:
@@ -443,9 +380,21 @@ def create_related_role(
                     team_role=TEAM_ROLE_HIRING_MANAGER,
                 )
             )
-        evaluation_counts = ensure_sister_evaluations(db, related)
+        evaluation_counts = ensure_sister_evaluations(
+            db,
+            related,
+            seed_missing=True,
+            source_role=source,
+            source_members=source_members,
+        )
         db.commit()
         db.refresh(related)
+        if ats_owner is not None:
+            # The source Role instance can have a partially populated inverse
+            # collection after the new relationship is flushed. Creation
+            # receipts promise a complete family, so force the next read to
+            # reload every current sibling from the database.
+            db.expire(ats_owner, ["sister_roles"])
     except Exception:
         db.rollback()
         raise
@@ -459,33 +408,6 @@ def create_related_role(
             type(exc).__name__,
         )
     return related, evaluation_counts
-
-
-def related_role_created_payload(
-    related: Role, evaluation_counts: dict[str, int]
-) -> dict[str, Any]:
-    owner = getattr(related, "ats_owner_role", None)
-    source_ats_provider = ats_job_lifecycle(owner).provider
-    provider_label = "Bullhorn" if source_ats_provider == "bullhorn" else "Workable"
-    role_family, family_labels = created_role_family(related, owner)
-    return {
-        "type": "related_role_created",
-        "created": True,
-        "role_id": int(related.id),
-        "role_name": related.name,
-        "source_role_id": int(related.ats_owner_role_id),
-        "source_role_name": owner.name,
-        "source_ats_provider": source_ats_provider,
-        "role_family": role_family,
-        "evaluation_counts": dict(evaluation_counts),
-        "frontend_url": f"/jobs/{related.id}",
-        "message": (
-            f"Created {related.name} #{related.id} and queued its shared candidate roster for scoring. "
-            "It now has its own Taali funnel, scoring Agent, and budget. "
-            f"The {provider_label} application remains shared across all linked roles: "
-            f"{family_labels}. Rejecting in any linked role rejects the candidate across all linked roles."
-        ),
-    }
 
 
 __all__ = [

@@ -64,6 +64,13 @@ from ..models.agent_conversation import (
 from ..models.organization import Organization
 from ..models.role import Role
 from ..models.user import User
+from ..mcp.provenance import (
+    grounding_required_message,
+    latest_user_text,
+    missing_required_capabilities,
+    required_capabilities_for_message,
+)
+from ..mcp.shared_reads import capabilities_for_successful_read
 from ..llm.tool_pairs import sanitize_tool_pairs
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
@@ -267,6 +274,10 @@ def _run_agent_response(
     client = None
     system_blocks = build_system_blocks(db, role=role)
     messages = _load_history(db, conversation)
+    required_capabilities = required_capabilities_for_message(
+        latest_user_text(messages)
+    )
+    grounded_capabilities: set[str] = set()
     # Immutable-at-enqueue baseline, advanced only after this turn completes one
     # of its own successful mutation tools. Read-only tools deliberately ignore
     # this cursor so a stale turn can still answer using the latest role state.
@@ -362,8 +373,18 @@ def _run_agent_response(
 
         if stop_reason != "tool_use":
             # Terminal turn — this is the visible answer.
-            final_text = _extract_text(blocks)
-            if stop_reason == "max_tokens":
+            candidate_text = _extract_text(blocks)
+            claim_capabilities = required_capabilities_for_message(candidate_text)
+            missing_grounding = missing_required_capabilities(
+                required_capabilities | claim_capabilities,
+                grounded_capabilities,
+            )
+            if missing_grounding:
+                final_text = grounding_required_message(missing_grounding)
+                final_stop = "grounding_required"
+            else:
+                final_text = candidate_text
+            if stop_reason == "max_tokens" and not missing_grounding:
                 # The model was cut off at the length ceiling. Don't leave a bare
                 # mid-word cutoff — flag it so the recruiter can pick it up.
                 final_text = (final_text or "").rstrip() + (
@@ -413,6 +434,7 @@ def _run_agent_response(
         error_count = 0
         terminal_receipt_message: str | None = None
         round_cards: list[dict[str, Any]] = []
+        round_grounded_capabilities: set[str] = set()
         search_failure_incident: str | None = None
         tool_results_by_id: dict[str, dict[str, Any]] = {}
         requested_mutations = [
@@ -482,6 +504,9 @@ def _run_agent_response(
                                 role.version or expected_role_version
                             )
                         if not is_error and isinstance(result, dict):
+                            round_grounded_capabilities.update(
+                                capabilities_for_successful_read(name, result)
+                            )
                             if result.get("type") in CARD_TYPES:
                                 round_cards.append(result)
                             if result.get("_terminal_message"):
@@ -571,6 +596,7 @@ def _run_agent_response(
             error_count = tool_count
         else:
             collected_cards.extend(round_cards)
+            grounded_capabilities.update(round_grounded_capabilities)
 
         tool_results = [
             tool_results_by_id[str(block.get("id") or "")] for block in tool_blocks

@@ -597,7 +597,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         const [appRes, eventsRes, initialDecisionRes] = await Promise.all([
           appRequest,
           rolesApi?.listApplicationEvents && Number.isFinite(numericApplicationId)
-            ? rolesApi.listApplicationEvents(numericApplicationId).catch(() => null)
+            ? rolesApi.listApplicationEvents(
+                numericApplicationId,
+                viewRoleId ? { role_id: viewRoleId } : {},
+              ).catch(() => null)
             : Promise.resolve(null),
           // Include resolved rows so approving a decision does not erase why it
           // was made from the standing report. Failure must not blank the report.
@@ -1097,7 +1100,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     setSavingNote(true);
     try {
       if (appId && rolesApi?.addApplicationNote) {
-        await rolesApi.addApplicationNote(appId, note, noteForAgent);
+        const logicalRoleId = positiveIntegerOrNull(application?.role_id) || viewRoleId;
+        await rolesApi.addApplicationNote(
+          appId,
+          note,
+          noteForAgent,
+          logicalRoleId ? { role_id: logicalRoleId } : {},
+        );
       } else {
         await assessmentsApi.addNote(assessmentId, note);
       }
@@ -1112,7 +1121,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     } finally {
       setSavingNote(false);
     }
-  }, [application?.id, rolesApi, assessmentId, assessmentsApi, noteDraft, noteForAgent, showToast]);
+  }, [application?.id, application?.role_id, rolesApi, assessmentId, assessmentsApi, noteDraft, noteForAgent, showToast, viewRoleId]);
 
   // Link quick-add — a URL + optional label, stored as a `link` note
   // (kind: 'link'). The note body is the label (or URL) so it's readable in the
@@ -1126,12 +1135,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       return;
     }
     const label = linkLabel.trim();
+    const logicalRoleId = positiveIntegerOrNull(application?.role_id) || viewRoleId;
     setSavingLink(true);
     try {
       await rolesApi.addApplicationNote(appId, label || url, noteForAgent, {
         kind: 'link',
         link_url: url,
         link_label: label || undefined,
+        ...(logicalRoleId ? { role_id: logicalRoleId } : {}),
       });
       setLinkUrl('');
       setLinkLabel('');
@@ -1142,7 +1153,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     } finally {
       setSavingLink(false);
     }
-  }, [application?.id, rolesApi, linkUrl, linkLabel, noteForAgent, showToast]);
+  }, [application?.id, application?.role_id, rolesApi, linkUrl, linkLabel, noteForAgent, showToast, viewRoleId]);
 
   // One-click share: mint a fresh 7-day share-link of the requested mode
   // and copy the URL to the clipboard. Replaces the previous ShareModal
@@ -1162,7 +1173,12 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     setSharingMode(mode);
     let url = '';
     try {
-      const res = await rolesApi.createApplicationShareLink(application.id, { mode, expiry: '7d' });
+      const logicalViewRoleId = positiveIntegerOrNull(application.role_id) || viewRoleId;
+      const res = await rolesApi.createApplicationShareLink(application.id, {
+        mode,
+        expiry: '7d',
+        viewRoleId: logicalViewRoleId,
+      });
       const token = res?.data?.token;
       if (!token || typeof window === 'undefined') throw new Error('Share link unavailable.');
       url = `${window.location.origin}/share/${token}`;
@@ -1182,7 +1198,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     } finally {
       setSharingMode('');
     }
-  }, [application?.id, rolesApi, showToast]);
+  }, [application?.id, application?.role_id, rolesApi, showToast, viewRoleId]);
 
   // Recruiter lifecycle actions migrated from the legacy /assessments page.
   // Rendered in the (recruiter-only) Assessment pane, so they never reach a

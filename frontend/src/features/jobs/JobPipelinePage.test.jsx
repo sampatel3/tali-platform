@@ -781,7 +781,7 @@ describe('JobPipelinePage', () => {
     expect(apiClient.roles.setJobStatus).not.toHaveBeenCalled();
   });
 
-  it('defers related-role lifecycle to its original role instead of an ATS provider', async () => {
+  it('keeps related-role lifecycle independent in Taali', async () => {
     const relatedRole = {
       ...baseRole,
       source: 'sister',
@@ -798,10 +798,11 @@ describe('JobPipelinePage', () => {
     fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
     const lifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
 
-    expect(within(lifecycle).getByText('Managed on the original role')).toBeInTheDocument();
-    expect(within(lifecycle).getByText(/Archive or reopen AI Engineer #77/i)).toBeInTheDocument();
+    expect(within(lifecycle).getByText(/Managed in Taali for this role/i)).toBeInTheDocument();
+    expect(within(lifecycle).getByText(/ATS link does not control this role's lifecycle/i)).toBeInTheDocument();
     expect(within(lifecycle).queryByText(/Managed in Workable/i)).not.toBeInTheDocument();
-    expect(within(lifecycle).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(lifecycle).getByText('Open')).toBeInTheDocument();
+    expect(within(lifecycle).getByRole('button', { name: 'Archive role' })).toBeInTheDocument();
     expect(apiClient.roles.setJobStatus).not.toHaveBeenCalled();
   });
 
@@ -832,7 +833,7 @@ describe('JobPipelinePage', () => {
     expect(screen.getAllByText('Workable').length).toBeGreaterThan(0);
     expect(screen.queryByText('Related · Workable')).not.toBeInTheDocument();
     expect(screen.getByRole('note')).toHaveTextContent(
-      'Shared Workable candidate pool with AI Engineer #77 (original). Rejecting and advancing apply to AI Engineer #77, AI Native Engineer #101.',
+      'Independent related role with a Workable link to AI Engineer #77. Each role keeps its own candidate membership, scores, decisions, and pipeline state.',
     );
     expect(screen.queryByRole('columnheader', { name: /Original fit/i })).not.toBeInTheDocument();
     const row = screen.getByText('Sam Patel').closest('tr');
@@ -861,8 +862,8 @@ describe('JobPipelinePage', () => {
     expect(screen.getByRole('button', { name: 'Auto-send assessments' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' })).not.toBeDisabled();
     expect(screen.queryByText('Shared-pool candidate actions remain behind recruiter approval.')).not.toBeInTheDocument();
     expect(screen.queryByText(/Related-role scoring/i)).not.toBeInTheDocument();
 
@@ -1233,9 +1234,9 @@ describe('JobPipelinePage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
     expect(await screen.findByRole('heading', { name: /Turn on the agent for AI Native Engineer/i }))
       .toBeInTheDocument();
-    expect(screen.getByText(/This role shares candidates with AI Engineer #77/i))
+    expect(screen.getByText(/uses an ATS link to AI Engineer #77/i))
       .toBeInTheDocument();
-    expect(screen.getByText(/The agent scores them separately for AI Native Engineer/i))
+    expect(screen.getByText(/candidate membership, scores, decisions, and pipeline state are separate/i))
       .toBeInTheDocument();
     expect(screen.getByText(/Assessments: You approve invitations and retries/i))
       .toBeInTheDocument();
@@ -1254,7 +1255,7 @@ describe('JobPipelinePage', () => {
     expect(activationPayload).not.toHaveProperty('activation_assessment_action');
   });
 
-  it('explains that automatic related-role advances update every linked role', async () => {
+  it('explains that automatic related-role advances stay in that role', async () => {
     apiClient.roles.get.mockResolvedValue({
       data: {
         ...baseRole,
@@ -1280,9 +1281,9 @@ describe('JobPipelinePage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
 
     expect(await screen.findByText(
-      /Advances happen automatically across the original role and every related role/i,
+      /Qualified candidates advance automatically in this role/i,
     )).toBeInTheDocument();
-    expect(screen.getByText(/You approve rejections; an approved rejection applies across every role/i))
+    expect(screen.getByText(/Rejections follow this role’s own approval settings/i))
       .toBeInTheDocument();
   });
 
@@ -1737,7 +1738,7 @@ describe('JobPipelinePage', () => {
     expect(within(reviewCard).queryByText(longReasoning)).not.toBeInTheDocument();
   });
 
-  it('names every linked role before approving a reject recommendation', async () => {
+  it('confirms a reject only for the current related role', async () => {
     const roleFamily = {
       owner: { id: 77, name: 'AI Engineer' },
       related: [
@@ -1771,14 +1772,14 @@ describe('JobPipelinePage', () => {
     const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
     fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
 
-    expect(await screen.findByRole('heading', { name: 'Reject across linked roles?' })).toBeInTheDocument();
-    expect(within(screen.getByRole('dialog')).getByText(
-      /AI Engineer #77, AI Native Engineer #101, ML Platform Engineer #109/,
-    ))
+    expect(await screen.findByRole('heading', { name: 'Reject candidate in AI Native Engineer #101?' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByText(/changes only AI Native Engineer #101.*candidate state/i))
+      .toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByText(/linked ATS application and other roles are unchanged/i))
       .toBeInTheDocument();
     expect(apiClient.agent.approveDecision).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reject across all linked roles' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reject in this role' }));
     await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(502, {}, {}));
     expect(showToast).toHaveBeenCalledWith(
       'Recommendation accepted for processing.',
@@ -2275,7 +2276,7 @@ describe('JobPipelinePage', () => {
     expect(within(reviewCard).getByRole('button', { name: /^Approve$/i })).toBeEnabled();
   });
 
-  it('names every linked role before approving an advance recommendation', async () => {
+  it('confirms an advance only for the current related role', async () => {
     const roleFamily = {
       owner: { id: 77, name: 'AI Engineer' },
       related: [
@@ -2309,14 +2310,12 @@ describe('JobPipelinePage', () => {
     const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
     fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
 
-    expect(await screen.findByRole('heading', { name: 'Advance across linked roles?' })).toBeInTheDocument();
-    expect(within(screen.getByRole('dialog')).getByText(
-      /AI Engineer #77, AI Native Engineer #101, ML Platform Engineer #109/,
-    ))
+    expect(await screen.findByRole('heading', { name: 'Advance candidate in AI Native Engineer #101?' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByText(/other roles keep their own pipeline state/i))
       .toBeInTheDocument();
     expect(apiClient.agent.approveDecision).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Advance across all linked roles' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Advance in this role' }));
     await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(503, {}, {}));
   });
 
@@ -2353,7 +2352,10 @@ describe('JobPipelinePage', () => {
     const appliedLink = within(appliedCard).getByRole('link', { name: /Open Sam Patel/i });
     // Modifier-clicking a kanban card still falls through to the link's
     // default behaviour (open in new tab), so the href is preserved.
-    expect(appliedLink).toHaveAttribute('href', '/candidates/1?from=jobs/101');
+    expect(appliedLink).toHaveAttribute(
+      'href',
+      '/candidates/1?from=jobs/101&view_role_id=101',
+    );
 
     fireEvent.click(appliedLink);
 
@@ -2363,6 +2365,40 @@ describe('JobPipelinePage', () => {
     // the redesigned drawer.
     expect(await screen.findByText(/Closes the application/i)).toBeInTheDocument();
     expect(onNavigate).not.toHaveBeenCalledWith('candidate-report', expect.anything());
+  });
+
+  it('opens a related-role report with independent breadcrumb and logical view scope', async () => {
+    const relatedRole = {
+      ...baseRole,
+      role_kind: 'sister',
+      source: 'sister',
+      ats_owner_role_id: 77,
+      ats_owner_role_name: 'AI Engineer',
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: relatedRole });
+    apiClient.roles.get.mockResolvedValue({ data: relatedRole });
+    apiClient.roles.listApplications.mockResolvedValue({
+      data: [{ ...baseApplications[0], role_id: 101, role_name: relatedRole.name }],
+    });
+    const onNavigate = vi.fn();
+    renderPipeline({ onNavigate });
+    await switchToPipelineView();
+
+    const card = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    const cardLink = within(card).getByRole('link', { name: /Open Sam Patel/i });
+    expect(cardLink).toHaveAttribute(
+      'href',
+      '/candidates/1?from=jobs/101&view_role_id=101',
+    );
+
+    fireEvent.click(cardLink);
+    fireEvent.click(await screen.findByRole('link', { name: /View full report/i }));
+
+    expect(onNavigate).toHaveBeenCalledWith('candidate-report', {
+      candidateApplicationId: 1,
+      roleId: 101,
+      viewRoleId: 101,
+    });
   });
 
   it('patches just the rejected row instead of re-downloading the whole workspace', async () => {

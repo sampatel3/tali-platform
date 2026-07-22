@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
@@ -72,6 +73,13 @@ def reset_evaluation_for_rescore(
         or int(evaluation.source_application_id) != int(application_id)
     ):
         raise ValueError("Related evaluation does not match role/application")
+    if (
+        evaluation.deleted_at is not None
+        or str(evaluation.application_outcome or "open").strip().lower() != "open"
+        or str(evaluation.pipeline_stage or "applied").strip().lower()
+        == "advanced"
+    ):
+        return False
     cv_text = str(cv_text or "").strip()
     job_spec = str(job_spec or "").strip()
     archive_evaluation_result(evaluation)
@@ -117,7 +125,12 @@ def release_sister_role_score_holds(
     organization_id: int,
     role_id: int,
 ) -> int:
-    """Release durable retry/stale holds at an explicit authority boundary.
+    """Release durable provider retries at an explicit authority boundary.
+
+    ``stale_held`` is intentionally excluded: it means shared candidate
+    evidence changed and only the candidate/decision Re-evaluate flow may
+    authorise another paid score. Turning on or resuming an agent is not that
+    candidate-specific consent.
 
     Celery task payloads deliberately remain the historical one-argument shape,
     so a newly deployed API can still hand work to an older worker during a
@@ -161,9 +174,8 @@ def release_sister_role_score_holds(
             .filter(
                 SisterRoleEvaluation.organization_id == int(organization_id),
                 SisterRoleEvaluation.role_id == int(role_id),
-                SisterRoleEvaluation.status.in_(
-                    (SISTER_EVAL_RETRY_WAIT, SISTER_EVAL_STALE_HELD)
-                ),
+                SisterRoleEvaluation.deleted_at.is_(None),
+                SisterRoleEvaluation.status == SISTER_EVAL_RETRY_WAIT,
             )
             .order_by(SisterRoleEvaluation.id.asc())
             .with_for_update(of=SisterRoleEvaluation)
@@ -212,21 +224,10 @@ def reset_related_evaluations_for_application(
         or organization_id is None
         or owner_role_id is None
         or candidate_id is None
-        or getattr(application, "deleted_at", None) is not None
     ):
         return []
 
-    from .sister_role_service import (
-        application_cv_text,
-        source_application_is_globally_advanced,
-        source_application_is_globally_closed,
-    )
-
-    # Respect caller-owned terminal changes before consulting the committed row.
-    if source_application_is_globally_closed(
-        application
-    ) or source_application_is_globally_advanced(application):
-        return []
+    from .sister_role_service import application_cv_text
 
     # Lock scalar projections in Candidate -> Application order so concurrent
     # scoring cannot cross the reset boundary, without populate_existing()
@@ -244,29 +245,17 @@ def reset_related_evaluations_for_application(
         )
         if live_candidate_id is None:
             return []
-        live_state = (
-            db.query(
-                CandidateApplication.application_outcome,
-                CandidateApplication.pipeline_stage,
-                CandidateApplication.workable_disqualified,
-            )
+        live_application_id = (
+            db.query(CandidateApplication.id)
             .filter(
                 CandidateApplication.id == int(application_id),
                 CandidateApplication.organization_id == int(organization_id),
                 CandidateApplication.role_id == int(owner_role_id),
-                CandidateApplication.deleted_at.is_(None),
             )
             .with_for_update(of=CandidateApplication)
-            .one_or_none()
+            .scalar()
         )
-    if live_state is None:
-        return []
-    live_outcome, live_stage, live_disqualified = live_state
-    if (
-        str(live_outcome or "open") != "open"
-        or bool(live_disqualified)
-        or str(live_stage or "").strip().lower() == "advanced"
-    ):
+    if live_application_id is None:
         return []
 
     # Lock only the evaluation rows after the shared application.  Role columns
@@ -279,10 +268,15 @@ def reset_related_evaluations_for_application(
             .filter(
                 SisterRoleEvaluation.organization_id == int(organization_id),
                 SisterRoleEvaluation.source_application_id == int(application_id),
+                SisterRoleEvaluation.deleted_at.is_(None),
+                SisterRoleEvaluation.application_outcome == "open",
                 SisterRoleEvaluation.pipeline_stage != "advanced",
                 Role.organization_id == int(organization_id),
                 Role.role_kind == ROLE_KIND_SISTER,
-                Role.ats_owner_role_id == int(owner_role_id),
+                or_(
+                    Role.id == int(owner_role_id),
+                    Role.ats_owner_role_id == int(owner_role_id),
+                ),
                 Role.deleted_at.is_(None),
             )
             .order_by(SisterRoleEvaluation.id.asc())
@@ -297,12 +291,26 @@ def reset_related_evaluations_for_application(
     evaluation_ids: list[int] = []
     related_role_ids: set[int] = set()
     for evaluation, job_spec_text in rows:
+        normalized_cv = str(cv_text or "").strip()
+        normalized_spec = str(job_spec_text or "").strip()
+        cv_fingerprint = (
+            _text_fingerprint(normalized_cv) if normalized_cv else None
+        )
+        spec_fingerprint = _text_fingerprint(normalized_spec)
+        inputs_changed = bool(
+            evaluation.cv_fingerprint != cv_fingerprint
+            or evaluation.spec_fingerprint != spec_fingerprint
+        )
+        # Passive syncs are observations, not re-score requests. They may hold
+        # a result only when an input actually consumed by this scorer changed.
+        if not queue_for_rescore and not inputs_changed:
+            continue
         reset_evaluation_for_rescore(
             evaluation,
             role_id=int(evaluation.role_id),
             application_id=int(application_id),
-            cv_text=cv_text,
-            job_spec=str(job_spec_text or ""),
+            cv_text=normalized_cv,
+            job_spec=normalized_spec,
             hold_for_explicit_release=not queue_for_rescore,
         )
         evaluation_ids.append(int(evaluation.id))

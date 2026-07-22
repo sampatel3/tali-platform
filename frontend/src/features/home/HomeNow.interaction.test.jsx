@@ -96,7 +96,7 @@ describe('HomeNow — applied-date freshness', () => {
     expect(screen.getByText(/Applied .*2026/)).toBeInTheDocument();
   });
 
-  it('labels the shared ATS pool date consistently in the queue and detail card', () => {
+  it('labels a linked ATS evidence date consistently in the queue and detail card', () => {
     const related = {
       ...mkAdvance(1, 'Miguel Parracho'),
       role_family: {
@@ -106,7 +106,7 @@ describe('HomeNow — applied-date freshness', () => {
     };
     renderHome({ decisions: [related], pendingOrdered: [related] });
 
-    expect(screen.getAllByText(/In shared ATS pool since/i)).toHaveLength(2);
+    expect(screen.getAllByText(/Linked ATS application dated/i)).toHaveLength(2);
     expect(screen.queryByText(/^Applied .*2026/i)).not.toBeInTheDocument();
   });
 
@@ -273,10 +273,11 @@ describe('HomeNow — bulk-approve Enter gate', () => {
 });
 
 describe('HomeNow — bulk reject blast radius', () => {
-  it('names every linked role before approving a reject recommendation', () => {
+  it('states that a related-role bulk reject stays in that role', () => {
     const reject = {
       ...mkAdvance(7, 'Aisha Khan'),
       decision_type: 'reject',
+      role_id: 47,
       recommendation: 'Reject',
       workable_job_id: 'de-shortcode',
       role_family: {
@@ -292,7 +293,7 @@ describe('HomeNow — bulk reject blast radius', () => {
     fireEvent.click(within(container).getByRole('button', { name: /Approve 1 visible/i }));
 
     expect(within(container).getByRole('alert')).toHaveTextContent(
-      'Data Platform Lead #31 (original) and AI Engineer #47 (related)',
+      'Rejects this candidate only for AI Engineer #47 (related). The linked ATS application and other roles are unchanged.',
     );
   });
 });

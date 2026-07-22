@@ -2,6 +2,7 @@
 cv_match_details — no LLM, no re-score. The basis for reasoning over a change."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from app.agent_chat import assessments, tools
@@ -9,6 +10,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 
 
@@ -74,6 +76,95 @@ def test_affected_applications_scopes_by_status(db):
     assert [a["candidate_name"] for a in aff] == ["Bo"]
     assert aff[0]["application_id"] == bo.id
     assert "Saudi" in (aff[0]["reasoning"] or "")
+
+
+def test_related_assessments_use_membership_and_role_owned_details(db):
+    org = _org(db)
+    owner = _role(db, org)
+    related = Role(
+        organization_id=int(org.id),
+        name="Independent Related Role",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=int(owner.id),
+        score_threshold=70,
+    )
+    db.add(related)
+    db.flush()
+    member = _app(
+        db,
+        org,
+        owner,
+        name="Member",
+        crit_id=42,
+        status="met",
+        reasoning="Owner-role assessment must not leak",
+    )
+    _app(
+        db,
+        org,
+        owner,
+        name="Owner Only",
+        crit_id=42,
+        status="met",
+        reasoning="Not in related pool",
+    )
+    membership = SisterRoleEvaluation(
+        organization_id=int(org.id),
+        role_id=int(related.id),
+        candidate_id=int(member.candidate_id),
+        source_application_id=int(member.id),
+        ats_application_id=int(member.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="initial_snapshot",
+        spec_fingerprint="related-assessment-spec",
+        role_fit_score=74,
+        details={
+            "requirements_assessment": [
+                {
+                    "requirement_id": "crit_42",
+                    "requirement": "PySpark",
+                    "status": "missing",
+                    "reasoning": "No PySpark evidence for this role",
+                    "evidence_quotes": [],
+                }
+            ]
+        },
+    )
+    db.add(membership)
+    member.deleted_at = datetime.now(timezone.utc)
+    db.flush()
+
+    breakdown = assessments.criterion_breakdown(db, related, 42)
+    affected = assessments.affected_applications(
+        db,
+        related,
+        42,
+        statuses=("missing",),
+    )
+
+    assert breakdown["total"] == 1
+    assert breakdown["counts"] == {
+        "met": 0,
+        "missing": 1,
+        "unknown": 0,
+        "not_assessed": 0,
+    }
+    assert affected == [
+        {
+            "application_id": int(member.id),
+            "candidate_name": "Member",
+            "status": "missing",
+            "reasoning": "No PySpark evidence for this role",
+            "evidence_quotes": [],
+        }
+    ]
+
+    membership.deleted_at = datetime.now(timezone.utc)
+    db.flush()
+    assert assessments.criterion_breakdown(db, related, 42)["total"] == 0
 
 
 def test_rescreen_scoped_only_marks_the_affected_subset(db):

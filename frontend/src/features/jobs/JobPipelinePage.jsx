@@ -75,12 +75,13 @@ import { useRoleAgentControls } from './useRoleAgentControls';
 import {
   decisionRecommendsAdvance,
   decisionRecommendsReject,
+  decisionQueueKey,
   indexPendingDecisionsByApplication,
   isActionableDecision,
-  linkedRoleTargetCopy,
   mergeDecisionQueueReceipts,
   replaceRoleDecisionReceipts,
-  roleSharesCandidatePool,
+  roleActionTargetCopy,
+  roleHasRelatedAtsLink,
   withDecisionReceipt,
   withRecordedDecisionReceipt,
 } from './jobDecisionQueue';
@@ -226,8 +227,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       if (currentRoleIdRef.current !== fetchRoleId || decisionFetchSequenceRef.current !== fetchSequence) return;
       // The pending queue deliberately includes read-only processing receipts.
       const reconciled = mergeDecisionQueueReceipts(
-        indexPendingDecisionsByApplication(res?.data),
+        indexPendingDecisionsByApplication(res?.data, fetchRoleId),
         decisionApprovalReceiptsByRoleRef.current.get(fetchRoleId) || {},
+        fetchRoleId,
       );
       replaceRoleDecisionReceipts(decisionApprovalReceiptsByRoleRef.current, fetchRoleId, reconciled.receipts);
       const next = reconciled.decisions;
@@ -252,7 +254,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     decisionApprovalReceiptsByRoleRef.current.set(expectedRoleId, roleReceipts);
     if (currentRoleIdRef.current !== expectedRoleId) return false;
     decisionFetchSequenceRef.current += 1;
-    setPendingAgentDecisions((current) => withDecisionReceipt(current, overlay));
+    setPendingAgentDecisions((current) => withDecisionReceipt(current, overlay, expectedRoleId));
     return true;
   }, []);
   const runPendingDecisionMutation = usePendingDecisionMutation({
@@ -273,17 +275,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     const decisionId = decision?.id || decisionOrId;
     if (!decisionId || !decision) return;
     const decisionFamily = decision?.role_family || role?.role_family;
-    const sharedPool = roleSharesCandidatePool(role, decisionFamily);
-    if (!confirmed && sharedPool) {
-      const sharedAction = decisionRecommendsReject(decision)
+    const relatedAtsLink = roleHasRelatedAtsLink(role, decisionFamily);
+    if (!confirmed && relatedAtsLink) {
+      const roleAction = decisionRecommendsReject(decision)
         ? 'reject'
         : (decisionRecommendsAdvance(decision) ? 'advance' : null);
-      if (sharedAction) {
+      if (roleAction) {
         setDecisionApprovalToConfirm({
           ...decision,
           id: decisionId,
           role_family: decisionFamily,
-          shared_action: sharedAction,
+          role_action: roleAction,
         });
         return;
       }
@@ -1273,6 +1275,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     const navOptions = { candidateApplicationId: application.id };
     if (Number.isFinite(numericRoleId)) {
       navOptions.roleId = numericRoleId;
+      navOptions.viewRoleId = numericRoleId;
     }
     onNavigate('candidate-report', navOptions);
   }, [numericRoleId, onNavigate]);
@@ -1379,7 +1382,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const agentRunning = Boolean(
     role?.agentic_mode_enabled && roleAgent?.on && !roleAgent?.paused,
   );
-  const sharedCandidatePool = roleSharesCandidatePool(role);
   const persistedActivationIntent = role?.assessment_task_provisioning?.activation_intent || null;
   const persistedActivationStatus = String(persistedActivationIntent?.status || '');
   const activationIsPending = ['pending', 'retry_wait'].includes(persistedActivationStatus)
@@ -1815,7 +1817,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       // Approve/Override act ONLY on the freshly-polled map, not
                       // the per-row snapshot (which can go stale and expose
                       // actions against an already-resolved decision).
-                      const pendingDecision = pendingAgentDecisions[application?.id] || null;
+                      const pendingDecision = pendingAgentDecisions[
+                        decisionQueueKey(numericRoleId, application?.id)
+                      ] || null;
                       const decisionResolving = pendingDecision?.id != null
                         && resolvingDecisionIds.has(pendingDecision.id);
                       const decisionReadOnly = pendingDecision && !isActionableDecision(pendingDecision);
@@ -1829,7 +1833,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         >
                           <a
                             className="kanban-card-main"
-                            href={candidateReportHref(application, numericRoleId)}
+                            href={candidateReportHref(
+                              application,
+                              numericRoleId,
+                              numericRoleId,
+                            )}
                             aria-label={`Open ${applicationTitle}`}
                             onClick={(event) => handlePipelineReportClick(event, application)}
                           >
@@ -2311,7 +2319,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                         // Use only the freshly-polled map, not the per-row
                         // snapshot — the snapshot isn't refreshed by the poll,
                         // so it keeps showing a decision after it's resolved.
-                        const pendingDecision = pendingAgentDecisions[application?.id] || null;
+                        const pendingDecision = pendingAgentDecisions[
+                          decisionQueueKey(numericRoleId, application?.id)
+                        ] || null;
                         // Show ONLY a real, queued agent decision — never a
                         // score-band guess dressed up as a recommendation.
                         const decisionReadOnly = pendingDecision && !isActionableDecision(pendingDecision);
@@ -2403,7 +2413,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                               <td className="ctable-status" title={(application?.last_activity_at || application?.updated_at || application?.created_at) ? new Date(application.last_activity_at || application.updated_at || application.created_at).toLocaleString() : undefined}>{formatRelativeShort(application?.last_activity_at || application?.updated_at || application?.created_at)}</td>
                               <td>
                                 <a
-                                  href={candidateReportHref(application, numericRoleId)}
+                                  href={candidateReportHref(
+                                    application,
+                                    numericRoleId,
+                                    numericRoleId,
+                                  )}
                                   className="btn btn-ghost btn-sm"
                                   onClick={(event) => {
                                     event.stopPropagation();
@@ -2475,22 +2489,28 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
         <ConfirmActionDialog
           open={decisionApprovalToConfirm != null}
-          title={decisionApprovalToConfirm?.shared_action === 'advance'
-            ? 'Advance across linked roles?'
-            : 'Reject across linked roles?'}
-          description={`Approving this recommendation ${
-            decisionApprovalToConfirm?.shared_action === 'advance' ? 'advances' : 'rejects'
-          } the shared application for ${linkedRoleTargetCopy(
+          title={decisionApprovalToConfirm?.role_action === 'advance'
+            ? `Advance candidate in ${roleActionTargetCopy(
+              role,
+              decisionApprovalToConfirm?.role_family || role?.role_family,
+            )}?`
+            : `Reject candidate in ${roleActionTargetCopy(
+              role,
+              decisionApprovalToConfirm?.role_family || role?.role_family,
+            )}?`}
+          description={`Approving this recommendation changes only ${roleActionTargetCopy(
             role,
             decisionApprovalToConfirm?.role_family || role?.role_family,
-          )}.`}
-          warning={decisionApprovalToConfirm?.shared_action === 'advance'
-            ? 'The ATS application and every linked role move forward together.'
-            : 'This rejection cannot be limited to only one role in the shared candidate pool.'}
-          confirmLabel={decisionApprovalToConfirm?.shared_action === 'advance'
-            ? 'Advance across all linked roles'
-            : 'Reject across all linked roles'}
-          variant={decisionApprovalToConfirm?.shared_action === 'advance' ? 'primary' : 'danger'}
+          )}'s candidate state in Taali.`}
+          warning={decisionApprovalToConfirm?.role_action === 'advance'
+            ? 'The linked ATS application is write-back transport only. Other roles keep their own pipeline state.'
+            : (role?.role_kind === 'sister'
+              ? 'The linked ATS application and other roles are unchanged.'
+              : 'This role owns the ATS write-back. Related roles keep their own candidate status.')}
+          confirmLabel={decisionApprovalToConfirm?.role_action === 'advance'
+            ? 'Advance in this role'
+            : 'Reject in this role'}
+          variant={decisionApprovalToConfirm?.role_action === 'advance' ? 'primary' : 'danger'}
           onClose={() => setDecisionApprovalToConfirm(null)}
           onConfirm={() => {
             const decision = decisionApprovalToConfirm;
@@ -2533,9 +2553,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           <div className="space-y-3 text-sm">
             {role?.role_kind === 'sister' ? (
               <div className="mc-agent-settings-card-help">
-                <strong>Shared candidates</strong>
+                <strong>Independent related role</strong>
                 <p style={{ margin: '8px 0 0' }}>
-                  This role shares candidates with {roleReferenceLabel(familyOwner) || 'the original role'}. The agent scores them separately for {role?.name || 'this related role'}.
+                  This role uses an ATS link to {roleReferenceLabel(familyOwner) || 'the original role'} for evidence and permitted write-backs. Its candidate membership, scores, decisions, and pipeline state are separate.
                 </p>
                 <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
                   {(roleTasks || []).some((task) => task?.is_active !== false) ? (
@@ -2553,8 +2573,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   )}
                   <li>
                     {resolvedRoleAutomation(role, 'auto_advance')
-                      ? 'Candidate decisions: Advances happen automatically across the original role and every related role. You approve rejections; an approved rejection applies across every role.'
-                      : 'Candidate decisions: You approve advances and rejections. Advancing or rejecting a candidate applies across the original role and every related role.'}
+                      ? 'Candidate decisions: Qualified candidates advance automatically in this role. Rejections follow this role’s own approval settings.'
+                      : 'Candidate decisions: You approve advances and rejections for this role only.'}
                   </li>
                 </ul>
               </div>
@@ -2570,18 +2590,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   </li>
                   <li>
                     Candidate advancement {resolvedRoleAutomation(role, 'auto_advance')
-                      ? (sharedCandidatePool ? 'runs automatically across all linked roles' : 'runs automatically')
-                      : (sharedCandidatePool ? 'requires your approval and advances all linked roles when approved' : 'requires your approval')}.
+                      ? 'runs automatically in this role'
+                      : 'requires your approval for this role'}.
                   </li>
                   <li>
-                    Pre-screen failures {sharedCandidatePool
-                      ? 'require your approval because rejection affects all linked roles'
-                      : (resolvedDeterministicReject(role) ? 'reject automatically' : 'require your approval')}.
+                    Pre-screen failures {resolvedDeterministicReject(role)
+                      ? 'reject automatically in this role'
+                      : 'require your approval'}.
                   </li>
                   <li>
-                    Deterministic rejects after CV and role-fit scoring {sharedCandidatePool
-                      ? 'require your approval because rejection affects all linked roles'
-                      : (resolvedScoredReject(role) ? 'run automatically' : 'require your approval')}. Assessment-stage and LLM-only rejects require approval.
+                    Deterministic rejects after CV and role-fit scoring {resolvedScoredReject(role)
+                      ? 'run automatically in this role'
+                      : 'require your approval'}. Assessment-stage and LLM-only rejects require approval.
                   </li>
                   {(roleTasks || []).some((task) => task?.is_active !== false) ? null : (
                     <li>No active assessment is assigned, so candidates skip that stage until you assign one.</li>

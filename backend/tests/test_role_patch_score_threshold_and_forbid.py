@@ -7,10 +7,28 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.models.role import Role
+from sqlalchemy import event
+
+from app.models.agent_decision import AgentDecision
+from app.models.agent_run import AgentRun
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.user import User
 
 from .conftest import auth_headers
+
+
+_BIG_PK_COUNTERS = {"agent_decisions": 50_000, "agent_runs": 50_000}
+
+
+def _assign_big_pk(_mapper, _connection, target):
+    table = target.__table__.name
+    if target.id is None and table in _BIG_PK_COUNTERS:
+        _BIG_PK_COUNTERS[table] += 1
+        target.id = _BIG_PK_COUNTERS[table]
+
+
+event.listen(AgentDecision, "before_insert", _assign_big_pk)
+event.listen(AgentRun, "before_insert", _assign_big_pk)
 
 
 def _seed_role(db, *, org_id: int, score_threshold: int | None = None) -> Role:
@@ -86,9 +104,11 @@ def test_patch_role_threshold_change_reconciles_reject_queue(db, client):
         agentic_mode_enabled=True,
         auto_reject=False,
     )
-    db.add(role); db.flush()
+    db.add(role)
+    db.flush()
     cand = Candidate(organization_id=me.organization_id, email="r@x.test", full_name="R")
-    db.add(cand); db.flush()
+    db.add(cand)
+    db.flush()
     app = CandidateApplication(
         organization_id=me.organization_id,
         candidate_id=cand.id,
@@ -101,7 +121,8 @@ def test_patch_role_threshold_change_reconciles_reject_queue(db, client):
         pre_screen_score_100=40.0,
         pre_screen_run_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
     )
-    db.add(app); db.flush()
+    db.add(app)
+    db.flush()
     card = queue_pre_screen_reject(
         db, organization_id=me.organization_id, role=role, application=app,
         pre_screen_score=40.0, threshold=50.0,
@@ -138,7 +159,9 @@ def test_patch_role_threshold_resolution_failure_skips_reconcile(db, client, mon
         agentic_mode_enabled=True,
         auto_reject=False,
     )
-    db.add(role); db.flush(); db.commit()
+    db.add(role)
+    db.flush()
+    db.commit()
 
     real = rmr._effective_pre_screen_threshold
     calls = {"n": 0}
@@ -159,6 +182,92 @@ def test_patch_role_threshold_resolution_failure_skips_reconcile(db, client, mon
     assert resp.status_code == 200, resp.text
     db.expire(role)
     assert role.score_threshold == 30  # edit applied despite resolution failure
+
+
+def test_patch_related_role_threshold_reconciles_role_local_decision(db, client):
+    from app.models.agent_decision import AgentDecision
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+    from app.models.sister_role_evaluation import SisterRoleEvaluation
+    from app.services.related_role_runtime import run_related_role_cycle
+
+    headers, _ = auth_headers(client, organization_name="RelatedThresholdOrg")
+    me = _current_user(db)
+    owner = Role(
+        organization_id=me.organization_id,
+        name="Owner transport role",
+        source="manual",
+    )
+    db.add(owner)
+    db.flush()
+    related = Role(
+        organization_id=me.organization_id,
+        name="Independent related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        score_threshold=70,
+        auto_reject_threshold_mode="manual",
+        agentic_mode_enabled=True,
+        auto_skip_assessment=True,
+        auto_reject=False,
+        auto_advance=False,
+    )
+    candidate = Candidate(
+        organization_id=me.organization_id,
+        email="related-threshold-patch@example.test",
+        full_name="Independent Candidate",
+    )
+    db.add_all([related, candidate])
+    db.flush()
+    transport = CandidateApplication(
+        organization_id=me.organization_id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        source="manual",
+        pipeline_stage="advanced",
+        application_outcome="rejected",
+        pre_screen_score_100=5.0,
+    )
+    db.add(transport)
+    db.flush()
+    membership = SisterRoleEvaluation(
+        organization_id=me.organization_id,
+        role_id=related.id,
+        candidate_id=candidate.id,
+        source_application_id=transport.id,
+        ats_application_id=transport.id,
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        spec_fingerprint="patch-related",
+        role_fit_score=85.0,
+    )
+    db.add(membership)
+    db.commit()
+    assert run_related_role_cycle(db, role=related)["advance_to_interview"] == 1
+    original = db.query(AgentDecision).filter(
+        AgentDecision.role_id == related.id,
+        AgentDecision.status == "pending",
+    ).one()
+
+    resp = client.patch(
+        f"/api/v1/roles/{related.id}",
+        json={"score_threshold": 90, "expected_version": related.version},
+        headers=headers,
+    )
+
+    assert resp.status_code == 200, resp.text
+    db.expire_all()
+    assert db.get(AgentDecision, original.id).status == "discarded"
+    replacement = db.query(AgentDecision).filter(
+        AgentDecision.role_id == related.id,
+        AgentDecision.status == "pending",
+    ).one()
+    assert replacement.decision_type == "reject"
+    assert replacement.evidence["taali_score"] == 85.0
+    assert db.get(CandidateApplication, transport.id).application_outcome == "rejected"
+    assert db.get(SisterRoleEvaluation, membership.id).application_outcome == "open"
 
 
 def test_patch_role_rejects_unknown_field(db, client):

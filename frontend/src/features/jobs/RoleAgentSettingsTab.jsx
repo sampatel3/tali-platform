@@ -25,7 +25,6 @@ import {
   roleExternalJobState,
 } from './atsType';
 import { MotionList, MotionListItem, PresenceSwap } from '../../shared/motion';
-import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { FocusedSectionLayout, SegmentedControl } from '../../shared/ui/TaaliPrimitives';
 
 const AGENT_SETTING_SECTIONS = ['overview', 'guidance', 'decisions', 'budget', 'history'];
@@ -93,16 +92,7 @@ const RoleAgentSettingsTab = ({
   );
 
   const controlsReadOnly = !canControlAgent;
-  const hasSharedApplication = role?.role_kind === 'sister'
-    || Number(role?.sister_role_count || 0) > 0
-    || (Array.isArray(role?.role_family?.related) && role.role_family.related.length > 0);
-  const roleLabel = `${String(role?.name || 'Related role').trim()}${role?.id != null ? ` #${role.id}` : ''}`;
-  const sharedRejectReason = hasSharedApplication
-    ? 'Automatic rejection is unavailable for linked roles because rejection closes the shared ATS application across the original role and every related role.'
-    : null;
-  const sharedAdvanceReason = hasSharedApplication
-    ? `Turning this on for ${roleLabel} advances qualified candidates in the original role and every related role because they share one ATS application.`
-    : null;
+  const isRelatedRole = role?.role_kind === 'sister';
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
   const thresholdDisplay = Math.max(0, Math.min(100, sliderValue));
   const effectiveThreshold = thresholdMode === 'auto'
@@ -172,14 +162,13 @@ const RoleAgentSettingsTab = ({
   const externalProviderLabel = atsProviderLabel(externalProvider);
   const externalJobLive = roleExternalJobLive(role);
   const externalJobState = roleExternalJobState(role);
-  // A switch save is one shared-role mutation. Keep exactly one in flight so
+  // A switch save is one role-local mutation. Keep exactly one in flight so
   // impatient/rapid clicks cannot dispatch the same rendered role version
   // twice (the second request would truthfully conflict with the first). The
   // local pending value paints immediately; the parent replaces it with the
   // authoritative response, or the freshly-refetched role after a real 409.
   const autonomySaveInFlightRef = React.useRef(false);
   const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
-  const [sharedActionToConfirm, setSharedActionToConfirm] = React.useState(null);
   const handleAutonomyToggle = async (key, value) => {
     if (controlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
     autonomySaveInFlightRef.current = true;
@@ -196,10 +185,6 @@ const RoleAgentSettingsTab = ({
   );
   const requestAutonomyToggle = (rule) => {
     const nextValue = !rule.value;
-    if (rule.confirmSharedApplicationOnEnable && nextValue) {
-      setSharedActionToConfirm({ key: rule.key, value: nextValue });
-      return;
-    }
     void handleAutonomyToggle(rule.key, nextValue);
   };
 
@@ -759,32 +744,22 @@ const RoleAgentSettingsTab = ({
               </div>
             </div>
           )}
-          {hasSharedApplication ? (
-            <div className="mc-agent-settings-callout" role="note">
-              <span className="mc-agent-settings-callout-tag">Linked roles</span>
-              <span>{sharedRejectReason}</span>
-            </div>
-          ) : null}
           {[
             {
               key: 'auto_reject_pre_screen',
-              value: hasSharedApplication
-                ? false
-                : visibleAutonomyValue('auto_reject_pre_screen', autoRejectPreScreen),
+              value: visibleAutonomyValue('auto_reject_pre_screen', autoRejectPreScreen),
               title: 'Auto-reject pre-screen failures',
-              disabled: hasSharedApplication,
-              disabledReason: sharedRejectReason,
-              sub: 'Reject candidates who fail a required screening question or the cheap pre-screen gate before full scoring.',
+              sub: isRelatedRole
+                ? 'Reject candidates only in this role when they fail a required screening question or pre-screen gate. The linked ATS application is unchanged.'
+                : 'Reject candidates who fail a required screening question or the cheap pre-screen gate before full scoring.',
             },
             {
               key: 'auto_reject',
-              value: hasSharedApplication
-                ? false
-                : visibleAutonomyValue('auto_reject', autoReject),
+              value: visibleAutonomyValue('auto_reject', autoReject),
               title: 'Auto-reject after scoring',
-              disabled: hasSharedApplication,
-              disabledReason: sharedRejectReason,
-              sub: 'Reject candidates when completed CV and role-fit scoring produces an on-policy deterministic reject. Assessment-stage and LLM-only rejects still need approval.',
+              sub: isRelatedRole
+                ? 'Reject candidates only in this role when completed scoring produces an on-policy deterministic reject. Assessment-stage and LLM-only rejects still need approval.'
+                : 'Reject candidates when completed CV and role-fit scoring produces an on-policy deterministic reject. Assessment-stage and LLM-only rejects still need approval.',
             },
             {
               key: 'auto_send_assessment',
@@ -811,9 +786,8 @@ const RoleAgentSettingsTab = ({
               key: 'auto_advance',
               value: visibleAutonomyValue('auto_advance', autoAdvance),
               title: 'Auto-advance qualified candidates',
-              confirmSharedApplicationOnEnable: hasSharedApplication,
-              sub: hasSharedApplication
-                ? `${sharedAdvanceReason} You will confirm before turning this on.`
+              sub: isRelatedRole
+                ? 'Move qualified candidates forward in this role. The ATS link is write-back transport only; other roles keep their own pipeline state.'
                 : 'Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions.',
             },
           ].map((rule, idx) => (
@@ -975,18 +949,6 @@ const RoleAgentSettingsTab = ({
       </aside>
       ) : null}
 
-      <ConfirmActionDialog
-        open={sharedActionToConfirm?.key === 'auto_advance'}
-        title="Turn on auto-advance across linked roles?"
-        description={`${sharedAdvanceReason || ''} Each automatic advancement updates the one shared ATS application, so it appears in every linked role.`}
-        confirmLabel="Turn on auto-advance"
-        onClose={() => setSharedActionToConfirm(null)}
-        onConfirm={() => {
-          const action = sharedActionToConfirm;
-          setSharedActionToConfirm(null);
-          if (action) void handleAutonomyToggle(action.key, action.value);
-        }}
-      />
     </FocusedSectionLayout>
   );
 };

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import HTTPException
 from sqlalchemy import inspect as sa_inspect
@@ -200,8 +200,14 @@ def get_role(role_id: int, org_id: int, db: Session) -> Role:
     return role
 
 
-def get_application(application_id: int, org_id: int, db: Session) -> CandidateApplication:
-    app = (
+def get_application(
+    application_id: int,
+    org_id: int,
+    db: Session,
+    *,
+    include_deleted: bool = False,
+) -> CandidateApplication:
+    query = (
         db.query(CandidateApplication)
         .options(
             joinedload(CandidateApplication.candidate),
@@ -213,10 +219,11 @@ def get_application(application_id: int, org_id: int, db: Session) -> CandidateA
         .filter(
             CandidateApplication.id == application_id,
             CandidateApplication.organization_id == org_id,
-            CandidateApplication.deleted_at.is_(None),
         )
-        .first()
     )
+    if not include_deleted:
+        query = query.filter(CandidateApplication.deleted_at.is_(None))
+    app = query.first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
     return app
@@ -263,6 +270,7 @@ _ROLE_REFERENCE_COLUMNS = (
     Role.name,
     Role.role_kind,
     Role.ats_owner_role_id,
+    Role.related_source_role_id,
     Role.deleted_at,
 )
 
@@ -279,6 +287,7 @@ def role_family_load_options(*, organization_id: int | None = None):
         joinedload(Role.ats_owner_role)
         .selectinload(Role.sister_roles)
         .load_only(*_ROLE_REFERENCE_COLUMNS),
+        joinedload(Role.related_source_role).load_only(*_ROLE_REFERENCE_COLUMNS),
         selectinload(Role.sister_roles).load_only(*_ROLE_REFERENCE_COLUMNS),
     )
     if organization_id is None:
@@ -452,6 +461,16 @@ def role_to_response(
     ):
         ats_owner = None
     operational_role = ats_owner or role
+    related_source = (
+        getattr(role, "related_source_role", None)
+        if role_kind == "sister"
+        else None
+    )
+    if related_source is not None and (
+        getattr(related_source, "organization_id", None)
+        != getattr(role, "organization_id", None)
+    ):
+        related_source = None
     ats_lifecycle = ats_job_lifecycle(operational_role)
     loaded_sisters = _loaded_relationship_items(role, "sister_roles")
     sister_role_count = len(loaded_sisters or [])
@@ -467,6 +486,8 @@ def role_to_response(
         role_kind=role_kind,
         ats_owner_role_id=getattr(role, "ats_owner_role_id", None),
         ats_owner_role_name=getattr(ats_owner, "name", None),
+        related_source_role_id=getattr(role, "related_source_role_id", None),
+        related_source_role_name=getattr(related_source, "name", None),
         role_family=role_family,
         effective_workable_job_id=getattr(operational_role, "workable_job_id", None),
         sister_role_count=sister_role_count,
@@ -475,7 +496,10 @@ def role_to_response(
         external_job_state=ats_lifecycle.external_job_state,
         external_job_live=ats_lifecycle.external_job_live,
         workable_job_id=role.workable_job_id,
-        job_status=getattr(operational_role, "job_status", None),
+        # Related roles own their lifecycle. The ATS owner's lifecycle remains
+        # visible in the provider-neutral external-job fields as a write
+        # restriction, never as this role's local open/closed state.
+        job_status=getattr(role, "job_status", None),
         requisition=requisition,
         client_id=(client or {}).get("client_id"),
         client_name=(client or {}).get("client_name"),
@@ -1461,6 +1485,8 @@ def application_detail_payload(
     *,
     include_cv_text: bool,
     client_safe: bool = False,
+    payload_projector: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    client_share_role_name: str | None = None,
 ) -> dict[str, Any]:
     from ...services.candidate_interview_kit import build_candidate_interview_kit_for_application
 
@@ -1508,6 +1534,12 @@ def application_detail_payload(
     # Recruiter-internal structured interview feedback, newest-first. Detail-only
     # and stripped from client shares below (same treatment as notes / prep).
     payload["interview_feedback"] = _interview_feedback_for_application(app)
+
+    # Logical-role projection must happen before client scrubbing. Otherwise a
+    # related-role score/evidence overlay could reintroduce internal fields and
+    # the client summary would be frozen from the physical owner application.
+    if payload_projector is not None:
+        payload = payload_projector(payload)
 
     if client_safe:
         # Strip recruiter-internal fields so an external client share
@@ -1564,11 +1596,20 @@ def application_detail_payload(
             payload["cv_match_details"] = cvd
         payload["pre_screen_evidence"] = None
         payload["recruiter_notes"] = None
-        payload["client_share_summary"] = _build_client_share_summary(app, payload)
+        payload["client_share_summary"] = _build_client_share_summary(
+            app,
+            payload,
+            role_name=client_share_role_name,
+        )
     return payload
 
 
-def _build_client_share_summary(app: CandidateApplication, payload: dict[str, Any]) -> dict[str, Any]:
+def _build_client_share_summary(
+    app: CandidateApplication,
+    payload: dict[str, Any],
+    *,
+    role_name: str | None = None,
+) -> dict[str, Any]:
     """Compose a small "why we're sharing this candidate" header for the
     external client view. Fully derived from existing cached fields — no
     new Claude calls.
@@ -1576,15 +1617,29 @@ def _build_client_share_summary(app: CandidateApplication, payload: dict[str, An
     from datetime import datetime, timezone
 
     role = getattr(app, "role", None)
-    role_name = getattr(role, "name", None) or "this role"
+    role_name = role_name or getattr(role, "name", None) or "this role"
 
     score_100: float | None = None
     summary_obj = payload.get("score_summary")
     if isinstance(summary_obj, dict):
-        for k in ("taali_score_100", "score_100", "overall_score"):
+        for k in (
+            "taali_score_100",
+            "score_100",
+            "overall_score",
+            "taali_score",
+            "role_fit_score",
+            "cv_fit_score",
+        ):
             v = summary_obj.get(k)
             if isinstance(v, (int, float)):
                 score_100 = float(v)
+                break
+
+    if score_100 is None:
+        for key in ("taali_score", "cv_match_score", "pre_screen_score"):
+            value = payload.get(key)
+            if isinstance(value, (int, float)):
+                score_100 = float(value)
                 break
 
     if score_100 is None and getattr(app, "taali_score_cache_100", None) is not None:

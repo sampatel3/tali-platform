@@ -11,6 +11,15 @@ import { HomeNow } from './HomeNow';
 //  - the toolbar chip surfaces the sourced count from the role breakdown.
 
 const listApplicationsGlobal = vi.fn();
+const showToast = vi.fn();
+
+vi.mock('../../context/ToastContext', () => ({
+  useToast: () => ({ showToast }),
+}));
+
+vi.mock('./RecentDecisions', () => ({
+  RecentDecisions: () => null,
+}));
 
 vi.mock('../../shared/api', () => ({
   agent: {
@@ -56,6 +65,23 @@ const mkSourced = (id, name, roleName, source = 'sourced') => ({
   application_outcome: 'open',
   source,
   created_at: '2026-06-10T10:00:00Z',
+});
+
+const mkInvitedMembership = (logicalRoleId, roleName) => ({
+  id: 501,
+  logical_membership_id: `${logicalRoleId}:501`,
+  logical_role_id: logicalRoleId,
+  role_id: logicalRoleId,
+  role_name: roleName,
+  candidate_name: 'Shared Candidate',
+  candidate_email: 'shared@example.com',
+  pipeline_stage: 'invited',
+  application_outcome: 'open',
+  score_summary: {
+    taali_score: logicalRoleId === 53 ? 82 : 91,
+    assessment_status: 'pending',
+    invite_tracking: { invite_sent_at: '2026-06-10T10:00:00Z' },
+  },
 });
 
 const rolesBreakdown = [
@@ -168,5 +194,32 @@ describe('HomeNow — Sourced tracker', () => {
     // The tracker link keeps the role context as well as the application id.
     const link = screen.getByRole('link', { name: 'Ada Sourced' });
     expect(link).toHaveAttribute('href', '/candidates/101?from=home&view_role_id=53');
+  });
+
+  it('selects duplicate physical applications by logical membership in the invited tracker', async () => {
+    listApplicationsGlobal.mockResolvedValue({
+      data: {
+        items: [
+          mkInvitedMembership(53, 'Data Engineer'),
+          mkInvitedMembership(71, 'Platform Lead'),
+        ],
+      },
+    });
+    const { container } = renderHome({
+      filters: { status: 'pending', role_id: null, type: null, q: null, view: 'invited' },
+    });
+
+    const platformLabel = await screen.findByText('Platform Lead');
+    const platformRow = platformLabel.closest('[role="button"]');
+    fireEvent.click(platformRow);
+
+    await waitFor(() => {
+      expect(platformRow).toHaveAttribute('aria-pressed', 'true');
+      const detail = container.querySelector('.rq-hybrid-detail');
+      expect(within(detail).getByText(/Platform Lead · shared@example\.com/)).toBeInTheDocument();
+      within(detail).getAllByRole('link', { name: /Shared Candidate|Candidate report/ }).forEach((link) => {
+        expect(link).toHaveAttribute('href', '/candidates/501?from=home&view_role_id=71');
+      });
+    });
   });
 });

@@ -9,6 +9,9 @@ excludable from the agent view, validates empty input, and is org-scoped.
 
 from app.mcp.payloads import application_detail
 from app.models.candidate_application import CandidateApplication
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
+from app.models.user import User
 from tests.conftest import auth_headers
 
 
@@ -37,6 +40,48 @@ def _create_application(client, headers, candidate_email="notes@example.com"):
     )
     assert app_resp.status_code == 201, app_resp.text
     return app_resp.json()
+
+
+def _create_related_role(
+    db,
+    *,
+    app: dict,
+    name: str,
+    include_application: bool,
+) -> Role:
+    owner = db.get(Role, int(app["role_id"]))
+    related = Role(
+        organization_id=int(owner.organization_id),
+        name=name,
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        related_source_role_id=int(owner.id),
+        ats_owner_role_id=int(owner.id),
+        job_spec_text=(
+            "Independent related role with a complete specification for "
+            "production engineering and reliable delivery."
+        ),
+    )
+    db.add(related)
+    db.flush()
+    if include_application:
+        db.add(
+            SisterRoleEvaluation(
+                organization_id=int(owner.organization_id),
+                role_id=int(related.id),
+                candidate_id=int(app["candidate_id"]),
+                source_application_id=int(app["id"]),
+                ats_application_id=int(app["id"]),
+                status="done",
+                pipeline_stage="review",
+                application_outcome="open",
+                membership_source="initial_snapshot",
+                spec_fingerprint=f"application-note-{related.id}",
+                role_fit_score=84,
+            )
+        )
+    db.commit()
+    return related
 
 
 def test_add_note_without_assessment_lands_on_timeline_and_agent_payload(client, db):
@@ -187,3 +232,111 @@ def test_add_note_is_org_scoped(client):
         json={"note": "should not work"},
     )
     assert forbidden.status_code == 404, forbidden.text
+
+
+def test_related_role_note_stays_on_related_timeline_and_agent_payload(client, db):
+    from app.mcp.handlers import get_role_candidate
+
+    headers, email = auth_headers(client)
+    app = _create_application(
+        client,
+        headers,
+        candidate_email="related-note@example.com",
+    )
+    related = _create_related_role(
+        db,
+        app=app,
+        name="Related note role",
+        include_application=True,
+    )
+    user = db.query(User).filter(User.email == email).one()
+
+    response = client.post(
+        f"/api/v1/applications/{app['id']}/notes",
+        headers=headers,
+        json={
+            "note": "Use the related-role interview rubric.",
+            "role_id": int(related.id),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["role_id"] == int(related.id)
+    related_events = client.get(
+        f"/api/v1/applications/{app['id']}/events",
+        headers=headers,
+        params={"role_id": int(related.id)},
+    )
+    owner_events = client.get(
+        f"/api/v1/applications/{app['id']}/events",
+        headers=headers,
+    )
+    assert any(
+        event["event_type"] == "recruiter_note"
+        for event in related_events.json()
+    )
+    assert all(
+        event["event_type"] != "recruiter_note"
+        for event in owner_events.json()
+    )
+
+    related_payload = get_role_candidate(
+        db,
+        user,
+        role_id=int(related.id),
+        application_id=int(app["id"]),
+    )
+    owner_payload = get_role_candidate(
+        db,
+        user,
+        role_id=int(app["role_id"]),
+        application_id=int(app["id"]),
+    )
+    assert any(
+        "related-role interview rubric" in note["note"]
+        for note in related_payload["recruiter_notes"]
+    )
+    assert owner_payload["recruiter_notes"] == []
+
+
+def test_add_note_rejects_cross_role_spoof_and_missing_related_membership(client, db):
+    headers, _ = auth_headers(client)
+    app = _create_application(
+        client,
+        headers,
+        candidate_email="role-spoof-note@example.com",
+    )
+    owner = db.get(Role, int(app["role_id"]))
+    unrelated = Role(
+        organization_id=int(owner.organization_id),
+        name="Unrelated ordinary role",
+        source="manual",
+    )
+    db.add(unrelated)
+    db.commit()
+    empty_related = _create_related_role(
+        db,
+        app=app,
+        name="Related role without membership",
+        include_application=False,
+    )
+
+    for spoofed_role_id in (int(unrelated.id), int(empty_related.id)):
+        response = client.post(
+            f"/api/v1/applications/{app['id']}/notes",
+            headers=headers,
+            json={
+                "note": "This must not cross role boundaries.",
+                "role_id": spoofed_role_id,
+            },
+        )
+        assert response.status_code == 404, response.text
+
+    owner_events = client.get(
+        f"/api/v1/applications/{app['id']}/events",
+        headers=headers,
+    )
+    assert all(
+        event["event_type"] != "recruiter_note"
+        for event in owner_events.json()
+    )

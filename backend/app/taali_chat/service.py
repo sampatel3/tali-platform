@@ -46,6 +46,12 @@ from ..models.taali_chat_message import (
     TaaliChatMessage,
 )
 from ..models.user import User
+from ..mcp.provenance import (
+    grounding_required_message,
+    missing_required_capabilities,
+    required_capabilities_for_message,
+)
+from ..mcp.shared_reads import capabilities_for_successful_read
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event as record_event
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
@@ -288,6 +294,8 @@ def _run_chat_turn(
     consecutive_error_rounds = 0
     route: RouteExecution | None = None
     workflow_succeeded = False
+    required_capabilities = required_capabilities_for_message(text)
+    grounded_capabilities: set[str] = set()
 
     # Anthropic-side message log: starts as the persisted history (which
     # already includes the just-added user message).
@@ -350,6 +358,13 @@ def _run_chat_turn(
                     "entity_id": str(conversation_db_id),
                     "metadata": {"feature": "taali_chat", "round": round_index},
                 },
+                # Buffer model prose until the terminal block can be classified
+                # against both the recruiter's request and the model's actual
+                # claims. Tool-call frames still stream normally. This prevents
+                # an unprompted hard zero or historical assertion from reaching
+                # the UI before the runtime can enforce its canonical-read
+                # requirement.
+                emit_text_deltas=False,
             )
         except Exception as exc:
             logger.exception("Anthropic stream failed: %s", exc)
@@ -368,6 +383,26 @@ def _run_chat_turn(
         messages.append({"role": "assistant", "content": assistant_blocks})
 
         if stop_reason != "tool_use":
+            assistant_text = "\n".join(
+                str(block.get("text") or "")
+                for block in assistant_blocks
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+            claim_capabilities = required_capabilities_for_message(assistant_text)
+            missing_grounding = missing_required_capabilities(
+                required_capabilities | claim_capabilities,
+                grounded_capabilities,
+            )
+            if missing_grounding:
+                safe_message = grounding_required_message(missing_grounding)
+                assistant_blocks = [
+                    {"type": "text", "text": safe_message}
+                ]
+                stop_reason = "grounding_required"
+                final_stop_reason = stop_reason
+                yield streaming.text_delta(safe_message)
+            elif assistant_text:
+                yield streaming.text_delta(assistant_text)
             _persist_message(
                 db,
                 conversation=conversation,
@@ -420,7 +455,22 @@ def _run_chat_turn(
             )
         tool_results = round_result.live_results
         stored_tool_results = round_result.stored_results
+        tool_names_by_id = {
+            str(block.get("id") or ""): str(block.get("name") or "")
+            for block in tool_blocks
+        }
         for result in tool_results:
+            if not bool(result.get("is_error")):
+                try:
+                    payload = json.loads(str(result["content"]))
+                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    payload = None
+                grounded_capabilities.update(
+                    capabilities_for_successful_read(
+                        tool_names_by_id.get(str(result.get("tool_use_id") or ""), ""),
+                        payload,
+                    )
+                )
             yield streaming.tool_result(
                 tool_call_id=str(result["tool_use_id"]),
                 result=json.loads(str(result["content"])),

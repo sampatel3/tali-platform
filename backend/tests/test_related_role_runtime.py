@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy import event
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Query
@@ -18,6 +19,7 @@ from app.models.agent_run import AgentRun
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.role_criterion import RoleCriterion
@@ -28,6 +30,9 @@ from app.services.assessment_invite_delivery import (
     confirm_assessment_invite_provider_success,
 )
 from app.services.related_role_runtime import run_related_role_cycle
+from app.services.role_threshold_reconciliation import (
+    reconcile_role_threshold_decisions,
+)
 from app.services.role_agent_dispatch import dispatch_role_agent_cycle
 from app.services.decision_role_context import related_decision_staleness
 from app.services.sister_role_service import ensure_sister_evaluations, text_fingerprint
@@ -124,6 +129,7 @@ def _family(db, *, related_count: int = 2, task: bool = False):
             organization_id=org.id,
             role_id=role.id,
             source_application_id=application.id,
+            ats_application_id=application.id,
             status="done",
             pipeline_stage="review",
             spec_fingerprint=f"related-{index}",
@@ -198,6 +204,30 @@ def test_related_role_decision_freezes_related_evaluation_summary(db):
     assert "OWNER ROLE ONLY" not in str(decision.evidence)
 
 
+def test_ownerless_related_role_agent_cycle_uses_local_membership(db):
+    _org, _owner, application, roles, evaluations = _family(
+        db, related_count=1
+    )
+    role = roles[0]
+    role.ats_owner_role_id = None
+    evaluations[0].ats_application_id = None
+    db.commit()
+
+    result = run_related_role_cycle(db, role=role)
+
+    assert result["status"] == "ok"
+    assert result["advance_to_interview"] == 1
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == int(role.id),
+            AgentDecision.application_id == int(application.id),
+        )
+        .one()
+    )
+    assert decision.evidence["ats_transport_linked"] is False
+
+
 def test_passive_shared_input_reset_holds_visible_cards_and_blocks_cycle(db):
     _org, _owner, application, roles, evaluations = _family(db, related_count=1)
     role = roles[0]
@@ -212,8 +242,11 @@ def test_passive_shared_input_reset_holds_visible_cards_and_blocks_cycle(db):
     )
     db.add(run)
     db.flush()
+    evaluation.spec_fingerprint = text_fingerprint(role.job_spec_text)
+    evaluation.cv_fingerprint = text_fingerprint(application.cv_text)
+    application.cv_text = f"{application.cv_text} Added current CV evidence."
     decisions = []
-    for status in ("pending", "reverted_for_feedback", "processing"):
+    for status in ("pending", "reverted_for_feedback"):
         decision = AgentDecision(
             organization_id=role.organization_id,
             role_id=role.id,
@@ -241,7 +274,7 @@ def test_passive_shared_input_reset_holds_visible_cards_and_blocks_cycle(db):
     reset_ids = reset_related_evaluations_for_application(
         db,
         application,
-        reason="workable_context_changed",
+        reason="candidate_cv_replaced",
     )
     db.commit()
 
@@ -252,9 +285,6 @@ def test_passive_shared_input_reset_holds_visible_cards_and_blocks_cycle(db):
     assert saved.last_error_code == "shared_inputs_changed"
     assert db.get(AgentDecision, decisions[0].id).status == "pending"
     assert db.get(AgentDecision, decisions[1].id).status == "reverted_for_feedback"
-    # Acceptance has not crossed the locked action boundary yet. Return its
-    # receipt to the visible lane; the held evaluation blocks the old worker.
-    assert db.get(AgentDecision, decisions[2].id).status == "pending"
     report = related_decision_staleness(
         db,
         db.get(AgentDecision, decisions[0].id),
@@ -279,7 +309,7 @@ def test_passive_shared_input_reset_holds_visible_cards_and_blocks_cycle(db):
             AgentDecision.status.in_(("pending", "reverted_for_feedback")),
         )
         .count()
-        == 3
+        == 2
     )
 
 
@@ -339,11 +369,13 @@ def test_explicit_shared_input_reset_cancels_processing_before_fresh_cycle(db):
     assert fresh.id != decision.id
 
 
-def test_shared_input_reset_keeps_advanced_application_frozen(db):
+def test_owner_advance_does_not_freeze_independent_related_rescore(db):
     _org, _owner, application, roles, evaluations = _family(db, related_count=1)
     evaluation = evaluations[0]
+    evaluation.spec_fingerprint = text_fingerprint(roles[0].job_spec_text)
+    evaluation.cv_fingerprint = text_fingerprint(application.cv_text)
+    application.cv_text = f"{application.cv_text} New shared CV evidence."
     application.pipeline_stage = "advanced"
-    original_score = evaluation.role_fit_score
     db.commit()
 
     from app.services.sister_role_evaluation_lifecycle import (
@@ -354,13 +386,14 @@ def test_shared_input_reset_keeps_advanced_application_frozen(db):
         db,
         application,
         reason="candidate_cv_replaced",
-    ) == []
+    ) == [evaluation.id]
     db.commit()
 
     db.expire_all()
     saved = db.get(SisterRoleEvaluation, evaluation.id)
-    assert saved.status == "done"
-    assert saved.role_fit_score == original_score
+    assert saved.status == "stale_held"
+    assert saved.role_fit_score is None
+    assert saved.pipeline_stage == "review"
 
 
 def test_shared_input_reset_keeps_locally_advanced_evaluation_frozen(db):
@@ -379,7 +412,7 @@ def test_shared_input_reset_keeps_locally_advanced_evaluation_frozen(db):
     assert reset_related_evaluations_for_application(
         db,
         application,
-        reason="workable_context_changed",
+        reason="candidate_cv_replaced",
     ) == []
     db.commit()
 
@@ -536,6 +569,121 @@ def test_related_human_suppression_ignores_owner_scores_but_releases_on_threshol
     assert run_related_role_cycle(db, role=role)["created"] == 1
 
 
+def test_threshold_reconcile_uses_only_related_membership_score_and_state(db):
+    org, _owner, application, roles, evaluations = _family(db, related_count=1)
+    role, evaluation = roles[0], evaluations[0]
+    role.auto_reject_threshold_mode = "manual"
+    evaluation.role_fit_score = 85.0
+    # Deliberately contradictory transport/owner truth: neither the owner's
+    # low score nor its terminal funnel state belongs to this logical role.
+    application.pre_screen_score_100 = 5.0
+    application.cv_match_score = 5.0
+    application.pipeline_stage = "advanced"
+    application.application_outcome = "rejected"
+    db.commit()
+
+    assert run_related_role_cycle(db, role=role)["advance_to_interview"] == 1
+    original = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.status == "pending",
+    ).one()
+
+    role.score_threshold = 90
+    db.commit()
+    result = reconcile_role_threshold_decisions(
+        db,
+        role=role,
+        organization_id=org.id,
+    )
+
+    db.expire_all()
+    assert result["threshold_discarded"] == 1
+    assert db.get(AgentDecision, original.id).status == "discarded"
+    current = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.status == "pending",
+    ).one()
+    assert current.decision_type == "reject"
+    assert current.evidence["taali_score"] == 85.0
+    assert current.evidence["effective_threshold"] == 90.0
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert saved.pipeline_stage == "review"
+    assert saved.application_outcome == "open"
+
+
+def test_threshold_reconcile_preserves_processing_and_resolved_history(db):
+    org, _owner, application, roles, _evaluations = _family(
+        db, related_count=1
+    )
+    role = roles[0]
+    role.auto_reject_threshold_mode = "manual"
+    db.commit()
+    run_related_role_cycle(db, role=role)
+    processing = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.status == "pending",
+    ).one()
+    processing.status = "processing"
+    historical = AgentDecision(
+        organization_id=org.id,
+        role_id=role.id,
+        application_id=application.id,
+        decision_type="reject",
+        recommendation="reject",
+        status="approved",
+        reasoning="Immutable prior human action",
+        evidence={"effective_threshold": 20.0},
+        model_version="test",
+        prompt_version="test",
+        idempotency_key=f"related-threshold-history:{role.id}:{application.id}",
+    )
+    db.add(historical)
+    role.score_threshold = 95
+    db.commit()
+
+    result = reconcile_role_threshold_decisions(
+        db,
+        role=role,
+        organization_id=org.id,
+    )
+
+    assert result.get("threshold_discarded", 0) == 0
+    assert db.get(AgentDecision, processing.id).status == "processing"
+    assert db.get(AgentDecision, historical.id).status == "approved"
+    assert db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.status == "pending",
+    ).count() == 0
+
+
+def test_threshold_reconcile_respects_role_pause_until_next_cycle(db):
+    org, _owner, _application, roles, _evaluations = _family(
+        db, related_count=1
+    )
+    role = roles[0]
+    role.auto_reject_threshold_mode = "manual"
+    db.commit()
+    run_related_role_cycle(db, role=role)
+    pending = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.status == "pending",
+    ).one()
+    role.score_threshold = 95
+    role.agent_paused_at = datetime.now(timezone.utc)
+    role.agent_paused_reason = "manual"
+    db.commit()
+
+    result = reconcile_role_threshold_decisions(
+        db,
+        role=role,
+        organization_id=org.id,
+    )
+
+    assert result["status"] == "skipped"
+    assert "paused" in result["reason"]
+    assert db.get(AgentDecision, pending.id).status == "pending"
+
+
 def test_auto_send_creates_assessment_owned_by_related_role(db):
     org, _owner, application, roles, evaluations = _family(db, task=True)
     related = roles[0]
@@ -597,7 +745,103 @@ def test_provider_confirmation_advances_only_related_assessment_funnel(db):
     assert db.get(SisterRoleEvaluation, evaluations[0].id).pipeline_stage == "invited"
 
 
-def test_late_invite_confirmation_cannot_regress_a_shared_advance(db):
+def test_related_assessment_transition_is_versioned_role_scoped_and_idempotent(db):
+    _org, _owner, application, roles, evaluations = _family(
+        db, related_count=2, task=True
+    )
+    related, sibling_role = roles
+    evaluation = evaluations[0]
+    evaluation.pipeline_stage = "invited"
+    evaluation.version = 4
+    assessment = Assessment(
+        organization_id=related.organization_id,
+        candidate_id=application.candidate_id,
+        task_id=related.tasks[0].id,
+        role_id=related.id,
+        application_id=application.id,
+        token="related-versioned-assessment-transition",
+        status=AssessmentStatus.COMPLETED,
+        taali_score=88.0,
+    )
+    db.add(assessment)
+    db.commit()
+    stale = _pending_decision(db, role=related, application=application)
+    sibling = _pending_decision(db, role=sibling_role, application=application)
+
+    from app.services.related_role_application_runtime import (
+        transition_related_role_assessment_stage,
+    )
+
+    result = transition_related_role_assessment_stage(
+        db,
+        assessment=assessment,
+        to_stage="review",
+        source="system",
+        idempotency_key="assessment-transition-versioned-once",
+        reason="Assessment completed",
+    )
+    db.commit()
+
+    assert result.handled is True
+    assert result.changed is True
+    saved = db.get(SisterRoleEvaluation, evaluation.id)
+    assert saved.pipeline_stage == "review"
+    assert saved.version == 5
+    assert db.get(CandidateApplication, application.id).pipeline_stage == "review"
+    assert db.get(AgentDecision, stale.id).status == "discarded"
+    assert db.get(AgentDecision, sibling.id).status == "pending"
+    event_row = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == application.id,
+            CandidateApplicationEvent.role_id == related.id,
+            CandidateApplicationEvent.idempotency_key
+            == "assessment-transition-versioned-once",
+        )
+        .one()
+    )
+    assert event_row.from_stage == "invited"
+    assert event_row.to_stage == "review"
+    assert event_row.effect_status == "confirmed"
+
+    replay = transition_related_role_assessment_stage(
+        db,
+        assessment=assessment,
+        to_stage="review",
+        source="system",
+        idempotency_key="assessment-transition-versioned-once",
+        reason="Assessment completed",
+    )
+    db.commit()
+    assert replay.handled is True
+    assert replay.changed is False
+    assert db.get(SisterRoleEvaluation, evaluation.id).version == 5
+
+
+@pytest.mark.parametrize(
+    ("terminal_field", "terminal_value"),
+    [
+        ("deleted_at", datetime.now(timezone.utc)),
+        ("application_outcome", "rejected"),
+        ("pipeline_stage", "advanced"),
+    ],
+)
+def test_related_cycle_never_recreates_decisions_for_inactive_membership(
+    db, terminal_field, terminal_value
+):
+    _org, _owner, _application, roles, evaluations = _family(
+        db, related_count=1
+    )
+    setattr(evaluations[0], terminal_field, terminal_value)
+    db.commit()
+
+    result = run_related_role_cycle(db, role=roles[0])
+
+    assert result == {"status": "ok", "role_id": roles[0].id}
+    assert db.query(AgentDecision).count() == 0
+
+
+def test_late_invite_confirmation_cannot_regress_related_role_advance(db):
     _org, _owner, application, roles, evaluations = _family(db, task=True)
     related = roles[0]
     assessment = Assessment(
@@ -612,13 +856,18 @@ def test_late_invite_confirmation_cannot_regress_a_shared_advance(db):
         invite_pipeline_transition={"source": "agent"},
     )
     db.add(assessment)
-    transition_stage(
+    from app.services.related_role_action_service import (
+        transition_related_role_stage_action,
+    )
+
+    transition_related_role_stage_action(
         db,
-        app=application,
+        application=application,
+        acting_role_id=related.id,
         to_stage="advanced",
         source="recruiter",
         actor_type="recruiter",
-        reason="Candidate already handed off",
+        reason="Candidate already advanced in this role",
     )
     db.commit()
 
@@ -630,8 +879,51 @@ def test_late_invite_confirmation_cannot_regress_a_shared_advance(db):
     )
 
     assert result["confirmed"] is True
-    assert db.get(CandidateApplication, application.id).pipeline_stage == "advanced"
+    assert db.get(CandidateApplication, application.id).pipeline_stage == "review"
     assert db.get(SisterRoleEvaluation, evaluations[0].id).pipeline_stage == "advanced"
+
+
+def test_provider_confirmation_fails_closed_when_related_membership_was_deleted(db):
+    _org, _owner, application, roles, evaluations = _family(
+        db, related_count=1, task=True
+    )
+    related = roles[0]
+    evaluation = evaluations[0]
+    assessment = Assessment(
+        organization_id=related.organization_id,
+        candidate_id=application.candidate_id,
+        task_id=related.tasks[0].id,
+        role_id=related.id,
+        application_id=application.id,
+        token="deleted-membership-provider-confirmation",
+        status=AssessmentStatus.PENDING,
+        invite_email_send_generation=2,
+        invite_pipeline_transition={"source": "agent"},
+    )
+    evaluation.deleted_at = datetime.now(timezone.utc)
+    db.add(assessment)
+    db.commit()
+
+    result = confirm_assessment_invite_provider_success(
+        db,
+        assessment_id=assessment.id,
+        email_id="email-deleted-membership",
+        expected_generation=2,
+    )
+
+    assert result["confirmed"] is True
+    assert db.get(CandidateApplication, application.id).pipeline_stage == "review"
+    assert db.get(SisterRoleEvaluation, evaluation.id).pipeline_stage == "review"
+    held = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == application.id,
+            CandidateApplicationEvent.role_id == related.id,
+            CandidateApplicationEvent.effect_status == "held",
+        )
+        .all()
+    )
+    assert held
 
 
 def test_expired_assessment_uses_independent_auto_resend_toggle(db):
@@ -686,7 +978,39 @@ def test_reject_recommendations_remain_role_scoped_and_hitl(db):
     assert db.get(CandidateApplication, application.id).application_outcome == "open"
 
 
-def test_auto_advance_updates_family_and_discards_sibling_cards(db):
+def test_deterministic_auto_reject_resolves_only_the_opted_in_related_role(db):
+    _org, _owner, application, roles, evaluations = _family(db)
+    opted_in, sibling = roles
+    opted_in.auto_reject = True
+    for evaluation in evaluations:
+        evaluation.role_fit_score = 20
+    db.commit()
+
+    with patch("app.actions.reject_application.notify_rejection") as provider_reject:
+        opted_in_result = run_related_role_cycle(db, role=opted_in)
+        sibling_result = run_related_role_cycle(db, role=sibling)
+
+    db.expire_all()
+    assert opted_in_result["reject"] == 1
+    assert opted_in_result["auto_executed"] == 1
+    assert sibling_result["reject"] == 1
+    assert "auto_executed" not in sibling_result
+    assert db.get(SisterRoleEvaluation, evaluations[0].id).application_outcome == "rejected"
+    assert db.get(SisterRoleEvaluation, evaluations[1].id).application_outcome == "open"
+    assert db.get(CandidateApplication, application.id).application_outcome == "open"
+    assert {
+        (decision.role_id, decision.status)
+        for decision in db.query(AgentDecision)
+        .filter(AgentDecision.application_id == application.id)
+        .all()
+    } == {
+        (opted_in.id, "approved"),
+        (sibling.id, "pending"),
+    }
+    provider_reject.assert_not_called()
+
+
+def test_auto_advance_updates_only_the_opted_in_related_role(db):
     _org, _owner, application, roles, evaluations = _family(db)
     related = roles[0]
     related.auto_advance = True
@@ -704,20 +1028,21 @@ def test_auto_advance_updates_family_and_discards_sibling_cards(db):
     assert result["advance_to_interview"] == 1
     assert result["auto_executed"] == 1
     assert current.status == "approved"
-    assert db.get(AgentDecision, sibling.id).status == "discarded"
-    assert db.get(CandidateApplication, application.id).pipeline_stage == "advanced"
-    assert {
-        row.pipeline_stage
+    assert db.get(AgentDecision, sibling.id).status == "processing"
+    assert db.get(CandidateApplication, application.id).pipeline_stage == "review"
+    stages_by_role = {
+        row.role_id: row.pipeline_stage
         for row in db.query(SisterRoleEvaluation)
         .filter(SisterRoleEvaluation.source_application_id == application.id)
         .all()
-    } == {"advanced"}
+    }
+    assert stages_by_role[related.id] == "advanced"
+    assert stages_by_role[roles[1].id] == "review"
 
 
-def test_advanced_candidate_is_not_reopened_or_rescored(db):
+def test_owner_advance_does_not_freeze_related_role_manual_rescore(db):
     _org, _owner, application, roles, evaluations = _family(db)
     related = roles[0]
-    original_score = evaluations[0].role_fit_score
     transition_stage(
         db,
         app=application,
@@ -732,13 +1057,13 @@ def test_advanced_candidate_is_not_reopened_or_rescored(db):
     db.commit()
 
     evaluation = db.get(SisterRoleEvaluation, evaluations[0].id)
-    assert evaluation.status == "done"
-    assert evaluation.role_fit_score == original_score
-    assert evaluation.pipeline_stage == "advanced"
-    assert counts["done"] >= 1
+    assert evaluation.status == "pending"
+    assert evaluation.role_fit_score is None
+    assert evaluation.pipeline_stage == "review"
+    assert counts["pending"] >= 1
 
 
-def test_score_kick_does_not_dispatch_legacy_pending_advanced_row(db):
+def test_owner_advance_does_not_block_pending_related_score_dispatch(db):
     _org, _owner, application, roles, evaluations = _family(db)
     transition_stage(
         db,
@@ -752,16 +1077,18 @@ def test_score_kick_does_not_dispatch_legacy_pending_advanced_row(db):
     db.commit()
 
     with patch(
-        "app.tasks.sister_role_tasks.dispatch_sister_evaluation"
+        "app.tasks.sister_role_tasks.dispatch_sister_evaluation",
+        return_value={"status": "queued"},
     ) as dispatch:
         result = score_sister_role.run(roles[0].id)
 
-    assert result["queued"] == 0
-    dispatch.assert_not_called()
+    assert result["queued"] == 1
+    dispatch.assert_called_once()
+    assert dispatch.call_args.kwargs == {"evaluation_id": evaluations[0].id}
     db.expire_all()
     evaluation = db.get(SisterRoleEvaluation, evaluations[0].id)
-    assert evaluation.status == "done"
-    assert evaluation.pipeline_stage == "advanced"
+    assert evaluation.status == "pending"
+    assert evaluation.pipeline_stage == "review"
 
 
 def test_old_advance_idempotency_replay_cannot_advance_only_related_rows(db):
@@ -828,7 +1155,205 @@ def test_related_cycle_locks_org_role_before_application_and_evaluation(
     assert lock_order == sorted(lock_order)
 
 
-def test_owner_manual_advance_reconciles_every_related_projection(db):
+def test_direct_related_membership_locks_logical_app_before_ats_transport(db):
+    _org, _owner, owner_application, roles, evaluations = _family(
+        db, related_count=1
+    )
+    role = roles[0]
+    evaluation = evaluations[0]
+    direct_application = CandidateApplication(
+        organization_id=role.organization_id,
+        candidate_id=owner_application.candidate_id,
+        role_id=role.id,
+        source="manual",
+        pipeline_stage="review",
+        application_outcome="open",
+        cv_text="Direct related-role evidence",
+    )
+    db.add(direct_application)
+    db.flush()
+    evaluation.candidate_id = owner_application.candidate_id
+    evaluation.source_application_id = direct_application.id
+    evaluation.ats_application_id = owner_application.id
+    db.commit()
+
+    from app.services.sister_role_scoring_generation import (
+        locate_sister_score,
+        lock_sister_score_rows,
+    )
+
+    locator = locate_sister_score(db, evaluation_id=evaluation.id)
+    assert locator is not None
+    db.rollback()
+    locked = lock_sister_score_rows(db, locator=locator, skip_locked=False)
+
+    assert locked is not None
+    assert locked.application.id == direct_application.id
+    assert locked.application.role_id == role.id
+    assert locked.ats_application is not None
+    assert locked.ats_application.id == owner_application.id
+
+
+def test_related_score_inputs_exclude_all_owner_job_context(db):
+    _org, owner, application, roles, evaluations = _family(
+        db, related_count=2
+    )
+    role = roles[0]
+    evaluation = evaluations[0]
+    roles[1].job_spec_text = (
+        "A divergent related-role specification requiring Rust and consensus."
+    )
+    owner.job_spec_text = "OWNER-ONLY role specification that must not leak."
+    expected_owner_spec = owner.job_spec_text
+    expected_role_spec = role.job_spec_text
+    expected_other_role_spec = roles[1].job_spec_text
+    application.workable_answers = [
+        {
+            "question": {"body": "Owner-role salary expectation?"},
+            "answer": {"body": "Owner-only answer"},
+        }
+    ]
+    application.workable_comments = [
+        {"body": "Owner-only recruiter comment", "member": {"name": "Sam"}}
+    ]
+    application.workable_activities = [
+        {"action": "interview", "stage_name": "Owner technical screen"}
+    ]
+    application.workable_stage = "Owner interview"
+    db.commit()
+
+    from app.services.sister_role_scoring_generation import (
+        capture_sister_score_inputs,
+        locate_sister_score,
+        lock_sister_score_rows,
+    )
+
+    locator = locate_sister_score(db, evaluation_id=int(evaluation.id))
+    assert locator is not None
+    db.rollback()
+    locked = lock_sister_score_rows(db, locator=locator, skip_locked=False)
+    assert locked is not None
+
+    with patch(
+        "app.services.workable_context_service.format_workable_context",
+        side_effect=AssertionError("owner job context must not be rendered"),
+    ):
+        before = capture_sister_score_inputs(locked)
+        assert locked.ats_application is not None
+        locked.ats_application.workable_answers = [{"answer": "changed"}]
+        locked.ats_application.workable_comments = [{"body": "changed"}]
+        locked.ats_application.workable_activities = [{"action": "changed"}]
+        locked.ats_application.workable_stage = "changed"
+        after = capture_sister_score_inputs(locked)
+
+    assert before == after
+    assert before.cv_text == application.cv_text
+    assert before.job_spec == expected_role_spec
+    assert before.job_spec != expected_owner_spec
+    assert before.workable_context is None
+
+    db.rollback()
+    other_locator = locate_sister_score(
+        db, evaluation_id=int(evaluations[1].id)
+    )
+    assert other_locator is not None
+    db.rollback()
+    other_locked = lock_sister_score_rows(
+        db, locator=other_locator, skip_locked=False
+    )
+    assert other_locked is not None
+    other_inputs = capture_sister_score_inputs(other_locked)
+    assert other_inputs.cv_text == before.cv_text
+    assert other_inputs.job_spec == expected_other_role_spec
+    assert other_inputs.job_spec != before.job_spec
+    assert other_inputs.workable_context is None
+
+
+def test_owner_resync_recovery_never_refreshes_related_score_or_decision(db):
+    _org, _owner, application, roles, evaluations = _family(
+        db, related_count=1
+    )
+    role = roles[0]
+    evaluation = evaluations[0]
+    decision = _pending_decision(db, role=role, application=application)
+    original = {
+        "status": evaluation.status,
+        "spec_fingerprint": evaluation.spec_fingerprint,
+        "cv_fingerprint": evaluation.cv_fingerprint,
+        "role_fit_score": evaluation.role_fit_score,
+        "summary": evaluation.summary,
+        "details": evaluation.details,
+        "history": evaluation.history,
+    }
+
+    from app.services.ats_related_role_dispatch import (
+        dispatch_related_role_work,
+        related_role_work_pending,
+    )
+
+    assert related_role_work_pending(db, application) is False
+    with patch(
+        "app.tasks.sister_role_tasks.dispatch_sister_evaluation"
+    ) as dispatch:
+        result = dispatch_related_role_work(db, application)
+
+    dispatch.assert_not_called()
+    assert result == {"evaluations": 1, "dispatched": 0}
+    db.refresh(evaluation)
+    assert {
+        "status": evaluation.status,
+        "spec_fingerprint": evaluation.spec_fingerprint,
+        "cv_fingerprint": evaluation.cv_fingerprint,
+        "role_fit_score": evaluation.role_fit_score,
+        "summary": evaluation.summary,
+        "details": evaluation.details,
+        "history": evaluation.history,
+    } == original
+    db.refresh(decision)
+    assert decision.status == "pending"
+
+
+def test_ownerless_related_scoring_locks_evidence_without_ats_context(db):
+    _org, _owner, owner_application, roles, evaluations = _family(
+        db, related_count=1
+    )
+    role = roles[0]
+    evaluation = evaluations[0]
+    direct_application = CandidateApplication(
+        organization_id=role.organization_id,
+        candidate_id=owner_application.candidate_id,
+        role_id=role.id,
+        source="manual",
+        pipeline_stage="applied",
+        application_outcome="open",
+        cv_text="Ownerless direct evidence for production AI delivery.",
+    )
+    db.add(direct_application)
+    db.flush()
+    role.ats_owner_role_id = None
+    evaluation.source_application_id = int(direct_application.id)
+    evaluation.ats_application_id = None
+    db.commit()
+
+    from app.services.sister_role_scoring_generation import (
+        capture_sister_score_inputs,
+        locate_sister_score,
+        lock_sister_score_rows,
+    )
+
+    locator = locate_sister_score(db, evaluation_id=evaluation.id)
+    assert locator is not None
+    assert locator.ats_owner_role_id is None
+    db.rollback()
+    locked = lock_sister_score_rows(db, locator=locator, skip_locked=False)
+
+    assert locked is not None
+    assert locked.application.id == direct_application.id
+    assert locked.ats_application is None
+    assert capture_sister_score_inputs(locked).workable_context is None
+
+
+def test_owner_manual_advance_does_not_mutate_related_role_state(db):
     _org, _owner, application, roles, _evaluations = _family(db)
     sibling = _pending_decision(db, role=roles[1], application=application)
 
@@ -838,19 +1363,19 @@ def test_owner_manual_advance_reconciles_every_related_projection(db):
         to_stage="advanced",
         source="recruiter",
         actor_type="recruiter",
-        reason="Original role recruiter advanced the shared candidate",
+        reason="Original role recruiter advanced this candidate",
     )
     db.commit()
 
     db.expire_all()
     assert db.get(CandidateApplication, application.id).pipeline_stage == "advanced"
-    assert db.get(AgentDecision, sibling.id).status == "discarded"
+    assert db.get(AgentDecision, sibling.id).status == "pending"
     assert {
         row.pipeline_stage
         for row in db.query(SisterRoleEvaluation)
         .filter(SisterRoleEvaluation.source_application_id == application.id)
         .all()
-    } == {"advanced"}
+    } == {"review"}
 
 
 def test_related_advance_uses_owner_workable_stage_configuration(db, monkeypatch):
@@ -942,13 +1467,15 @@ def test_related_dispatch_keeps_the_rolling_safe_one_argument_payload(db):
         dispatch.assert_called_once_with(role.id)
 
 
-def test_related_cycle_materializes_no_decisions_when_owner_ats_job_closed(db):
+def test_related_cycle_keeps_local_decisions_when_owner_ats_job_closed(db):
     _org, owner, _application, roles, _evaluations = _family(db)
     owner.workable_job_data = {"state": "closed"}
     db.commit()
 
     result = run_related_role_cycle(db, role=roles[0])
 
-    assert result["status"] == "skipped"
-    assert result["reason"] == "linked workable job is not live"
-    assert db.query(AgentDecision).count() == 0
+    assert result["status"] == "ok"
+    assert result["advance_to_interview"] == 1
+    decision = db.query(AgentDecision).one()
+    assert decision.role_id == roles[0].id
+    assert decision.status == "pending"

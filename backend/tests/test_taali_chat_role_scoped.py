@@ -13,8 +13,9 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+import json
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import event
@@ -28,6 +29,8 @@ from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.user import User
 from app.taali_chat.service import _arguments_with_role_scope, _ensure_conversation
 from app.taali_chat.system_prompt import build_system_blocks as _build_system_blocks
+from app.taali_chat.tool_execution import execute_tool_round
+from app.taali_chat.tool_registry import dispatch_tool
 
 
 # Shared SQLite BigInteger PK workaround.
@@ -150,10 +153,134 @@ def test_role_scoped_chat_defaults_every_optional_role_tool(tool_name):
     )["role_id"] == 42
 
 
-def test_role_scoped_chat_preserves_an_explicit_cross_role_request():
+def test_role_scoped_chat_overrides_an_explicit_cross_role_request():
     assert _arguments_with_role_scope(
         "search_applications", {"role_id": 99}, conversation_role_id=42
-    )["role_id"] == 99
+    )["role_id"] == 42
+
+
+def test_role_scoped_tool_round_never_passes_model_role_to_dispatch(db):
+    org = _make_org(db)
+    user = _make_user(db, org)
+    bound_role = _make_role(db, org, name="Bound")
+    other_role = _make_role(db, org, name="Other")
+    conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=bound_role.id,
+        title="Bound role chat",
+    )
+    db.add(conversation)
+    db.flush()
+
+    with patch(
+        "app.taali_chat.tool_execution.dispatch_tool",
+        return_value={"items": [], "total": 0, "total_is_exact": True},
+    ) as dispatched:
+        result = execute_tool_round(
+            db=db,
+            user=user,
+            conversation=conversation,
+            assistant_blocks=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu-spoof",
+                    "name": "search_role_candidates",
+                    "input": {"role_id": int(other_role.id)},
+                }
+            ],
+            messages=[],
+        )
+
+    assert result.error_count == 0
+    assert dispatched.call_args.args[1]["role_id"] == int(bound_role.id)
+
+
+def test_shared_read_dispatch_rejects_cross_role_spoof_before_handler(db):
+    org = _make_org(db)
+    user = _make_user(db, org)
+    bound_role = _make_role(db, org, name="Bound")
+    other_role = _make_role(db, org, name="Other")
+    conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=bound_role.id,
+        title="Bound role chat",
+    )
+    db.add(conversation)
+    db.flush()
+
+    with patch("app.mcp.shared_reads._resolve_handler") as resolve_handler:
+        with pytest.raises(ValueError, match="bound to the active role"):
+            dispatch_tool(
+                "search_role_candidates",
+                {"role_id": int(other_role.id)},
+                db=db,
+                user=user,
+                conversation=conversation,
+            )
+
+    resolve_handler.assert_not_called()
+
+
+def test_cross_role_spoof_returns_only_bound_role_candidates(db):
+    org = _make_org(db)
+    user = _make_user(db, org)
+    bound_role = _make_role(db, org, name="Bound")
+    other_role = _make_role(db, org, name="Other")
+    bound_application = _make_application(db, org=org, role=bound_role)
+    other_application = _make_application(db, org=org, role=other_role)
+    conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=bound_role.id,
+        title="Bound role chat",
+    )
+    db.add(conversation)
+    db.flush()
+
+    result = execute_tool_round(
+        db=db,
+        user=user,
+        conversation=conversation,
+        assistant_blocks=[
+            {
+                "type": "tool_use",
+                "id": "toolu-spoof",
+                "name": "search_role_candidates",
+                "input": {"role_id": int(other_role.id)},
+            }
+        ],
+        messages=[],
+    )
+
+    assert result.error_count == 0
+    payload = json.loads(result.live_results[0]["content"])
+    returned_ids = {int(item["application_id"]) for item in payload["items"]}
+    assert returned_ids == {int(bound_application.id)}
+    assert int(other_application.id) not in returned_ids
+
+
+def test_unscoped_shared_read_preserves_explicit_global_chat_role(db):
+    org = _make_org(db)
+    user = _make_user(db, org)
+    role = _make_role(db, org)
+    handler = MagicMock(
+        return_value={"items": [], "total": 0, "total_is_exact": True}
+    )
+
+    with patch("app.mcp.shared_reads._resolve_handler", return_value=handler):
+        result = dispatch_tool(
+            "search_role_candidates",
+            {"role_id": int(role.id)},
+            db=db,
+            user=user,
+            conversation=None,
+        )
+
+    assert result["total"] == 0
+    handler.assert_called_once()
+    assert handler.call_args.kwargs["role_id"] == int(role.id)
 
 
 def test_unscoped_chat_does_not_add_role_id():
@@ -224,9 +351,33 @@ def test_role_context_surfaces_pending_decision_count(db):
     db.add(app)
     db.flush()
 
-    for status, key in [("pending", "p1"), ("pending", "p2"), ("approved", "a1")]:
+    second_candidate = Candidate(
+        organization_id=org.id,
+        email="c2@x.test",
+        full_name="C2",
+    )
+    db.add(second_candidate)
+    db.flush()
+    second_app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=second_candidate.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    db.add(second_app)
+    db.flush()
+
+    for status, key, application_id in [
+        ("pending", "p1", app.id),
+        ("pending", "p2", second_app.id),
+        ("approved", "a1", app.id),
+    ]:
         d = AgentDecision(
-            organization_id=org.id, role_id=role.id, application_id=app.id,
+            organization_id=org.id, role_id=role.id, application_id=application_id,
             decision_type="advance_to_interview", recommendation="advance",
             status=status, reasoning="r", model_version="m", prompt_version="p",
             idempotency_key=key,
@@ -318,8 +469,9 @@ def test_list_recent_agent_decisions_returns_decisions_for_org(db):
     db.commit()
 
     out = handlers.list_recent_agent_decisions(db, user)
-    assert len(out) == 2
-    types = {d["decision_type"] for d in out}
+    assert out["total"] == 2
+    assert out["total_is_exact"] is True
+    types = {d["decision_type"] for d in out["items"]}
     assert types == {"advance_to_interview", "reject"}
 
 
@@ -338,9 +490,9 @@ def test_list_recent_agent_decisions_filters_by_role_id_and_status(db):
     pending_role_a = handlers.list_recent_agent_decisions(
         db, user, role_id=role_a.id, status="pending"
     )
-    assert len(pending_role_a) == 1
-    assert pending_role_a[0]["role_id"] == role_a.id
-    assert pending_role_a[0]["status"] == "pending"
+    assert pending_role_a["total"] == 1
+    assert pending_role_a["items"][0]["role_id"] == role_a.id
+    assert pending_role_a["items"][0]["status"] == "pending"
 
 
 def test_list_recent_agent_decisions_is_org_scoped(db):
@@ -354,7 +506,8 @@ def test_list_recent_agent_decisions_is_org_scoped(db):
     db.commit()
 
     out = handlers.list_recent_agent_decisions(db, user_a)
-    assert out == []
+    assert out["items"] == []
+    assert out["total"] == 0
 
 
 def test_list_recent_agent_decisions_validates_status_enum(db):

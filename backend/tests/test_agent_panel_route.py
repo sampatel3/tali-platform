@@ -84,6 +84,61 @@ def test_agent_panel_cards_show_effective_workspace_pause(client):
     }
 
 
+def test_related_agent_card_reports_role_local_scoring_work(client):
+    from app.models.candidate_application import CandidateApplication
+    from app.models.role import ROLE_KIND_SISTER, Role
+    from app.models.sister_role_evaluation import SisterRoleEvaluation
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_activity(org_name="Related Agent Work Org")
+    _attach_user_to_org(email, seeded["org_id"])
+
+    sess = TestingSessionLocal()
+    try:
+        transport = (
+            sess.query(CandidateApplication)
+            .filter(CandidateApplication.id == seeded["application_id"])
+            .one()
+        )
+        related = Role(
+            organization_id=seeded["org_id"],
+            name="Related Scoring Role",
+            source="manual",
+            role_kind=ROLE_KIND_SISTER,
+            ats_owner_role_id=seeded["role_id"],
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=0,
+        )
+        sess.add(related)
+        sess.flush()
+        sess.add(
+            SisterRoleEvaluation(
+                organization_id=seeded["org_id"],
+                role_id=related.id,
+                candidate_id=transport.candidate_id,
+                source_application_id=transport.id,
+                ats_application_id=transport.id,
+                status="pending",
+                pipeline_stage="applied",
+                pipeline_stage_source="initial_snapshot",
+                application_outcome="open",
+                application_outcome_source="initial_snapshot",
+                membership_source="initial_snapshot",
+                spec_fingerprint="related-panel-spec",
+            )
+        )
+        sess.commit()
+        related_id = int(related.id)
+    finally:
+        sess.close()
+
+    response = client.get("/api/v1/agent/panel", headers=headers)
+    assert response.status_code == 200, response.text
+    card = next(item for item in response.json()["agents"] if item["role_id"] == related_id)
+    assert card["activity"] == {"label": "WORKING", "text": "scoring 1 candidate"}
+
+
 def test_org_activity_feed_labels_roles(client):
     from tests.conftest import auth_headers
 

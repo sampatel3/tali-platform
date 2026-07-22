@@ -44,6 +44,19 @@ def test_structured_application_search_keeps_its_legacy_list_contract():
     assert not candidate_search_result_failed("search_applications", [])
 
 
+def test_canonical_role_search_fails_closed_when_current_state_is_unavailable():
+    assert is_candidate_search_tool("search_role_candidates")
+    assert candidate_search_result_failed(
+        "search_role_candidates",
+        {
+            "available": False,
+            "error": "role projection unavailable",
+            "applications": [],
+            "total_is_exact": False,
+        },
+    )
+
+
 def test_terminal_warning_code_is_classified_even_without_top_level_status():
     assert candidate_search_result_failed(
         "nl_search_candidates",

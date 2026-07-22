@@ -27,7 +27,9 @@ from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
+from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.user import User
+from app.taali_chat.tool_registry import dispatch_tool
 
 
 def _make_user_and_org(db) -> tuple[User, Organization]:
@@ -105,7 +107,8 @@ def _seed_sister_top_candidate_world(db, *, org: Organization) -> dict:
             30.0,
             "advanced",
         ),
-        # A stale local stage must not revive a globally advanced ATS row.
+        # Shared ATS progress is a writeback restriction only. It must not
+        # remove or move this independent role-local membership.
         ("globally_advanced", "Globally Advanced", 8.0, None, "advanced", 98.0, "applied"),
     )
     applications: dict[str, CandidateApplication] = {}
@@ -177,8 +180,13 @@ def test_search_applications_uses_sister_score_stage_and_safe_projection(db):
         sort_by="taali_score",
     )
 
-    assert [row["application_id"] for row in rows] == [int(case["best"].id)]
-    row = rows[0]
+    assert [row["application_id"] for row in rows] == [
+        int(case["globally_advanced"].id),
+        int(case["best"].id),
+    ]
+    row = next(
+        item for item in rows if item["application_id"] == int(case["best"].id)
+    )
     assert row["role_id"] == int(case["sister"].id)
     assert row["role_name"] == case["sister"].name
     assert row["pipeline_stage"] == "applied"
@@ -188,7 +196,7 @@ def test_search_applications_uses_sister_score_stage_and_safe_projection(db):
     assert row["cv_match_score"] == 96.0
     assert row["role_fit_score"] == 96.0
     assert row["assessment_score"] is None
-    assert row["auto_reject_state"] is None
+    assert "auto_reject_state" not in row
     assert row["score_mode"] == "sister_role"
     assert row["frontend_url"].endswith(
         f"/candidates/{case['best'].id}?from=jobs/{case['sister'].id}"
@@ -199,6 +207,57 @@ def test_search_applications_uses_sister_score_stage_and_safe_projection(db):
     assert case["best"].pipeline_stage == "review"
     assert case["best"].pre_screen_recommendation == "Below threshold"
     assert "pre_screen_recommendation" not in row
+
+
+def test_role_bound_legacy_detail_and_compare_use_logical_role_projection(db):
+    """Legacy tool names must not escape a role-bound Taali conversation."""
+
+    user, org = _make_user_and_org(db)
+    case = _seed_sister_top_candidate_world(db, org=org)
+    conversation = TaaliChatConversation(
+        organization_id=int(org.id),
+        user_id=int(user.id),
+        role_id=int(case["sister"].id),
+        title="Related role truth",
+    )
+    db.add(conversation)
+    db.flush()
+
+    detail = dispatch_tool(
+        "get_application",
+        {"application_id": int(case["best"].id)},
+        db=db,
+        user=user,
+        conversation=conversation,
+    )
+    comparison = dispatch_tool(
+        "compare_applications",
+        {
+            "application_ids": [
+                int(case["best"].id),
+                int(case["second"].id),
+            ]
+        },
+        db=db,
+        user=user,
+        conversation=conversation,
+    )
+
+    assert detail["role_id"] == int(case["sister"].id)
+    assert detail["taali_score"] == 96.0
+    assert detail["current_state"]["pipeline_stage"] == "applied"
+    assert [row["role_id"] for row in comparison["applications"]] == [
+        int(case["sister"].id),
+        int(case["sister"].id),
+    ]
+    assert [row["scores"]["taali"] for row in comparison["applications"]] == [
+        96.0,
+        61.0,
+    ]
+    assert [row["pipeline_stage"] for row in comparison["applications"]] == [
+        "applied",
+        "review",
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -545,27 +604,39 @@ def test_find_top_candidates_uses_sister_scope_score_stage_and_projection(db):
 
     assert len(runner_calls) == 1
     assert runner_calls[0]["role_id"] == int(case["sister"].id)
-    assert result["pool_size"] == 2
+    assert result["pool_size"] == 3
     assert [row["application_id"] for row in result["candidates"]] == [
+        int(case["globally_advanced"].id),
         int(case["best"].id),
         int(case["second"].id),
     ]
 
-    best, second = result["candidates"]
-    assert [best["taali_score"], second["taali_score"]] == [96.0, 61.0]
-    assert [best["pipeline_stage"], second["pipeline_stage"]] == [
+    source_advanced, best, second = result["candidates"]
+    assert [
+        source_advanced["taali_score"],
+        best["taali_score"],
+        second["taali_score"],
+    ] == [98.0, 96.0, 61.0]
+    assert [
+        source_advanced["pipeline_stage"],
+        best["pipeline_stage"],
+        second["pipeline_stage"],
+    ] == [
+        "applied",
         "applied",
         "review",
     ]
     assert best["role_id"] == int(case["sister"].id)
     assert best["role_name"] == case["sister"].name
-    assert best["operational_role_id"] == int(case["owner"].id)
-    assert best["source_role_score"] == 12.0
     assert best["score_mode"] == "sister_role"
+    assert source_advanced["action_restrictions"]["restricted"] is True
+    for row in result["candidates"]:
+        assert "operational_role_id" not in row
+        assert "source_role_score" not in row
 
     returned_ids = {int(row["application_id"]) for row in result["candidates"]}
     assert int(case["sister_advanced"].id) not in returned_ids
-    assert int(case["globally_advanced"].id) not in returned_ids
+    assert int(case["globally_advanced"].id) in returned_ids
     # The winning related candidate is explicitly below threshold on the owner
     # role. That owner-only verdict must neither exclude nor relabel it here.
     assert case["best"].pre_screen_recommendation == "Below threshold"
@@ -781,7 +852,7 @@ def test_screen_pool_uses_sister_scored_history_and_strips_owner_verdicts(db):
     assert row["cv_match_score"] == 96.0
     assert row["role_fit_score"] == 96.0
     assert row["assessment_score"] is None
-    assert row["auto_reject_state"] is None
+    assert "auto_reject_state" not in row
     assert row["score_mode"] == "sister_role"
     assert row["candidate_headline"] == "Sister Best related-role evidence."
     assert row["candidate_summary"] is None
@@ -792,6 +863,7 @@ def test_screen_pool_uses_sister_scored_history_and_strips_owner_verdicts(db):
         "operational_role_name",
         "pre_screen_recommendation",
         "pre_screen_evidence",
+        "auto_reject_state",
         "auto_reject_reason",
     ):
         assert owner_only_field not in row
@@ -959,6 +1031,87 @@ def test_screen_pool_handler_excludes_candidate_hired_elsewhere(db):
 
     assert open_app.id not in captured["ids"]   # candidate already placed elsewhere
     assert hired_app.id not in captured["ids"]
+
+
+def test_screen_pool_excludes_candidate_hired_in_independent_related_role(db):
+    """A related-role placement is person-wide even without a physical hired app."""
+    user, org = _make_user_and_org(db)
+    owner = Role(organization_id=org.id, name="ATS owner", source="manual")
+    related = Role(
+        organization_id=org.id,
+        name="Independent related hire",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role=owner,
+    )
+    rediscovery_role = Role(
+        organization_id=org.id,
+        name="Rediscovery role",
+        source="manual",
+    )
+    candidate = Candidate(
+        organization_id=org.id,
+        email="related-hire@example.test",
+        full_name="Already Placed",
+        position="Engineer",
+    )
+    db.add_all([owner, related, rediscovery_role, candidate])
+    db.flush()
+    transport = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    scored_open = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=rediscovery_role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        cv_match_details={"requirements_assessment": []},
+    )
+    db.add_all([transport, scored_open])
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=org.id,
+            role_id=related.id,
+            candidate_id=candidate.id,
+            source_application_id=transport.id,
+            ats_application_id=transport.id,
+            status="done",
+            pipeline_stage="advanced",
+            application_outcome="hired",
+            membership_source="initial_snapshot",
+            spec_fingerprint="related-hire-spec",
+        )
+    )
+    db.commit()
+    captured: dict[str, set[int]] = {}
+
+    def _fake_engine(**kwargs):
+        captured["ids"] = {int(app.id) for app in kwargs["base_query"].all()}
+        return {"mode": "rediscovery", "candidates": []}
+
+    with patch(
+        "app.candidate_search.top_candidates.screen_pool_against_requirement",
+        _fake_engine,
+    ):
+        handlers.screen_pool_against_requirement(
+            db,
+            user,
+            requirement_text="banking",
+        )
+
+    assert int(scored_open.id) not in captured["ids"]
 
 
 def test_screen_pool_handler_rejects_empty_requirement(db):

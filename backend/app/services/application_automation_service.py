@@ -14,10 +14,14 @@ from ..domains.assessments_runtime.pipeline_service import (
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
-from .agent_policy_settings import pre_screen_reject_review_copy, role_shares_ats_application
+from .agent_policy_settings import pre_screen_reject_review_copy, role_is_related
 from .document_service import sanitize_text_for_storage
 from .native_pre_screen_automation import try_native_careers_reject
-from .pre_screen_decision_emitter import queue_pre_screen_reject
+from .pre_screen_reject_routing import (
+    divert_pre_screen_reject_to_card as _divert_pre_screen_reject_to_card,
+    reject_related_role_for_cv_gap,
+    try_related_role_local_pre_screen_reject as _try_related_role_local_pre_screen_reject,
+)
 from .pre_screening_service import (
     evaluate_auto_reject_decision,
     mark_auto_reject_state,
@@ -28,6 +32,7 @@ from .workable_actions_service import (
     workable_job_state,
     workable_job_syncable,
 )
+
 
 def reject_for_cv_gap(
     *,
@@ -57,6 +62,18 @@ def reject_for_cv_gap(
     failed (the caller leaves the candidate open and reports the failure). Any
     DB writes made here (events) are left for the caller to commit/rollback.
     """
+    related_result = reject_related_role_for_cv_gap(
+        db,
+        app=app,
+        role=role,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        reason=reason,
+        trigger=trigger,
+    )
+    if related_result is not None:
+        return related_result
+
     # Bullhorn-connected org → reject via the Bullhorn provider first (writes the
     # org's rejected-category JobSubmission status), then flip the local outcome.
     # A no-op for non-Bullhorn orgs, so the Workable path below is unchanged.
@@ -143,65 +160,6 @@ def reject_for_cv_gap(
     return {"performed": True, "reason": reason, "workable_written": wrote_to_workable}
 
 
-def _divert_pre_screen_reject_to_card(
-    db,
-    *,
-    app: CandidateApplication,
-    role: Role | None,
-    decision: dict[str, Any],
-    carded_reason: str,
-    fallback_state: str,
-    fallback_reason: str,
-) -> dict[str, Any]:
-    """Surface a below-threshold candidate as a Decision Hub pre-screen-reject
-    card when the direct Workable disqualify can't run (auto_reject off, or the
-    candidate isn't Workable-linked) OR *failed* (e.g. a 403 on a Workable job
-    this actor member can't action — DeepLight role 53).
-
-    The card is the same agent-HITL surface ``auto_reject``-off roles use, so a
-    deterministic reject the agent couldn't *execute* is never silently
-    stranded: the recruiter still sees it. Critically, the resulting pending
-    decision is what lets ``pre_screen_reject_sweep``'s ``~has_pending`` guard
-    stop re-dispatching the failing write-back — it turns an endless per-tick
-    403 retry storm into a single attempt followed by one card.
-
-    ``queue_pre_screen_reject`` returns None — and we fall back to
-    ``fallback_state``/``fallback_reason`` — for non-agent roles, already
-    cv_match-scored candidates (the agent owns those), or a passed pre-screen,
-    so those keep their honest terminal state ('skipped'/'failed').
-    """
-    snapshot = decision.get("snapshot") if isinstance(decision.get("snapshot"), dict) else {}
-    config = decision.get("config") if isinstance(decision.get("config"), dict) else {}
-    queued = (
-        queue_pre_screen_reject(
-            db,
-            organization_id=int(app.organization_id),
-            role=role,
-            application=app,
-            pre_screen_score=snapshot.get("pre_screen_score"),
-            threshold=config.get("threshold_100"),
-            evidence={
-                "cv_fit_score": snapshot.get("cv_fit_score"),
-                "requirements_fit_score": snapshot.get("requirements_fit_score"),
-            },
-        )
-        if role is not None
-        else None
-    )
-    if queued is None:
-        mark_auto_reject_state(app, state=fallback_state, reason=fallback_reason, triggered=False)
-        return {**decision, "performed": False, "state": fallback_state, "reason": fallback_reason}
-    mark_auto_reject_state(
-        app, state="awaiting_recruiter_approval", reason=carded_reason, triggered=False
-    )
-    return {
-        **decision,
-        "performed": False,
-        "state": "awaiting_recruiter_approval",
-        "reason": carded_reason,
-    }
-
-
 def run_auto_reject_if_needed(
     *,
     db,
@@ -236,17 +194,30 @@ def run_auto_reject_if_needed(
     # planner never surveyed below-threshold candidates so 270 stranded in prod.)
     auto_disqualify_eligible = bool(decision.get("auto_disqualify_eligible", True))
     auto_reject_opted_in = bool(getattr(role, "auto_reject_pre_screen", False))
-    shared_ats_application = role is not None and role_shares_ats_application(
-        role, db=db
-    )
+    related_role = role is not None and role_is_related(role)
+    if (
+        role is not None
+        and related_role
+        and auto_reject_opted_in
+        and auto_disqualify_eligible
+    ):
+        local_result = _try_related_role_local_pre_screen_reject(
+            db,
+            app=app,
+            role=role,
+            decision=decision,
+            actor_type=actor_type,
+            actor_id=actor_id,
+        )
+        if local_result is not None:
+            return local_result
     if role is not None and (
-        shared_ats_application
-        or not (auto_reject_opted_in and auto_disqualify_eligible)
+        related_role or not (auto_reject_opted_in and auto_disqualify_eligible)
     ):
         # Not eligible for direct Workable disqualify → recruiter approves the
         # reject manually; surface a Decision Hub card instead.
         carded_reason, fallback_reason = pre_screen_reject_review_copy(
-            shared_ats_application=shared_ats_application
+            shared_ats_application=related_role
         )
         return _divert_pre_screen_reject_to_card(
             db,

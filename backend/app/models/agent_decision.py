@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -59,6 +59,14 @@ class AgentDecision(Base):
         UniqueConstraint("idempotency_key", name="uq_agent_decisions_idempotency_key"),
         Index("ix_agent_decisions_application_status", "application_id", "status"),
         Index("ix_agent_decisions_role_status", "role_id", "status"),
+        Index(
+            "uq_agent_decisions_active_role_application",
+            "role_id",
+            "application_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'processing')"),
+            sqlite_where=text("status IN ('pending', 'processing')"),
+        ),
     )
 
     id = Column(BigInteger, primary_key=True, index=True)
@@ -84,6 +92,10 @@ class AgentDecision(Base):
     resolved_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     resolution_note = Column(Text, nullable=True)
     override_action = Column(String, nullable=True)
+    # Durable resolution intent/result metadata.  In particular, the selected
+    # ATS destination is written before deferred dispatch so historical queries
+    # do not depend on an ephemeral Celery payload.
+    resolution_metadata = Column(JSON, nullable=False, default=dict, server_default="{}")
 
     # Hub-era fields (migration 063):
     #   feedback_id: links to the latest decision_feedback row when the human

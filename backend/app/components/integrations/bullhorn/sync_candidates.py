@@ -424,6 +424,20 @@ def sync_submission(
             .first()
         )
 
+    # Capture before a new application is flushed so first-time ingest stays
+    # owned by the ordinary creation outbox, while a replacement shared CV can
+    # conservatively hold only pre-existing related memberships.
+    from ....services.candidate_cv_input_lifecycle import (
+        capture_candidate_cv_input_snapshot,
+        invalidate_changed_candidate_cv_inputs,
+    )
+
+    cv_snapshot = capture_candidate_cv_input_snapshot(
+        db,
+        candidate=candidate,
+        organization_id=int(org.id),
+    )
+
     remote_status = _submission_status(submission)
     created_application = False
     if app is None:
@@ -498,6 +512,12 @@ def sync_submission(
             candidate=candidate,
             bullhorn_candidate_id=bullhorn_candidate_id,
             now=now,
+        )
+        invalidate_changed_candidate_cv_inputs(
+            db,
+            candidate=candidate,
+            before=cv_snapshot,
+            reason="bullhorn_cv_changed",
         )
 
     # Read-only score cache refresh (free); paid scoring only via the gated

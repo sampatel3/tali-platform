@@ -139,7 +139,7 @@ def build_activity_feed(
         .filter(AgentDecision.organization_id == organization_id)
     )
     events_q = (
-        db.query(CandidateApplicationEvent, Candidate, CandidateApplication.role_id)
+        db.query(CandidateApplicationEvent, Candidate, CandidateApplicationEvent.role_id)
         .join(
             CandidateApplication,
             CandidateApplication.id == CandidateApplicationEvent.application_id,
@@ -157,7 +157,10 @@ def build_activity_feed(
     if role_id is not None:
         runs_q = runs_q.filter(AgentRun.role_id == role_id)
         decisions_q = decisions_q.filter(AgentDecision.role_id == role_id)
-        events_q = events_q.filter(CandidateApplication.role_id == role_id)
+        # Event.role_id is the immutable logical role that owns the action.
+        # The joined application may belong to an ATS transport/owner role for
+        # a related-role member, so it is only used to resolve the candidate.
+        events_q = events_q.filter(CandidateApplicationEvent.role_id == role_id)
         needs_q = needs_q.filter(AgentNeedsInput.role_id == role_id)
 
     if before is not None:

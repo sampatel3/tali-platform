@@ -39,7 +39,13 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...agent_runtime import budget_guard
 from ...models.cv_score_job import SCORE_JOB_PENDING, CvScoreJob
-from ...models.role import Role
+from ...models.role import ROLE_KIND_SISTER, Role
+from ...models.sister_role_evaluation import (
+    SISTER_EVAL_PENDING,
+    SISTER_EVAL_RETRY_WAIT,
+    SISTER_EVAL_RUNNING,
+    SisterRoleEvaluation,
+)
 from ...models.user import User
 from ...platform.database import get_db
 
@@ -236,14 +242,6 @@ def agent_panel(
         .filter(AgentRun.organization_id == org_id, AgentRun.status == "running")
         .all()
     )
-    scoring_pending_by_role = dict(
-        db.query(CvScoreJob.role_id, func.count(CvScoreJob.id))
-        .join(Role, Role.id == CvScoreJob.role_id)
-        .filter(Role.organization_id == org_id, CvScoreJob.status == SCORE_JOB_PENDING)
-        .group_by(CvScoreJob.role_id)
-        .all()
-    )
-
     roles = (
         db.query(Role)
         .filter(
@@ -253,6 +251,44 @@ def agent_panel(
         )
         .all()
     )
+    standard_role_ids = [int(role.id) for role in roles if role.role_kind != ROLE_KIND_SISTER]
+    related_role_ids = [int(role.id) for role in roles if role.role_kind == ROLE_KIND_SISTER]
+    scoring_pending_by_role: dict[int, int] = {}
+    if standard_role_ids:
+        scoring_pending_by_role.update(
+            dict(
+                db.query(CvScoreJob.role_id, func.count(CvScoreJob.id))
+                .filter(
+                    CvScoreJob.role_id.in_(standard_role_ids),
+                    CvScoreJob.status == SCORE_JOB_PENDING,
+                )
+                .group_by(CvScoreJob.role_id)
+                .all()
+            )
+        )
+    if related_role_ids:
+        scoring_pending_by_role.update(
+            dict(
+                db.query(
+                    SisterRoleEvaluation.role_id,
+                    func.count(SisterRoleEvaluation.id),
+                )
+                .filter(
+                    SisterRoleEvaluation.organization_id == org_id,
+                    SisterRoleEvaluation.role_id.in_(related_role_ids),
+                    SisterRoleEvaluation.deleted_at.is_(None),
+                    SisterRoleEvaluation.status.in_(
+                        (
+                            SISTER_EVAL_PENDING,
+                            SISTER_EVAL_RUNNING,
+                            SISTER_EVAL_RETRY_WAIT,
+                        )
+                    ),
+                )
+                .group_by(SisterRoleEvaluation.role_id)
+                .all()
+            )
+        )
 
     agents: list[AgentCard] = []
     for role in roles:

@@ -24,6 +24,11 @@ from app.models.agent_conversation import (
     AgentConversationMessage,
 )
 from app.models.organization import Organization
+from app.mcp.provenance import (
+    ACTION_HISTORY_REQUIRED_MESSAGE,
+    DECISION_HISTORY_REQUIRED_MESSAGE,
+    POOL_STATE_REQUIRED_MESSAGE,
+)
 from app.models.role import Role
 from app.models.user import User
 
@@ -122,7 +127,7 @@ def test_paid_boundaries_never_hold_the_agent_chat_transaction(db):
             SimpleNamespace(
                 type="tool_use",
                 id="overview",
-                name="get_role_overview",
+                name="search_role_candidates",
                 input={},
             )
         ],
@@ -138,16 +143,20 @@ def test_paid_boundaries_never_hold_the_agent_chat_transaction(db):
     boundaries: list[tuple[str, bool]] = []
     routed_calls: list[tuple[object, str]] = []
     scoped_routes: list[object] = []
+    model_tool_names: list[set[str]] = []
 
     def model_call(*args, **kwargs):
         boundaries.append(("model", db.in_transaction()))
         routed_calls.append((args[0], kwargs["model"]))
+        model_tool_names.append(
+            {str(tool["name"]) for tool in kwargs.get("tools", [])}
+        )
         return next(responses)
 
     def run_tool(*_args, **_kwargs):
         boundaries.append(("tool", db.in_transaction()))
         scoped_routes.append(current_route())
-        return {"status": "ok"}
+        return {"items": [{"application_id": 1}], "total": 1, "total_is_exact": True}
 
     with (
         patch(
@@ -191,14 +200,122 @@ def test_paid_boundaries_never_hold_the_agent_chat_transaction(db):
     assert route.terminal_status == "cancelled"
     assert assistant.model == "claude-haiku-4-5-20251001"
     resolver.assert_called_once_with(route)
+    assert all(
+        {
+            "search_role_candidates",
+            "get_role_candidate",
+            "list_candidate_actions",
+            "list_recent_agent_decisions",
+        }
+        <= names
+        for names in model_tool_names
+    )
+
+
+def test_agent_chat_withholds_unsupported_historical_candidate_claim(db):
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message=(
+            "Give me the candidates I advanced to technical interview last week"
+        ),
+    )
+    db.commit()
+    unsupported = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="text",
+                text="Zero candidates were advanced last week.",
+            )
+        ],
+        stop_reason="end_turn",
+    )
+
+    with (
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
+        patch("app.agent_chat.engine.reserve"),
+        patch("app.agent_chat.engine.one_call", return_value=unsupported),
+    ):
+        assistant = run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+
+    assert assistant.text == ACTION_HISTORY_REQUIRED_MESSAGE
+    assert assistant.stop_reason == "grounding_required"
+
+
+@pytest.mark.parametrize(
+    ("user_message", "unsupported", "expected"),
+    [
+        (
+            "Hello",
+            "Zero candidates have PySpark experience in this pool.",
+            POOL_STATE_REQUIRED_MESSAGE,
+        ),
+        (
+            "Show the pending agent decisions",
+            "There are no pending agent recommendations.",
+            DECISION_HISTORY_REQUIRED_MESSAGE,
+        ),
+    ],
+)
+def test_agent_chat_withholds_unread_pool_and_decision_claims(
+    db, user_message, unsupported, expected
+):
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message=user_message,
+    )
+    db.commit()
+    response = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=unsupported)],
+        stop_reason="end_turn",
+    )
+
+    with (
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
+        patch("app.agent_chat.engine.reserve"),
+        patch("app.agent_chat.engine.one_call", return_value=response),
+    ):
+        assistant = run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+
+    assert unsupported not in assistant.text
+    assert assistant.text == expected
+    assert assistant.stop_reason == "grounding_required"
 
 
 def test_registry_exposes_every_new_command_once():
     names = [tool["name"] for tool in AGENT_CHAT_TOOLS]
-    # Keep the exact count aligned with the merged registry and prove the draft
-    # handoff tool is exposed once alongside the direct preview/create tools.
-    assert len(names) == len(set(names)) == 36
+    assert len(names) == len(set(names))
     assert {
+        "search_role_candidates",
+        "get_role_candidate",
+        "list_candidate_actions",
+        "list_recent_agent_decisions",
+        "get_recruiting_overview",
         "list_pending_decisions",
         "approve_decision",
         "override_decision",

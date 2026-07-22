@@ -127,8 +127,8 @@ def publish_requisition(
         )
     locked: Role | None = None
     if source_role_id is not None:
-        # Related-role creation is a source-job mutation boundary. Lock and
-        # authorize the original ATS role before the draft, preserving the
+        # Related-role creation snapshots a source role. Lock and authorize
+        # that logical role before the draft, preserving the
         # platform-wide Role -> RoleBrief lock order.
         locked = require_job_permission(
             db,
@@ -250,6 +250,15 @@ def publish_requisition(
                 name=(brief.title or "Untitled related role"),
                 job_spec_text=data.jd_markdown,
                 brief=brief,
+                expected_source_snapshot_fingerprint=str(
+                    (
+                        (brief.agent_state or {}).get(
+                            "related_role_source_snapshot"
+                        )
+                        or {}
+                    ).get("fingerprint")
+                    or ""
+                ),
             )
         except RelatedRoleError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -15,6 +15,7 @@ from app.models.assessment import Assessment, AssessmentStatus
 from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.task import Task
 
 from .conftest import add_event, make_world
@@ -144,6 +145,21 @@ def test_sister_role_policy_defers_to_role_local_runtime_before_owner_cache(
         monthly_usd_budget_cents=0,
     )
     db.add(sister)
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=int(org.id),
+            role_id=int(sister.id),
+            candidate_id=int(app.candidate_id),
+            source_application_id=int(app.id),
+            ats_application_id=int(app.id),
+            status="done",
+            pipeline_stage="review",
+            application_outcome="open",
+            membership_source="initial_snapshot",
+            spec_fingerprint="policy-related-runtime",
+        )
+    )
     db.add(
         CvScoreJob(
             application_id=int(app.id),
@@ -184,7 +200,7 @@ def test_sister_role_without_owner_stops_before_subagents(db, monkeypatch):
         db, role=sister, application_id=int(app.id)
     )
 
-    assert verdict.rule_path == ["sister_role_owner_unavailable"]
+    assert verdict.rule_path == ["application_missing"]
     assert outputs == {}
     gather.assert_not_called()
 
@@ -231,7 +247,7 @@ def test_sister_role_invalid_owner_stops_before_subagents(
         db, role=sister, application_id=int(app.id)
     )
 
-    assert verdict.rule_path == ["sister_role_owner_unavailable"]
+    assert verdict.rule_path == ["application_missing"]
     assert outputs == {}
     gather.assert_not_called()
 

@@ -20,6 +20,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from app.candidate_search.tool_failure_contract import (
     CANDIDATE_SEARCH_UNAVAILABLE_CODE,
     CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE,
@@ -33,6 +35,11 @@ from app.models.role import Role
 from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.taali_chat_message import TaaliChatMessage
 from app.models.user import User
+from app.mcp.provenance import (
+    ACTION_HISTORY_REQUIRED_MESSAGE,
+    DECISION_HISTORY_REQUIRED_MESSAGE,
+    POOL_STATE_REQUIRED_MESSAGE,
+)
 from app.taali_chat.service import ChatTurnInput, run_chat_turn
 from app.taali_chat.search_context import population_context_for_search
 from app.taali_chat.stream_round import CHAT_ROUND_IDLE_TIMEOUT_SECONDS
@@ -395,6 +402,12 @@ def test_text_only_turn_persists_and_streams(db):
     assert routed_call["model"] == "claude-haiku-4-5-20251001"
     assert routed_call["metering"]["feature"] == "taali_chat"
     assert routed_call["metering"]["metadata"]["round"] == 0
+    assert {
+        "search_role_candidates",
+        "get_role_candidate",
+        "list_candidate_actions",
+        "list_recent_agent_decisions",
+    } <= {str(tool["name"]) for tool in routed_call["tools"]}
     route = get_client.call_args.args[0]
     assert get_client.call_args.kwargs == {}
     assert route.decision.task is TaskKey.GENERAL_CHAT_ORCHESTRATION
@@ -869,3 +882,94 @@ def test_unknown_conversation_id_emits_error(db):
     assert any(f.startswith("3:") and "999999" in f for f in frames)
     # Anthropic must not have been called.
     assert len(fake_client.messages.calls) == 0
+
+
+def test_historical_candidate_claim_is_withheld_without_action_history(db):
+    user, org = _seed_user(db)
+    unsupported = "Zero candidates were advanced last week."
+    fake_client = _FakeClient([_text_only_plan(unsupported)])
+
+    with patch(
+        "app.taali_chat.service.routed_messages_client", return_value=fake_client
+    ), patch("app.taali_chat.service.record_event"):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message=(
+                        "Give me the candidates I advanced to technical "
+                        "interview last week"
+                    ),
+                    conversation_id=None,
+                ),
+            )
+        )
+
+    visible = "".join(
+        json.loads(frame[2:]) for frame in frames if frame.startswith("0:")
+    )
+    assert unsupported not in visible
+    assert ACTION_HISTORY_REQUIRED_MESSAGE in visible
+    assistant = (
+        db.query(TaaliChatMessage)
+        .filter(TaaliChatMessage.role == "assistant")
+        .order_by(TaaliChatMessage.id.desc())
+        .first()
+    )
+    assert assistant is not None
+    assert assistant.content == [
+        {"type": "text", "text": ACTION_HISTORY_REQUIRED_MESSAGE}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("user_message", "unsupported", "expected"),
+    [
+        (
+            "Hello",
+            "Zero candidates have PySpark experience in this pool.",
+            POOL_STATE_REQUIRED_MESSAGE,
+        ),
+        (
+            "Show the pending agent decisions",
+            "There are no pending agent recommendations.",
+            DECISION_HISTORY_REQUIRED_MESSAGE,
+        ),
+    ],
+)
+def test_candidate_pool_and_decision_claims_require_canonical_reads(
+    db, user_message, unsupported, expected
+):
+    user, org = _seed_user(db)
+    fake_client = _FakeClient([_text_only_plan(unsupported)])
+
+    with patch(
+        "app.taali_chat.service.routed_messages_client", return_value=fake_client
+    ), patch("app.taali_chat.service.record_event"):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message=user_message,
+                    conversation_id=None,
+                ),
+            )
+        )
+
+    visible = "".join(
+        json.loads(frame[2:]) for frame in frames if frame.startswith("0:")
+    )
+    assert unsupported not in visible
+    assert expected in visible
+    assistant = (
+        db.query(TaaliChatMessage)
+        .filter(TaaliChatMessage.role == "assistant")
+        .order_by(TaaliChatMessage.id.desc())
+        .first()
+    )
+    assert assistant is not None
+    assert assistant.content == [{"type": "text", "text": expected}]

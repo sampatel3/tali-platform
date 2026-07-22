@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 from app.agent_chat import tools as role_agent_tools
 from app.agent_runtime import tool_registry as autonomous_tools
+from app.candidate_search.role_projection import OWNER_ROLE_JUDGMENT_FIELDS
 from app.candidate_search.evals.contracts import (
     Citation,
     ConstructedWorld,
@@ -192,7 +193,8 @@ def _sister_role_truth_case(db, client) -> dict:
         ("best", 12.0, "Below threshold", "review", 96.0, "applied"),
         ("second", 92.0, "Advance recommended", "applied", 61.0, "review"),
         ("local_advanced", 99.0, "Advance recommended", "applied", 30.0, "advanced"),
-        # A stale local stage must not revive a globally advanced ATS row.
+        # Shared ATS advancement restricts writes but cannot hide or override
+        # this related role's explicit membership and local stage.
         ("globally_advanced", 8.0, None, "advanced", 98.0, "applied"),
     )
     applications: dict[str, CandidateApplication] = {}
@@ -479,22 +481,32 @@ def test_related_role_top_candidates_preserve_local_truth_across_agent_surfaces(
             role=case["sister"],
         )
 
-    expected_ids = [int(case["best"].id), int(case["second"].id)]
+    expected_ids = [
+        int(case["globally_advanced"].id),
+        int(case["best"].id),
+        int(case["second"].id),
+    ]
     for payload in (shared, taali, role_agent, autonomous):
         rows = payload["candidates"]
-        assert payload["pool_size"] == 2
+        assert payload["pool_size"] == 3
         assert [int(row["application_id"]) for row in rows] == expected_ids
-        assert [row["taali_score"] for row in rows] == [96.0, 61.0]
-        assert [row["pipeline_stage"] for row in rows] == ["applied", "review"]
+        assert [row["taali_score"] for row in rows] == [98.0, 96.0, 61.0]
+        assert [row["pipeline_stage"] for row in rows] == [
+            "applied",
+            "applied",
+            "review",
+        ]
         assert all(int(row["role_id"]) == int(case["sister"].id) for row in rows)
         assert all(row["role_name"] == case["sister"].name for row in rows)
         assert all(row["score_mode"] == "sister_role" for row in rows)
-        assert rows[0]["operational_role_id"] == int(case["owner"].id)
-        assert rows[0]["source_role_score"] == 12.0
+        # The source application contributes shared CV evidence and ATS
+        # restrictions only. Owner-role scores and judgments are never part of
+        # the independent related role's agent-facing projection.
+        assert all(OWNER_ROLE_JUDGMENT_FIELDS.isdisjoint(row) for row in rows)
 
         returned = {int(row["application_id"]) for row in rows}
         assert int(case["local_advanced"].id) not in returned
-        assert int(case["globally_advanced"].id) not in returned
+        assert int(case["globally_advanced"].id) in returned
 
     assert case["best"].pre_screen_recommendation == "Below threshold"
     assert len(calls) == 4
@@ -547,16 +559,17 @@ def test_related_role_application_filter_preserves_local_truth_across_surfaces(
 
     for rows in (shared, taali, autonomous):
         assert [int(row["application_id"]) for row in rows] == [
+            int(case["globally_advanced"].id),
             int(case["best"].id)
         ]
-        row = rows[0]
-        assert int(row["role_id"]) == int(case["sister"].id)
-        assert row["role_name"] == case["sister"].name
-        assert row["pipeline_stage"] == "applied"
-        assert row["taali_score"] == 96.0
-        assert row["pre_screen_score"] == 96.0
-        assert row["assessment_score"] is None
-        assert row["score_mode"] == "sister_role"
+        for row in rows:
+            assert int(row["role_id"]) == int(case["sister"].id)
+            assert row["role_name"] == case["sister"].name
+            assert row["pipeline_stage"] == "applied"
+            assert row["assessment_score"] is None
+            assert row["score_mode"] == "sister_role"
+        assert [row["taali_score"] for row in rows] == [98.0, 96.0]
+        assert [row["pre_screen_score"] for row in rows] == [98.0, 96.0]
 
     assert case["best"].taali_score_cache_100 == 12.0
     assert case["best"].pipeline_stage == "review"

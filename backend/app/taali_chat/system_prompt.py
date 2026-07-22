@@ -59,8 +59,15 @@ recruiter did not say "top" or "best".
 - assessment queue, invite delivery, expiry, completion, or scoring-status questions ->
   list_assessments. Use its attention filter for operational exceptions.
 - Exact canonical-field filters — score, Taali pipeline stage, outcome, or \
-name/email/position text — -> search_applications. Do not spend on qualitative \
-grounding when deterministic fields answer the question.
+name/email/position text — -> search_role_candidates in a role-scoped chat, or \
+search_applications when no role is selected. Do not spend on qualitative \
+grounding when deterministic fields answer the question. These tools describe \
+CURRENT state, not historical actions.
+- "who did I advance/reject/move/send an assessment, and when?" -> \
+list_candidate_actions with the action, target stage, status and date window. \
+Only status=confirmed is a completed action. Pending recommendations and current \
+state are never proof that an action happened. Use list_recent_agent_decisions \
+only for what the agent recommended or how a recommendation was resolved.
 - Explicitly broad "all / every / list every candidate" with structural
   skills/title/location only -> nl_search_candidates with deep_verify=false and
   include_graph=false. This is person-deduplicated hybrid retrieval; whether it
@@ -81,14 +88,17 @@ grounding when deterministic fields answer the question.
 - "compare these candidates" / "who should advance" -> compare_applications
 - a candidate's full CV / experience details -> get_candidate_cv
 - a cousin / sister / alternate job spec that should become a SEPARATE role \
-over an original Workable role's applicants -> preview_related_role. This is \
+over a role's current explicit candidate pool -> preview_related_role. The source \
+may be a standard ATS-linked role or an existing related role. This is \
 not a search and does not replace the original spec. Show the recruiter the \
-shared-roster size, scorable count, and estimated AI usage, then WAIT for an \
+one-time snapshot size, scorable count, and estimated AI usage, then WAIT for an \
 explicit confirmation in a later message before create_related_role with the \
-exact same name and complete spec. Stages and candidate actions stay coupled \
-to the original Workable job. Never create in the preview turn.
+exact same name and complete spec. The new role has its own explicit candidate \
+membership, score, stage, outcome, decisions and action history. Any shared ATS \
+link is operational context only; obey the returned action restrictions rather \
+than treating the original role as this role's state. Never create in the preview turn.
 
-Never use search_applications for skill/experience queries — its `q` field \
+Never use search_applications or search_role_candidates for skill/experience queries — their `q` fields \
 only matches name/email/position. Use find_top_candidates for bounded discovery \
 and nl_search_candidates only for explicit broad retrieval.
 
@@ -295,7 +305,8 @@ def _role_context_block(db: Session, *, role_id: int, organization_id: int) -> s
         f"This chat is about role_id={role_id}: {role.name!r}.\n"
         f"When the user asks about 'the agent' / 'this role' / 'pending decisions' / "
         f"'why did you queue X' without naming a role, default to this role.\n"
-        f"For role-aware tools (search_applications, find_top_candidates, "
+        f"For role-aware tools (search_role_candidates, get_role_candidate, "
+        f"list_candidate_actions, search_applications, find_top_candidates, "
         f"screen_pool_against_requirement, nl_search_candidates, "
         f"graph_search_candidates, "
         f"list_recent_agent_decisions, list_recent_agent_runs, "

@@ -12,24 +12,29 @@ Org-scoping is enforced inside every handler via ``user.organization_id``.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from ..candidate_search.application_role_scope import (
+    application_outcome_expression,
     build_role_local_projection,
     pipeline_stage_expression,
     scope_with_evaluations,
     score_expression,
+    strip_owner_role_judgments,
 )
 from ..candidate_search.role_scope import (
+    RelatedRoleSearchApplication,
     build_top_candidate_role_scope,
     resolve_candidate_role_scope,
 )
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
-from ..models.role import Role
+from ..models.candidate_application_event import CandidateApplicationEvent
+from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import SISTER_EVAL_DONE, SisterRoleEvaluation
 from ..models.user import User
 from .payloads import (
@@ -55,6 +60,52 @@ PIPELINE_STAGES = (
 APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
 
 
+def _iso(value: Any) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _current_state_payload(application: Any) -> dict[str, Any]:
+    """Provider-neutral role-local current state for every agent surface."""
+
+    from ..services.ats_context_service import application_ats_context
+
+    ats_context = getattr(application, "ats_context", None)
+    if not isinstance(ats_context, dict):
+        ats_context = application_ats_context(application)
+    restrictions = getattr(application, "action_restrictions", None)
+    if not isinstance(restrictions, dict):
+        terminal = (
+            str(getattr(application, "application_outcome", "open") or "open")
+            != "open"
+            or str(getattr(application, "pipeline_stage", "") or "").lower()
+            == "advanced"
+        )
+        restrictions = {
+            "can_assess": not terminal,
+            "can_advance": not terminal,
+            "can_reject": not terminal,
+            "reason_codes": (["candidate_not_actionable"] if terminal else []),
+        }
+    return {
+        "pipeline_stage": getattr(application, "pipeline_stage", None),
+        "pipeline_stage_updated_at": _iso(
+            getattr(application, "pipeline_stage_updated_at", None)
+        ),
+        "application_outcome": getattr(application, "application_outcome", None),
+        "application_outcome_updated_at": _iso(
+            getattr(application, "application_outcome_updated_at", None)
+        ),
+        "ats": ats_context,
+        "restrictions": restrictions,
+    }
+
+
+def _with_current_state(row: dict[str, Any], application: Any) -> dict[str, Any]:
+    payload = dict(row)
+    payload["current_state"] = _current_state_payload(application)
+    return payload
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -68,30 +119,101 @@ def _bounded_search_text(value: object, *, field_name: str = "query") -> str:
     return validate_search_query(value, field_name=field_name)
 
 
-def _stage_counts_for_role(db: Session, *, organization_id: int, role_id: int) -> dict[str, int]:
-    rows = (
-        db.query(CandidateApplication.pipeline_stage, func.count(CandidateApplication.id))
-        .filter(
-            CandidateApplication.organization_id == organization_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
-        )
-        .group_by(CandidateApplication.pipeline_stage)
-        .all()
+def _role_uses_explicit_membership(role: Role) -> bool:
+    return bool(
+        str(role.role_kind or "") == "sister"
+        or role.ats_owner_role_id is not None
     )
+
+
+def _stage_counts_for_role(
+    db: Session,
+    *,
+    organization_id: int,
+    role_id: int,
+    role: Role | None = None,
+) -> dict[str, int]:
+    scoped_role = role or (
+        db.query(Role)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+        )
+        .one_or_none()
+    )
+    if scoped_role is None:
+        return {stage: 0 for stage in PIPELINE_STAGES}
+    if _role_uses_explicit_membership(scoped_role):
+        rows = (
+            db.query(
+                SisterRoleEvaluation.pipeline_stage,
+                func.count(SisterRoleEvaluation.id),
+            )
+            .filter(
+                SisterRoleEvaluation.organization_id == int(organization_id),
+                SisterRoleEvaluation.role_id == int(role_id),
+                SisterRoleEvaluation.deleted_at.is_(None),
+                SisterRoleEvaluation.application_outcome == "open",
+            )
+            .group_by(SisterRoleEvaluation.pipeline_stage)
+            .all()
+        )
+    else:
+        rows = (
+            db.query(
+                CandidateApplication.pipeline_stage,
+                func.count(CandidateApplication.id),
+            )
+            .filter(
+                CandidateApplication.organization_id == int(organization_id),
+                CandidateApplication.role_id == int(role_id),
+                CandidateApplication.deleted_at.is_(None),
+                CandidateApplication.application_outcome == "open",
+            )
+            .group_by(CandidateApplication.pipeline_stage)
+            .all()
+        )
     counts = {stage: 0 for stage in PIPELINE_STAGES}
     for stage, total in rows:
         counts[str(stage)] = int(total or 0)
     return counts
 
 
-def _applications_count(db: Session, *, organization_id: int, role_id: int) -> int:
-    return (
+def _applications_count(
+    db: Session,
+    *,
+    organization_id: int,
+    role_id: int,
+    role: Role | None = None,
+) -> int:
+    scoped_role = role or (
+        db.query(Role)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+        )
+        .one_or_none()
+    )
+    if scoped_role is None:
+        return 0
+    if _role_uses_explicit_membership(scoped_role):
+        return int(
+            db.query(func.count(SisterRoleEvaluation.id))
+            .filter(
+                SisterRoleEvaluation.organization_id == int(organization_id),
+                SisterRoleEvaluation.role_id == int(role_id),
+                SisterRoleEvaluation.deleted_at.is_(None),
+            )
+            .scalar()
+            or 0
+        )
+    return int(
         db.query(func.count(CandidateApplication.id))
         .filter(
-            CandidateApplication.organization_id == organization_id,
-            CandidateApplication.role_id == role_id,
+            CandidateApplication.organization_id == int(organization_id),
+            CandidateApplication.role_id == int(role_id),
             CandidateApplication.deleted_at.is_(None),
         )
         .scalar()
@@ -152,13 +274,17 @@ def _normalize_score_input(
 
 
 def _applications_for_ids(
-    db: Session, *, organization_id: int, application_ids: Iterable[int]
+    db: Session,
+    *,
+    organization_id: int,
+    application_ids: Iterable[int],
+    include_deleted: bool = False,
 ) -> list[CandidateApplication]:
     """Hydrate a set of application ids with candidate + role joined."""
     ids = [int(a) for a in application_ids]
     if not ids:
         return []
-    return (
+    query = (
         db.query(CandidateApplication)
         .options(
             joinedload(CandidateApplication.candidate),
@@ -167,10 +293,11 @@ def _applications_for_ids(
         .filter(
             CandidateApplication.id.in_(ids),
             CandidateApplication.organization_id == organization_id,
-            CandidateApplication.deleted_at.is_(None),
         )
-        .all()
     )
+    if not include_deleted:
+        query = query.filter(CandidateApplication.deleted_at.is_(None))
+    return query.all()
 
 
 # ---------------------------------------------------------------------------
@@ -195,29 +322,65 @@ def list_roles(
     )
     if not roles:
         return []
-    role_ids = [r.id for r in roles]
-    count_rows = (
-        db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
-        .filter(
-            CandidateApplication.organization_id == user.organization_id,
-            CandidateApplication.role_id.in_(role_ids),
-            CandidateApplication.deleted_at.is_(None),
+    related_role_ids = [
+        int(role.id) for role in roles if _role_uses_explicit_membership(role)
+    ]
+    ordinary_role_ids = [
+        int(role.id) for role in roles if not _role_uses_explicit_membership(role)
+    ]
+    counts: dict[int, int] = {}
+    if ordinary_role_ids:
+        counts.update(
+            {
+                int(role_id): int(total or 0)
+                for role_id, total in db.query(
+                    CandidateApplication.role_id,
+                    func.count(CandidateApplication.id),
+                )
+                .filter(
+                    CandidateApplication.organization_id
+                    == int(user.organization_id),
+                    CandidateApplication.role_id.in_(ordinary_role_ids),
+                    CandidateApplication.deleted_at.is_(None),
+                )
+                .group_by(CandidateApplication.role_id)
+                .all()
+            }
         )
-        .group_by(CandidateApplication.role_id)
-        .all()
-    )
-    counts = {int(rid): int(total) for rid, total in count_rows}
+    if related_role_ids:
+        counts.update(
+            {
+                int(role_id): int(total or 0)
+                for role_id, total in db.query(
+                    SisterRoleEvaluation.role_id,
+                    func.count(SisterRoleEvaluation.id),
+                )
+                .filter(
+                    SisterRoleEvaluation.organization_id
+                    == int(user.organization_id),
+                    SisterRoleEvaluation.role_id.in_(related_role_ids),
+                    SisterRoleEvaluation.deleted_at.is_(None),
+                )
+                .group_by(SisterRoleEvaluation.role_id)
+                .all()
+            }
+        )
     out: list[dict[str, Any]] = []
     for role in roles:
         stage_counts = (
-            _stage_counts_for_role(db, organization_id=user.organization_id, role_id=role.id)
+            _stage_counts_for_role(
+                db,
+                organization_id=user.organization_id,
+                role_id=role.id,
+                role=role,
+            )
             if include_stage_counts
             else None
         )
         out.append(
             role_summary(
                 role,
-                applications_count=counts.get(role.id, 0),
+                applications_count=counts.get(int(role.id), 0),
                 stage_counts=stage_counts,
             )
         )
@@ -240,10 +403,16 @@ def get_role(db: Session, user: User, *, role_id: int) -> dict[str, Any]:
     return role_detail(
         role,
         applications_count=_applications_count(
-            db, organization_id=user.organization_id, role_id=role.id
+            db,
+            organization_id=user.organization_id,
+            role_id=role.id,
+            role=role,
         ),
         stage_counts=_stage_counts_for_role(
-            db, organization_id=user.organization_id, role_id=role.id
+            db,
+            organization_id=user.organization_id,
+            role_id=role.id,
+            role=role,
         ),
     )
 
@@ -291,17 +460,15 @@ def search_applications(
             joinedload(CandidateApplication.candidate),
             joinedload(CandidateApplication.role),
         )
-        .filter(
-            CandidateApplication.organization_id == user.organization_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
+        .filter(CandidateApplication.organization_id == user.organization_id)
     )
-    query = scope_with_evaluations(role_scope, query)
+    query = role_scope.scope_visible_roster(query)
     stage_expression = pipeline_stage_expression(role_scope)
+    outcome_expression = application_outcome_expression(role_scope)
     if pipeline_stage:
         query = query.filter(stage_expression == pipeline_stage)
     if application_outcome:
-        query = query.filter(CandidateApplication.application_outcome == application_outcome)
+        query = query.filter(outcome_expression == application_outcome)
     threshold = _normalize_score_input(min_score, score_type=score_type)
     if threshold is not None:
         score_col = score_expression(role_scope, SCORE_FIELDS[score_type])
@@ -360,9 +527,206 @@ def search_applications(
     )
     rows = [application_summary(adapter(app) if adapter is not None else app) for app in apps]
     if role_scope.is_related:
+        rows = [strip_owner_role_judgments(row) for row in rows]
         for row in rows:
             row["score_mode"] = "sister_role"
     return rows
+
+
+def search_role_candidates(
+    db: Session,
+    user: User,
+    *,
+    role_id: int,
+    min_score: float | None = None,
+    score_type: str = "taali",
+    pipeline_stage: str | None = None,
+    application_outcome: str | None = "open",
+    q: str | None = None,
+    sort_by: str = "taali_score",
+    sort_order: str = "desc",
+    limit: int = 25,
+    offset: int = 0,
+    ats_stage: str | None = None,
+) -> dict[str, Any]:
+    """Exact logical-role pool query with current role and ATS state."""
+
+    if score_type not in SCORE_FIELDS:
+        raise ValueError(
+            f"score_type must be one of {sorted(SCORE_FIELDS)}, got {score_type!r}"
+        )
+    if pipeline_stage and pipeline_stage not in PIPELINE_STAGES:
+        raise ValueError(
+            f"pipeline_stage must be one of {list(PIPELINE_STAGES)}, got {pipeline_stage!r}"
+        )
+    if application_outcome and application_outcome not in APPLICATION_OUTCOMES:
+        raise ValueError(
+            f"application_outcome must be one of {list(APPLICATION_OUTCOMES)} or null, "
+            f"got {application_outcome!r}"
+        )
+    safe_limit = max(1, min(int(limit), 100))
+    safe_offset = max(0, int(offset))
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(user.organization_id),
+        role_id=int(role_id),
+    )
+    assert role_scope.requested_role is not None
+
+    query = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+        )
+        .filter(CandidateApplication.organization_id == int(user.organization_id))
+    )
+    query = role_scope.scope_visible_roster(query)
+    stage_expr = pipeline_stage_expression(role_scope)
+    outcome_expr = application_outcome_expression(role_scope)
+    if pipeline_stage:
+        query = query.filter(stage_expr == pipeline_stage)
+    if application_outcome:
+        query = query.filter(outcome_expr == application_outcome)
+    threshold = _normalize_score_input(min_score, score_type=score_type)
+    if threshold is not None:
+        query = query.filter(
+            score_expression(role_scope, SCORE_FIELDS[score_type]) >= threshold
+        )
+    if q:
+        like = f"%{q.strip()}%"
+        query = query.join(
+            Candidate, CandidateApplication.candidate_id == Candidate.id
+        ).filter(
+            or_(
+                Candidate.full_name.ilike(like),
+                Candidate.email.ilike(like),
+                Candidate.position.ilike(like),
+            )
+        )
+    clean_ats_stage = str(ats_stage or "").strip()
+    if clean_ats_stage:
+        like = f"%{clean_ats_stage}%"
+        query = query.filter(
+            or_(
+                CandidateApplication.workable_stage.ilike(like),
+                CandidateApplication.bullhorn_status.ilike(like),
+                CandidateApplication.external_stage_raw.ilike(like),
+                CandidateApplication.external_stage_normalized.ilike(like),
+            )
+        )
+
+    total = int(
+        query.order_by(None)
+        .with_entities(func.count(CandidateApplication.id))
+        .scalar()
+        or 0
+    )
+    sort_column_map = {
+        "taali_score": "taali_score_cache_100",
+        "pre_screen_score": "pre_screen_score_100",
+        "rank_score": "rank_score",
+        "cv_match_score": "cv_match_score",
+        "workable_score": "workable_score",
+        "assessment_score": "assessment_score_cache_100",
+        "role_fit_score": "role_fit_score_cache_100",
+        "created_at": "created_at",
+    }
+    if sort_by not in sort_column_map:
+        raise ValueError(
+            f"sort_by must be one of {sorted(sort_column_map)}, got {sort_by!r}"
+        )
+    sort_expr = score_expression(role_scope, sort_column_map[sort_by])
+    score_order = (
+        sort_expr.asc().nullsfirst()
+        if sort_order == "asc"
+        else sort_expr.desc().nullslast()
+    )
+    is_advanced = func.lower(func.coalesce(stage_expr, "")) == "advanced"
+    applications = (
+        query.order_by(
+            is_advanced.desc(), score_order, CandidateApplication.id.desc()
+        )
+        .offset(safe_offset)
+        .limit(safe_limit)
+        .all()
+    )
+    evaluation_map = role_scope.evaluation_map(
+        db,
+        application_ids=[int(application.id) for application in applications],
+    )
+    adapter = role_scope.row_adapter(evaluation_map)
+    presented = [
+        adapter(application) if adapter is not None else application
+        for application in applications
+    ]
+
+    from ..models.agent_decision import AgentDecision
+
+    pending_by_application: dict[int, AgentDecision] = {}
+    if applications:
+        pending_rows = (
+            db.query(AgentDecision)
+            .filter(
+                AgentDecision.organization_id == int(user.organization_id),
+                AgentDecision.role_id == int(role_id),
+                AgentDecision.application_id.in_(
+                    [int(application.id) for application in applications]
+                ),
+                AgentDecision.status.in_(("pending", "processing")),
+            )
+            .order_by(
+                AgentDecision.application_id.asc(),
+                AgentDecision.created_at.desc(),
+                AgentDecision.id.desc(),
+            )
+            .all()
+        )
+        for decision in pending_rows:
+            pending_by_application.setdefault(int(decision.application_id), decision)
+
+    items: list[dict[str, Any]] = []
+    for application in presented:
+        row = _with_current_state(application_summary(application), application)
+        if role_scope.is_related:
+            row = strip_owner_role_judgments(row)
+        pending = pending_by_application.get(int(application.id))
+        row["pending_decision"] = (
+            {
+                "id": int(pending.id),
+                "decision_type": pending.decision_type,
+                "recommendation": pending.recommendation,
+                "status": pending.status,
+                "created_at": _iso(pending.created_at),
+            }
+            if pending is not None
+            else None
+        )
+        items.append(row)
+
+    returned = len(items)
+    return {
+        "role": {
+            "id": int(role_scope.requested_role.id),
+            "name": role_scope.requested_role.name,
+        },
+        "items": items,
+        "total": total,
+        "limit": safe_limit,
+        "offset": safe_offset,
+        "total_is_exact": True,
+        "has_more": safe_offset + returned < total,
+        "page_exhaustive": safe_offset == 0 and returned == total,
+        "filters": {
+            "q": q,
+            "pipeline_stage": pipeline_stage,
+            "application_outcome": application_outcome,
+            "ats_stage": ats_stage,
+            "min_score": min_score,
+            "score_type": score_type,
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def get_application(
@@ -390,10 +754,52 @@ def get_application(
     return application_detail(app, include_cv_text=include_cv_text)
 
 
+def get_role_candidate(
+    db: Session,
+    user: User,
+    *,
+    role_id: int,
+    application_id: int,
+    include_cv_text: bool = False,
+) -> dict[str, Any]:
+    """Return one application only when it belongs to the logical role."""
+
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(user.organization_id),
+        role_id=int(role_id),
+    )
+    query = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+        )
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(user.organization_id),
+        )
+    )
+    application = role_scope.scope_visible_roster(query).one_or_none()
+    if application is None:
+        raise ValueError(
+            f"application {application_id} is not in role {role_id}'s candidate pool"
+        )
+    evaluation_map = role_scope.evaluation_map(
+        db, application_ids=[int(application.id)]
+    )
+    adapter = role_scope.row_adapter(evaluation_map)
+    presented = adapter(application) if adapter is not None else application
+    row = _with_current_state(
+        application_detail(presented, include_cv_text=include_cv_text),
+        presented,
+    )
+    return strip_owner_role_judgments(row) if role_scope.is_related else row
+
+
 def get_candidate(db: Session, user: User, *, candidate_id: int) -> dict[str, Any]:
     candidate = (
         db.query(Candidate)
-        .options(joinedload(Candidate.applications).joinedload(CandidateApplication.role))
         .filter(
             Candidate.id == candidate_id,
             Candidate.organization_id == user.organization_id,
@@ -403,7 +809,60 @@ def get_candidate(db: Session, user: User, *, candidate_id: int) -> dict[str, An
     )
     if candidate is None:
         raise ValueError(f"candidate {candidate_id} not found")
-    return candidate_detail(candidate)
+    ordinary_applications = (
+        db.query(CandidateApplication)
+        .options(joinedload(CandidateApplication.role))
+        .join(Role, Role.id == CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.organization_id == int(user.organization_id),
+            CandidateApplication.candidate_id == int(candidate_id),
+            CandidateApplication.deleted_at.is_(None),
+            Role.organization_id == int(user.organization_id),
+            Role.deleted_at.is_(None),
+            Role.role_kind != ROLE_KIND_SISTER,
+            Role.ats_owner_role_id.is_(None),
+        )
+        .order_by(Role.id.asc(), CandidateApplication.id.asc())
+        .all()
+    )
+    related_rows = (
+        db.query(SisterRoleEvaluation, Role, CandidateApplication)
+        .join(Role, Role.id == SisterRoleEvaluation.role_id)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == SisterRoleEvaluation.source_application_id,
+        )
+        .options(
+            joinedload(SisterRoleEvaluation.source_application).joinedload(
+                CandidateApplication.role
+            )
+        )
+        .filter(
+            SisterRoleEvaluation.organization_id == int(user.organization_id),
+            SisterRoleEvaluation.deleted_at.is_(None),
+            Role.organization_id == int(user.organization_id),
+            Role.deleted_at.is_(None),
+            or_(
+                SisterRoleEvaluation.candidate_id == int(candidate_id),
+                and_(
+                    SisterRoleEvaluation.candidate_id.is_(None),
+                    CandidateApplication.candidate_id == int(candidate_id),
+                ),
+            ),
+        )
+        .order_by(Role.id.asc(), SisterRoleEvaluation.id.asc())
+        .all()
+    )
+    logical_applications: list[Any] = list(ordinary_applications)
+    logical_applications.extend(
+        RelatedRoleSearchApplication(
+            source_application,
+            role=logical_role,
+            evaluation=evaluation,
+        )
+        for evaluation, logical_role, source_application in related_rows
+    )
+    return candidate_detail(candidate, applications=logical_applications)
 
 
 def compare_applications(
@@ -426,6 +885,85 @@ def compare_applications(
     order = {aid: idx for idx, aid in enumerate(application_ids)}
     rows.sort(key=lambda r: order.get(r["application_id"], len(order)))
     return {
+        "applications": rows,
+        "missing_ids": missing,
+        "score_legend": {
+            "taali": "Merged primary score (0-100) — recommended for ranking.",
+            "pre_screen": "Cheap LLM gating score (0-100).",
+            "rank": "Pairwise ranking against role pool (0-100).",
+            "cv_match": "CV-vs-job-spec similarity (0-100).",
+            "workable": "External Workable score, if synced.",
+            "assessment": "Cached assessment-result score (0-100).",
+            "role_fit": "Composite role-fit score (0-100).",
+        },
+    }
+
+
+def compare_role_applications(
+    db: Session,
+    user: User,
+    *,
+    role_id: int,
+    application_ids: list[int],
+) -> dict[str, Any]:
+    """Compare candidates only inside one logical role's local state.
+
+    The organization-wide comparison remains useful for explicitly cross-role
+    recruiter reads. Agent runtimes are bound to one role, so this variant
+    prevents an ATS owner application's state or score from standing in for a
+    related role's independent projection.
+    """
+
+    if len(application_ids) < 2:
+        raise ValueError("compare_role_applications requires at least 2 ids")
+    if len(application_ids) > 5:
+        raise ValueError("compare_role_applications accepts at most 5 ids")
+
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(user.organization_id),
+        role_id=int(role_id),
+    )
+    query = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+        )
+        .filter(
+            CandidateApplication.organization_id == int(user.organization_id),
+            CandidateApplication.id.in_([int(item) for item in application_ids]),
+        )
+    )
+    applications = role_scope.scope_visible_roster(query).all()
+    evaluation_map = role_scope.evaluation_map(
+        db,
+        application_ids=[int(application.id) for application in applications],
+    )
+    adapter = role_scope.row_adapter(evaluation_map)
+    presented = [
+        adapter(application) if adapter is not None else application
+        for application in applications
+    ]
+    found_ids = {int(application.id) for application in presented}
+    missing = [
+        int(application_id)
+        for application_id in application_ids
+        if int(application_id) not in found_ids
+    ]
+    order = {
+        int(application_id): index
+        for index, application_id in enumerate(application_ids)
+    }
+    rows = [comparison_row(application) for application in presented]
+    rows.sort(
+        key=lambda row: order.get(int(row["application_id"]), len(order))
+    )
+    return {
+        "role": {
+            "id": int(role_scope.requested_role.id),
+            "name": role_scope.requested_role.name,
+        },
         "applications": rows,
         "missing_ids": missing,
         "score_legend": {
@@ -474,11 +1012,9 @@ def nl_search_candidates(
         organization_id=int(user.organization_id),
         role_id=role_id,
     )
-    scoped_role = role_scope.requested_role
-    base = role_scope.scope_roster(
+    base = role_scope.scope_visible_roster(
         db.query(CandidateApplication).filter(
             CandidateApplication.organization_id == user.organization_id,
-            CandidateApplication.deleted_at.is_(None),
         )
     )
 
@@ -506,7 +1042,10 @@ def nl_search_candidates(
     safe_offset = max(0, int(offset))
     capped_ids = result.application_ids[safe_offset : safe_offset + safe_limit]
     apps = _applications_for_ids(
-        db, organization_id=user.organization_id, application_ids=capped_ids
+        db,
+        organization_id=user.organization_id,
+        application_ids=capped_ids,
+        include_deleted=role_scope.is_related,
     )
     by_id = {a.id: a for a in apps}
     ordered = [by_id[aid] for aid in capped_ids if aid in by_id]
@@ -713,8 +1252,8 @@ def screen_pool_against_requirement(
     # (e.g. another role) still has other scored rows that would otherwise be
     # recommended here. So exclude at the candidate level, not just the row whose
     # own outcome is "hired". (Hires per org are few, so the id list is small.)
-    hired_candidate_ids = [
-        cid
+    hired_candidate_ids = {
+        int(cid)
         for (cid,) in db.query(CandidateApplication.candidate_id)
         .filter(
             CandidateApplication.organization_id == user.organization_id,
@@ -722,13 +1261,27 @@ def screen_pool_against_requirement(
         )
         .distinct()
         .all()
-    ]
+        if cid is not None
+    }
+    hired_candidate_ids.update(
+        int(cid)
+        for (cid,) in db.query(SisterRoleEvaluation.candidate_id)
+        .filter(
+            SisterRoleEvaluation.organization_id == user.organization_id,
+            func.coalesce(SisterRoleEvaluation.application_outcome, "open") == "hired",
+            SisterRoleEvaluation.candidate_id.isnot(None),
+        )
+        .distinct()
+        .all()
+        if cid is not None
+    )
     base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == user.organization_id,
-        CandidateApplication.deleted_at.is_(None),
     )
     if hired_candidate_ids:
-        base = base.filter(CandidateApplication.candidate_id.notin_(hired_candidate_ids))
+        base = base.filter(
+            CandidateApplication.candidate_id.notin_(sorted(hired_candidate_ids))
+        )
     if role_scope.is_related:
         # A related role's scored history lives entirely in its evaluation
         # rows.  Owner ``cv_match_details`` is neither admission evidence nor a
@@ -738,7 +1291,7 @@ def screen_pool_against_requirement(
             SisterRoleEvaluation.role_fit_score.isnot(None),
         )
     else:
-        base = role_scope.scope_roster(base).filter(
+        base = role_scope.scope_visible_roster(base).filter(
             CandidateApplication.cv_match_details.isnot(None)
         )
 
@@ -958,8 +1511,317 @@ def get_candidate_cv(
 
 
 # ---------------------------------------------------------------------------
-# Agent-aware tools (used by role-scoped Taali Chat to explain decisions)
+# Candidate action and decision audit tools
 # ---------------------------------------------------------------------------
+
+
+def _normalized_state_value(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _candidate_action_from_event(
+    event: CandidateApplicationEvent,
+) -> dict[str, Any] | None:
+    event_type = str(event.event_type or "").strip().lower()
+    metadata = event.event_metadata if isinstance(event.event_metadata, dict) else {}
+    recorded_status = str(getattr(event, "effect_status", None) or "").strip().lower()
+    status = recorded_status or (
+        "failed"
+        if "failed" in event_type or "error" in event_type
+        else "skipped"
+        if "skipped" in event_type
+        else "confirmed"
+    )
+    action: str | None = None
+    ats_movement = event_type in {
+        "workable_moved",
+        "bullhorn_moved",
+        "workable_move_stage_failed",
+        "bullhorn_move_stage_failed",
+        "workable_move_skipped",
+    }
+    if event_type in {
+        "pipeline_stage_changed",
+        "role_pipeline_stage_changed",
+    } and _normalized_state_value(event.to_stage) == "advanced":
+        action = "advanced"
+    elif ats_movement:
+        action = "advanced"
+    elif event_type in {
+        "application_outcome_changed",
+        "role_application_outcome_changed",
+    }:
+        outcome = _normalized_state_value(event.to_outcome)
+        if outcome in {"rejected", "hired", "withdrawn"}:
+            action = outcome
+    elif event_type in {
+        "auto_rejected",
+        "workable_disqualified",
+        "workable_auto_reject_applied",
+        "bullhorn_rejected",
+    }:
+        action = "rejected"
+    elif event_type == "assessment_invite_sent":
+        action = "assessment_sent"
+    elif event_type in {"assessment_invite_resent", "assessment_retake_sent"}:
+        action = "assessment_resent"
+    elif status != "confirmed":
+        operation_hints = [
+            str(metadata.get(key) or "").strip().lower()
+            for key in (
+                "action",
+                "op_type",
+                "source",
+                "target_outcome",
+                "target_stage",
+                "workable_target_stage",
+            )
+        ]
+        operation_hint = " ".join(operation_hints)
+        if any(token in operation_hint for token in ("reject", "disqualif")):
+            action = "rejected"
+        elif (
+            "move" in event_type
+            or any(
+                hint == "move"
+                or "move_stage" in hint
+                or "move_candidate" in hint
+                or "advance" in hint
+                for hint in operation_hints
+            )
+        ):
+            action = "advanced"
+            ats_movement = True
+        elif "outcome" in event_type or "manual_outcome" in operation_hint:
+            target_outcome = _normalized_state_value(metadata.get("target_outcome"))
+            action = target_outcome if target_outcome in {
+                "rejected", "hired", "withdrawn"
+            } else None
+    if action is None:
+        return None
+
+    target_stage = (
+        getattr(event, "target_stage", None)
+        or metadata.get("target_stage")
+        or metadata.get("workable_target_stage")
+        or metadata.get("bullhorn_status")
+        or event.to_stage
+    )
+    target_outcome = metadata.get("target_outcome") or event.to_outcome
+    decision_id = getattr(event, "agent_decision_id", None)
+    try:
+        decision_id = (
+            int(decision_id)
+            if decision_id is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        decision_id = None
+    return {
+        "action": action,
+        "status": status,
+        "ats_movement": ats_movement,
+        "target_stage": target_stage,
+        "target_outcome": target_outcome,
+        "decision_id": decision_id,
+        "metadata": metadata,
+    }
+
+
+def list_candidate_actions(
+    db: Session,
+    user: User,
+    *,
+    role_id: int,
+    application_id: int | None = None,
+    candidate_id: int | None = None,
+    action: str | None = None,
+    target_stage: str | None = None,
+    status: str = "confirmed",
+    actor_type: str | None = None,
+    occurred_after: datetime | None = None,
+    occurred_before: datetime | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Role-attributed, confirmed candidate workflow history.
+
+    PostgreSQL events are the movement authority. Logical role, target, effect
+    status, and optional decision linkage come only from first-class event
+    columns; a pending recommendation or current state can never become a
+    completed action through this handler.
+    """
+
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(user.organization_id),
+        role_id=int(role_id),
+    )
+    assert role_scope.requested_role is not None
+    safe_limit = max(1, min(int(limit), 100))
+    safe_offset = max(0, int(offset))
+    # Event.role_id is immutable historical authority. Do not intersect the
+    # audit log with today's live roster: an application or explicit related-
+    # role membership may be removed after a confirmed action, but that must
+    # never erase who was advanced/rejected/sent an assessment and when.
+    # Current membership is loaded separately below only to enrich each event
+    # with a current-state snapshot when one still exists.
+    event_query = db.query(CandidateApplicationEvent).filter(
+        CandidateApplicationEvent.organization_id == int(user.organization_id),
+        CandidateApplicationEvent.role_id == int(role_id),
+    )
+    if application_id is not None:
+        event_query = event_query.filter(
+            CandidateApplicationEvent.application_id == int(application_id)
+        )
+    if candidate_id is not None:
+        event_query = event_query.join(
+            CandidateApplication,
+            CandidateApplication.id == CandidateApplicationEvent.application_id,
+        ).filter(
+            CandidateApplication.organization_id == int(user.organization_id),
+            CandidateApplication.candidate_id == int(candidate_id),
+        )
+    if actor_type is not None:
+        event_query = event_query.filter(
+            CandidateApplicationEvent.actor_type == actor_type
+        )
+    if occurred_after is not None:
+        event_query = event_query.filter(
+            CandidateApplicationEvent.created_at >= occurred_after
+        )
+    if occurred_before is not None:
+        event_query = event_query.filter(
+            CandidateApplicationEvent.created_at <= occurred_before
+        )
+    events = event_query.order_by(
+        CandidateApplicationEvent.created_at.desc(),
+        CandidateApplicationEvent.id.desc(),
+    ).all()
+
+    application_ids = sorted({int(event.application_id) for event in events})
+    applications = _applications_for_ids(
+        db,
+        organization_id=int(user.organization_id),
+        application_ids=application_ids,
+        include_deleted=True,
+    )
+    source_by_id = {int(application.id): application for application in applications}
+
+    current_query = (
+        db.query(CandidateApplication)
+        .options(joinedload(CandidateApplication.candidate))
+        .filter(
+            CandidateApplication.organization_id == int(user.organization_id),
+            CandidateApplication.id.in_(application_ids),
+        )
+    )
+    current_applications = (
+        role_scope.scope_visible_roster(current_query).all()
+        if application_ids
+        else []
+    )
+    current_application_ids = [
+        int(application.id) for application in current_applications
+    ]
+    evaluation_map = role_scope.evaluation_map(
+        db, application_ids=current_application_ids
+    )
+    adapter = role_scope.row_adapter(evaluation_map)
+    presented_by_id = {
+        int(application.id): (
+            adapter(application) if adapter is not None else application
+        )
+        for application in current_applications
+    }
+    selected: list[dict[str, Any]] = []
+    wanted_target = _normalized_state_value(target_stage)
+
+    for event in events:
+        classified = _candidate_action_from_event(event)
+        if classified is None or classified["status"] != status:
+            continue
+        if action is not None:
+            if action == "ats_moved":
+                if not classified["ats_movement"]:
+                    continue
+            elif classified["action"] != action:
+                continue
+        if wanted_target and _normalized_state_value(
+            classified["target_stage"]
+        ) != wanted_target:
+            continue
+
+        source_application = source_by_id.get(int(event.application_id))
+        presented = presented_by_id.get(int(event.application_id))
+        candidate = (
+            source_application.candidate if source_application is not None else None
+        )
+        selected.append(
+            {
+                "event_id": int(event.id),
+                "event_type": event.event_type,
+                "role_id": int(event.role_id),
+                "application_id": int(event.application_id),
+                "candidate_id": (
+                    int(source_application.candidate_id)
+                    if source_application is not None
+                    else None
+                ),
+                "candidate_name": (
+                    candidate.full_name if candidate is not None else None
+                ),
+                "candidate_email": candidate.email if candidate is not None else None,
+                "action": classified["action"],
+                "status": classified["status"],
+                "occurred_at": _iso(event.created_at),
+                "from_stage": event.from_stage,
+                "to_stage": event.to_stage,
+                "from_outcome": event.from_outcome,
+                "to_outcome": event.to_outcome,
+                "target_stage": classified["target_stage"],
+                "target_outcome": classified["target_outcome"],
+                "actor": {
+                    "type": event.actor_type,
+                    "id": int(event.actor_id) if event.actor_id is not None else None,
+                },
+                "decision_id": classified["decision_id"],
+                "reason": event.reason,
+                "in_current_role_pool": presented is not None,
+                "current_state": (
+                    _current_state_payload(presented)
+                    if presented is not None
+                    else None
+                ),
+            }
+        )
+
+    total = len(selected)
+    page = selected[safe_offset : safe_offset + safe_limit]
+    return {
+        "role": {
+            "id": int(role_scope.requested_role.id),
+            "name": role_scope.requested_role.name,
+        },
+        "items": page,
+        "total": total,
+        "limit": safe_limit,
+        "offset": safe_offset,
+        "total_is_exact": True,
+        "has_more": safe_offset + len(page) < total,
+        "filters": {
+            "application_id": application_id,
+            "candidate_id": candidate_id,
+            "action": action,
+            "target_stage": target_stage,
+            "status": status,
+            "actor_type": actor_type,
+            "occurred_after": _iso(occurred_after),
+            "occurred_before": _iso(occurred_before),
+        },
+        "warnings": [],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def list_recent_agent_decisions(
@@ -968,8 +1830,16 @@ def list_recent_agent_decisions(
     *,
     role_id: int | None = None,
     status: str | None = None,
+    application_id: int | None = None,
+    candidate_id: int | None = None,
+    decision_type: str | None = None,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
+    resolved_after: datetime | None = None,
+    resolved_before: datetime | None = None,
     limit: int = 20,
-) -> list[dict[str, Any]]:
+    offset: int = 0,
+) -> dict[str, Any]:
     """Recent agent decisions visible to the recruiter.
 
     Used by the role-scoped Taali Chat to answer "why did the agent
@@ -978,13 +1848,23 @@ def list_recent_agent_decisions(
     ``overridden``) and an optional role_id (defaults to all roles in
     the org when None).
     """
-    from ..models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
+    from ..models.agent_decision import (
+        AGENT_DECISION_STATUSES,
+        AGENT_DECISION_TYPES,
+        AgentDecision,
+    )
 
     if status and status not in AGENT_DECISION_STATUSES:
         raise ValueError(
             f"status must be one of {list(AGENT_DECISION_STATUSES)} or null, got {status!r}"
         )
+    if decision_type and decision_type not in AGENT_DECISION_TYPES:
+        raise ValueError(
+            f"decision_type must be one of {list(AGENT_DECISION_TYPES)} or null, "
+            f"got {decision_type!r}"
+        )
     capped = max(1, min(int(limit), 100))
+    safe_offset = max(0, int(offset))
     query = (
         db.query(AgentDecision)
         .filter(AgentDecision.organization_id == user.organization_id)
@@ -993,16 +1873,110 @@ def list_recent_agent_decisions(
         query = query.filter(AgentDecision.role_id == int(role_id))
     if status:
         query = query.filter(AgentDecision.status == status)
+    if application_id is not None:
+        query = query.filter(AgentDecision.application_id == int(application_id))
+    if candidate_id is not None:
+        query = query.join(
+            CandidateApplication,
+            CandidateApplication.id == AgentDecision.application_id,
+        ).filter(CandidateApplication.candidate_id == int(candidate_id))
+    if decision_type:
+        query = query.filter(AgentDecision.decision_type == decision_type)
+    if created_after is not None:
+        query = query.filter(AgentDecision.created_at >= created_after)
+    if created_before is not None:
+        query = query.filter(AgentDecision.created_at <= created_before)
+    if resolved_after is not None:
+        query = query.filter(AgentDecision.resolved_at >= resolved_after)
+    if resolved_before is not None:
+        query = query.filter(AgentDecision.resolved_at <= resolved_before)
 
+    total = int(query.order_by(None).with_entities(func.count(AgentDecision.id)).scalar() or 0)
+    ordering_timestamp = (
+        AgentDecision.resolved_at
+        if resolved_after is not None or resolved_before is not None
+        else AgentDecision.created_at
+    )
     rows = (
         query.order_by(
-            AgentDecision.created_at.desc(),
+            ordering_timestamp.desc(),
             AgentDecision.id.desc(),
         )
+        .offset(safe_offset)
         .limit(capped)
         .all()
     )
-    return [_agent_decision_payload(row) for row in rows]
+    applications = _applications_for_ids(
+        db,
+        organization_id=int(user.organization_id),
+        application_ids=[int(row.application_id) for row in rows],
+        include_deleted=True,
+    )
+    applications_by_id = {int(item.id): item for item in applications}
+    presented_by_key: dict[tuple[int, int], Any] = {}
+    for decision_role_id in sorted({int(row.role_id) for row in rows}):
+        scope = resolve_candidate_role_scope(
+            db,
+            organization_id=int(user.organization_id),
+            role_id=decision_role_id,
+        )
+        role_apps = [
+            applications_by_id[int(row.application_id)]
+            for row in rows
+            if int(row.role_id) == decision_role_id
+            and int(row.application_id) in applications_by_id
+        ]
+        evaluations = scope.evaluation_map(
+            db, application_ids=[int(item.id) for item in role_apps]
+        )
+        adapter = scope.row_adapter(evaluations)
+        for application in role_apps:
+            if scope.is_related and int(application.id) not in evaluations:
+                continue
+            presented_by_key[(decision_role_id, int(application.id))] = (
+                adapter(application) if adapter is not None else application
+            )
+
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        payload = _agent_decision_payload(row)
+        source = applications_by_id.get(int(row.application_id))
+        presented = presented_by_key.get((int(row.role_id), int(row.application_id)))
+        payload["candidate_id"] = int(source.candidate_id) if source is not None else None
+        payload["candidate_name"] = (
+            source.candidate.full_name
+            if source is not None and source.candidate is not None
+            else None
+        )
+        payload["candidate_email"] = (
+            source.candidate.email
+            if source is not None and source.candidate is not None
+            else None
+        )
+        payload["current_state"] = (
+            _current_state_payload(presented) if presented is not None else None
+        )
+        items.append(payload)
+    return {
+        "items": items,
+        "total": total,
+        "limit": capped,
+        "offset": safe_offset,
+        "total_is_exact": True,
+        "has_more": safe_offset + len(items) < total,
+        "filters": {
+            "role_id": role_id,
+            "status": status,
+            "application_id": application_id,
+            "candidate_id": candidate_id,
+            "decision_type": decision_type,
+            "created_after": _iso(created_after),
+            "created_before": _iso(created_before),
+            "resolved_after": _iso(resolved_after),
+            "resolved_before": _iso(resolved_before),
+        },
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def list_recent_agent_runs(
@@ -1111,6 +2085,11 @@ def _agent_decision_payload(row: Any) -> dict[str, Any]:
         ),
         "resolution_note": row.resolution_note,
         "override_action": row.override_action,
+        "resolution_metadata": (
+            row.resolution_metadata
+            if isinstance(getattr(row, "resolution_metadata", None), dict)
+            else {}
+        ),
     }
 
 

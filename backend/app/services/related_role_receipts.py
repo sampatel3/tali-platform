@@ -5,7 +5,14 @@ from __future__ import annotations
 from ..models.role import Role
 
 
-def created_role_family(related: Role, owner: Role) -> tuple[dict, str]:
+def created_role_family(related: Role, owner: Role | None) -> tuple[dict, str]:
+    if (
+        owner is None
+        or int(getattr(owner, "organization_id", 0) or 0)
+        != int(getattr(related, "organization_id", 0) or 0)
+        or getattr(owner, "deleted_at", None) is not None
+    ):
+        owner = related
     members = {
         int(member.id): member
         for member in list(getattr(owner, "sister_roles", None) or [])
@@ -13,7 +20,8 @@ def created_role_family(related: Role, owner: Role) -> tuple[dict, str]:
         == int(getattr(owner, "organization_id", 0) or 0)
         and getattr(member, "deleted_at", None) is None
     }
-    members[int(related.id)] = related
+    if int(related.id) != int(owner.id):
+        members[int(related.id)] = related
     ordered = sorted(
         members.values(),
         key=lambda member: (str(member.name or "").casefold(), int(member.id)),

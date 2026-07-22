@@ -57,6 +57,29 @@ describe('versioned role mutation clients', () => {
     expect(http.get).toHaveBeenCalledWith('/agent/org-status', { timeout: 10000 });
   });
 
+  it('forwards the standing report logical role when minting a share link', () => {
+    roles.createApplicationShareLink(77, {
+      mode: 'client',
+      expiry: '7d',
+      viewRoleId: 135,
+    });
+    roles.createApplicationShareLink(78, {
+      mode: 'recruiter',
+      expiry: '24h',
+    });
+
+    expect(http.post).toHaveBeenNthCalledWith(
+      1,
+      '/applications/77/share-links',
+      { mode: 'client', expiry: '7d', view_role_id: 135 },
+    );
+    expect(http.post).toHaveBeenNthCalledWith(
+      2,
+      '/applications/78/share-links',
+      { mode: 'recruiter', expiry: '24h' },
+    );
+  });
+
   it('versions draft approval and structured revision commands', () => {
     agentChat.approveDraftTask(26, 81, 9);
     agentChat.reviseDraftTask(26, 81, {

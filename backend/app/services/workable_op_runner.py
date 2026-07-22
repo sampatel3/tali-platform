@@ -328,6 +328,7 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
     queue and the batch keeps going.
     """
     from ..actions import approve_decision as approve_decision_action
+    from .decision_resolution_provenance import requested_target_stage
 
     ids = [int(x) for x in (payload.get("decision_ids") or [])]
     note = payload.get("note")
@@ -360,11 +361,12 @@ def _op_approve_decisions(db: Session, organization_id: int, payload: dict) -> d
             # instead of looking like a partial failure.
             counters["skipped"] += 1
             continue
-        stage = (
+        payload_stage = (
             workable_target_stages.get(str(decision.role_id))
             if decision.role_id is not None
             else None
         ) or workable_target_stage
+        stage = requested_target_stage(decision, payload_stage)
         gated = decision.decision_type in _GATED_DECISION_TYPES
         try:
             if gated:
@@ -435,6 +437,7 @@ def _op_override_decision(db: Session, organization_id: int, payload: dict) -> d
     actions (reject / advance / skip-advance). Raises on Workable failure so
     the shell retries / re-queues."""
     from ..actions import override_decision as override_decision_action
+    from .decision_resolution_provenance import requested_target_stage
 
     decision_id = int(payload["decision_id"])
     decision = (
@@ -450,6 +453,9 @@ def _op_override_decision(db: Session, organization_id: int, payload: dict) -> d
 
     actor = _recruiter_actor(payload.get("user_id"))
     override_action = payload.get("override_action")
+    target_stage = requested_target_stage(
+        decision, payload.get("workable_target_stage")
+    )
     gated = override_action in _GATED_OVERRIDE_ACTIONS
 
     def _run():
@@ -460,7 +466,7 @@ def _op_override_decision(db: Session, organization_id: int, payload: dict) -> d
             decision_id=decision_id,
             override_action=override_action,
             note=payload.get("note"),
-            workable_target_stage=payload.get("workable_target_stage"),
+            workable_target_stage=target_stage,
             commit_after_confirmed_movement=True,
         )
 
@@ -474,7 +480,12 @@ def _op_override_decision(db: Session, organization_id: int, payload: dict) -> d
 
 
 def _record_workable_movement_note_failure(
-    db: Session, *, app: CandidateApplication, application_id: int
+    db: Session,
+    *,
+    app: CandidateApplication,
+    application_id: int,
+    role_id: int | None = None,
+    ats_application_id: int | None = None,
 ) -> None:
     """Best-effort audit after a confirmed move; never invalidates the move.
 
@@ -500,6 +511,7 @@ def _record_workable_movement_note_failure(
         append_application_event(
             db,
             app=app,
+            role_id=role_id,
             event_type="workable_movement_note_failed",
             actor_type="system",
             reason=(
@@ -509,6 +521,16 @@ def _record_workable_movement_note_failure(
             metadata={
                 "ats": "workable",
                 "action": "related_role_movement_note",
+                **(
+                    {"acting_role_id": int(role_id)}
+                    if role_id is not None
+                    else {}
+                ),
+                **(
+                    {"ats_application_id": int(ats_application_id)}
+                    if ats_application_id is not None
+                    else {}
+                ),
             },
         )
         db.commit()
@@ -533,6 +555,7 @@ def _post_confirmed_related_role_workable_note(
     organization_id: int,
     *,
     app: CandidateApplication,
+    event_app: CandidateApplication | None = None,
     owner_role: Any,
     acting_role: Any,
     user_id: int | None,
@@ -612,12 +635,17 @@ def _post_confirmed_related_role_workable_note(
         )
     append_application_event(
         db,
-        app=app,
+        app=event_app or app,
+        role_id=int(acting_role.id),
         event_type="workable_note_posted",
         actor_type="recruiter",
         actor_id=user_id,
         reason="Related-role movement summary posted to Workable",
-        metadata={"workable_candidate_id": app.workable_candidate_id},
+        metadata={
+            "acting_role_id": int(acting_role.id),
+            "ats_application_id": int(app.id),
+            "workable_candidate_id": app.workable_candidate_id,
+        },
     )
     db.commit()
     return {"status": "ok", "application_id": int(app.id)}
@@ -661,6 +689,12 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
     )
     from ..models.organization import Organization
     from ..models.role import Role
+    from .related_role_action_service import (
+        RelatedRoleActionContractError,
+        related_role_ats_action_state,
+        resolve_related_role_ats_action_context,
+        transition_related_role_stage_action,
+    )
     from .workable_actions_service import move_candidate_in_workable
 
     routed = _route_bullhorn_op(db, organization_id, payload, handler_name="run_move_stage")
@@ -683,21 +717,142 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
         return {"status": "skipped", "reason": "not_linked", "application_id": application_id}
     org = db.query(Organization).filter(Organization.id == organization_id).first()
     role = db.query(Role).filter(Role.id == app.role_id).first() if app.role_id else None
-    if same_workable_stage(role, app.workable_stage, target_stage):
-        if _is_workable_outbound_stage(role, target_stage):
-            transition_stage(
+    try:
+        related_context = resolve_related_role_ats_action_context(
+            db,
+            organization_id=int(organization_id),
+            ats_application=app,
+            acting_role_id=payload.get("acting_role_id"),
+            source_application_id=payload.get("role_application_id"),
+        )
+    except RelatedRoleActionContractError as exc:
+        raise WorkableWritebackError(
+            action="move",
+            code="related_role_context_invalid",
+            message=str(exc),
+            retriable=False,
+        ) from exc
+    event_app = (
+        related_context.source_application if related_context is not None else app
+    )
+    logical_role_id = (
+        int(related_context.role.id)
+        if related_context is not None
+        else int(app.role_id)
+    )
+
+    def blocked_related_move(codes: list[str], *, reason_code: str) -> dict:
+        append_application_event(
+            db,
+            app=event_app,
+            role_id=logical_role_id,
+            event_type="ats_writeback_restricted",
+            actor_type="recruiter",
+            actor_id=user_id,
+            target_stage=target_stage,
+            effect_status="blocked",
+            reason="Related-role ATS move was blocked at execution time",
+            metadata={
+                "acting_role_id": logical_role_id,
+                "ats_application_id": int(app.id),
+                "provider": "workable",
+                "op_type": OP_MOVE_STAGE,
+                "restriction_codes": codes,
+                "target_stage": target_stage,
+            },
+            idempotency_key=(
+                f"ats_move_blocked:{payload.get('job_run_id')}"
+                if payload.get("job_run_id") is not None
+                else (
+                    f"ats_move_blocked:workable:{event_app.id}:"
+                    f"{logical_role_id}:{target_stage}:{reason_code}"
+                )
+            ),
+        )
+        db.commit()
+        return {
+            "status": "skipped",
+            "reason": reason_code,
+            "application_id": application_id,
+        }
+
+    def reconcile_confirmed_advance(*, already_at_target: bool) -> None:
+        event_reason = (
+            f"Already at the Workable hand-off stage: {target_stage}"
+            if already_at_target
+            else f"Handed back to Workable: {target_stage}"
+        )
+        event_key = (
+            f"workable_handback_reconcile:{event_app.id}:{logical_role_id}:{target_stage}"
+            if already_at_target
+            else f"workable_handback:{event_app.id}:{logical_role_id}:{target_stage}"
+        )
+        if related_context is not None:
+            transition_related_role_stage_action(
                 db,
-                app=app,
+                application=event_app,
+                acting_role_id=logical_role_id,
                 to_stage="advanced",
                 source="recruiter",
                 actor_type="recruiter",
                 actor_id=user_id,
-                reason=f"Already at the Workable hand-off stage: {target_stage}",
-                metadata={"workable_target_stage": target_stage},
-                idempotency_key=(
-                    f"workable_handback_reconcile:{app.id}:{target_stage}"
-                ),
+                reason=event_reason,
+                metadata={
+                    "acting_role_id": logical_role_id,
+                    "ats_application_id": int(app.id),
+                    "workable_target_stage": target_stage,
+                },
+                idempotency_key=event_key,
             )
+            return
+        transition_stage(
+            db,
+            app=app,
+            to_stage="advanced",
+            source="recruiter",
+            actor_type="recruiter",
+            actor_id=user_id,
+            reason=event_reason,
+            metadata={"workable_target_stage": target_stage},
+            idempotency_key=event_key,
+        )
+
+    exact_target = same_workable_stage(role, app.workable_stage, target_stage)
+    if related_context is not None:
+        action_state = related_role_ats_action_state(related_context)
+        local_codes = list(action_state["local_codes"])
+        if local_codes == ["role_pipeline_stage_advanced"]:
+            return {
+                "status": "skipped",
+                "reason": "role_already_advanced",
+                "application_id": application_id,
+            }
+        if local_codes:
+            return blocked_related_move(
+                local_codes,
+                reason_code="related_role_application_resolved",
+            )
+        hard_codes = list(action_state["hard_restriction_codes"])
+        if hard_codes:
+            return blocked_related_move(
+                hard_codes,
+                reason_code="related_role_ats_write_restricted",
+            )
+        if bool(action_state["post_handover"]) and not exact_target:
+            # The external ATS has already passed Taali's hand-off boundary.
+            # Reconcile only this role's local stage; never replay a provider
+            # write or mutate the owner role.
+            reconcile_confirmed_advance(already_at_target=True)
+            db.commit()
+            return {
+                "status": "skipped",
+                "reason": "already_at_target",
+                "application_id": application_id,
+            }
+
+    if exact_target:
+        if _is_workable_outbound_stage(role, target_stage):
+            reconcile_confirmed_advance(already_at_target=True)
             db.commit()
         return {
             "status": "skipped",
@@ -723,26 +878,28 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
     app.workable_stage_local_write_at = datetime.now(timezone.utc)
     append_application_event(
         db,
-        app=app,
+        app=event_app,
+        role_id=logical_role_id,
         event_type="workable_moved",
         actor_type="recruiter",
         actor_id=user_id,
         reason=reason or "Recruiter handed candidate back to Workable",
-        metadata={"target_stage": target_stage, "workable_candidate_id": app.workable_candidate_id},
+        target_stage=target_stage,
+        effect_status="confirmed",
+        metadata={
+            "target_stage": target_stage,
+            "workable_candidate_id": app.workable_candidate_id,
+            "ats_application_id": int(app.id),
+            **(
+                {"acting_role_id": logical_role_id}
+                if related_context is not None
+                else {}
+            ),
+        },
     )
     confirmed_outbound_advance = _is_workable_outbound_stage(role, target_stage)
     if confirmed_outbound_advance:
-        transition_stage(
-            db,
-            app=app,
-            to_stage="advanced",
-            source="recruiter",
-            actor_type="recruiter",
-            actor_id=user_id,
-            reason=f"Handed back to Workable: {target_stage}",
-            metadata={"workable_target_stage": target_stage},
-            idempotency_key=f"workable_handback:{app.id}:{target_stage}",
-        )
+        reconcile_confirmed_advance(already_at_target=False)
     # The confirmed provider movement is the critical operation. Persist it
     # before attempting the optional related-role attribution so a note error
     # can never replay or roll back an already-completed ATS stage move.
@@ -759,6 +916,7 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
                     db,
                     organization_id,
                     app=app,
+                    event_app=event_app,
                     owner_role=role,
                     acting_role=acting_role,
                     user_id=user_id,
@@ -780,7 +938,11 @@ def _op_move_stage(db: Session, organization_id: int, payload: dict) -> dict:
                     type(exc).__name__,
                 )
                 _record_workable_movement_note_failure(
-                    db, app=app, application_id=application_id
+                    db,
+                    app=event_app,
+                    application_id=application_id,
+                    role_id=logical_role_id,
+                    ats_application_id=int(app.id),
                 )
     return {"status": "ok", "application_id": application_id}
 
@@ -954,6 +1116,7 @@ def publish_workable_op(
     from ..tasks.workable_tasks import run_workable_op_task
 
     replay_safe = op_type in {OP_MOVE_STAGE, OP_MANUAL_OUTCOME}
+    delivery_payload = {**payload, "job_run_id": int(job_run_id)}
 
     # Tell the periodic Workable syncs to yield the per-org mutex so this
     # user-facing write isn't starved behind a long candidate sync.
@@ -964,7 +1127,7 @@ def publish_workable_op(
                 "job_run_id": job_run_id,
                 "organization_id": int(organization_id),
                 "op_type": op_type,
-                "payload": payload,
+                "payload": delivery_payload,
             }
         )
     except Exception as exc:
@@ -1113,6 +1276,35 @@ def surface_op_failure(
         )
         if app is None:
             return
+        event_app = app
+        logical_role_id = int(app.role_id)
+        acting_role_id = payload.get("acting_role_id")
+        role_application_id = payload.get("role_application_id")
+        if op_type == OP_MOVE_STAGE and acting_role_id is not None:
+            from ..models.role import ROLE_KIND_SISTER, Role
+
+            acting_role = (
+                db.query(Role)
+                .filter(
+                    Role.id == int(acting_role_id),
+                    Role.organization_id == int(organization_id),
+                    Role.role_kind == ROLE_KIND_SISTER,
+                )
+                .one_or_none()
+            )
+            source_app = (
+                db.query(CandidateApplication)
+                .filter(
+                    CandidateApplication.id
+                    == int(role_application_id or application_id),
+                    CandidateApplication.organization_id == int(organization_id),
+                    CandidateApplication.candidate_id == int(app.candidate_id),
+                )
+                .one_or_none()
+            )
+            if acting_role is not None and source_app is not None:
+                event_app = source_app
+                logical_role_id = int(acting_role.id)
         if op_type == OP_MANUAL_OUTCOME and provider_slug == "bullhorn":
             from .ats_writeback_state import set_outcome_writeback_state
 
@@ -1131,15 +1323,44 @@ def surface_op_failure(
         }.get(op_type, f"{event_prefix}_writeback_failed")
         append_application_event(
             db,
-            app=app,
+            app=event_app,
+            role_id=logical_role_id,
             event_type=event_type,
             actor_type="system",
             reason=note,
+            target_stage=(
+                str(
+                    payload.get("target_stage")
+                    or payload.get("target_intent")
+                    or ""
+                ).strip()
+                or None
+            ),
+            effect_status="failed",
+            idempotency_key=(
+                f"ats_op_failure:{payload.get('job_run_id')}"
+                if payload.get("job_run_id") is not None
+                else (
+                    f"ats_op_failure:{op_type}:{event_app.id}:"
+                    f"{logical_role_id}:{error.code}"
+                )
+            ),
             metadata={
                 "op_type": op_type,
                 "code": error.code,
                 "source": "workable_op_runner",
                 "ats": provider_slug,
+                "target_stage": (
+                    payload.get("target_stage") or payload.get("target_intent")
+                ),
+                **(
+                    {
+                        "acting_role_id": int(acting_role_id),
+                        "ats_application_id": int(app.id),
+                    }
+                    if acting_role_id is not None
+                    else {}
+                ),
             },
         )
         db.commit()

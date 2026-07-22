@@ -20,6 +20,7 @@ from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..services.decision_membership import lock_resolution_roles
 from ..services.decision_approval_guard import enforce_decision_approval_eligibility
+from ..services.decision_resolution_provenance import record_resolution_request
 from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
 from ._decision_side_effects import (
     apply_decision_side_effects,
@@ -126,12 +127,21 @@ def enqueue_batch(
     }
     for decision_id in requested:
         try:
-            _accept_for_processing(
+            decision = _accept_for_processing(
                 db,
                 organization_id=int(organization_id),
                 decision_id=decision_id,
                 note=note,
                 allow_engine_outdated=decision_id in engine_force_ids,
+            )
+            role_target = (
+                (workable_target_stages or {}).get(str(decision.role_id))
+                or workable_target_stage
+            )
+            record_resolution_request(
+                decision,
+                requested_action=decision.decision_type,
+                target_stage=role_target,
             )
             accepted.append(decision_id)
         except HTTPException as exc:
@@ -322,6 +332,20 @@ def run(
     if app is None:
         raise HTTPException(status_code=404, detail="decision application not found")
 
+    # Related-role terminal actions and recruiter re-evaluation both use the
+    # Application -> membership -> Decision suffix. Lock the explicit local
+    # membership before the decision so neither path can re-create or approve a
+    # card across a concurrent close/advance boundary.
+    from ..services.related_role_action_service import (
+        lock_related_role_membership,
+    )
+
+    lock_related_role_membership(
+        db,
+        application=app,
+        acting_role_id=expected_decision_role_id,
+    )
+
     # C2: row-level lock on the decision. Two recruiters approving the
     # same pending decision in the same second would otherwise both pass
     # the ``status != "pending"`` check and both dispatch the underlying
@@ -388,7 +412,13 @@ def run(
         "model_version": decision.model_version,
         "prompt_version": decision.prompt_version,
         "acting_role_id": int(decision.role_id),
+        "workable_target_stage": workable_target_stage,
     }
+    record_resolution_request(
+        decision,
+        requested_action=decision.decision_type,
+        target_stage=workable_target_stage,
+    )
     reason = (note or "").strip() or f"Approved agent recommendation #{decision.id}"
     org = db.query(Organization).filter(Organization.id == organization_id).first()
     role = locked_roles[expected_decision_role_id]

@@ -101,6 +101,7 @@ def _seed_activity(org_name: str = "Activity Org") -> dict:
         ev = CandidateApplicationEvent(
             application_id=app_row.id,
             organization_id=org.id,
+            role_id=role.id,
             event_type="stage_change",
             from_stage="applied",
             to_stage="review",
@@ -170,6 +171,82 @@ def test_agent_activity_route_returns_merged_feed(client):
     run_entry = next(e for e in entries if e["kind"] == "run")
     assert "decision" in run_entry["title"]
     assert run_entry["cost_micro_usd"] == 12345
+
+
+def test_related_role_activity_uses_event_logical_role_not_transport_role(client):
+    """A related-role action remains visible and labelled in its owning role.
+
+    The application is deliberately persisted under the original role to model
+    an optional shared ATS transport.  Event.role_id is the product authority.
+    """
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_activity(org_name="Related Activity Org")
+    _attach_user_to_org(email, seeded["org_id"])
+
+    sess = TestingSessionLocal()
+    try:
+        related = Role(
+            organization_id=seeded["org_id"],
+            name="Independent Related Role",
+            source="manual",
+            role_kind="related",
+            ats_owner_role_id=seeded["role_id"],
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=0,
+        )
+        sess.add(related)
+        sess.flush()
+        related_event = CandidateApplicationEvent(
+            application_id=seeded["application_id"],
+            organization_id=seeded["org_id"],
+            role_id=related.id,
+            event_type="stage_change",
+            from_stage="review",
+            to_stage="technical_interview",
+            actor_type="agent",
+            reason="related-role advance",
+            created_at=datetime.now(timezone.utc),
+        )
+        sess.add(related_event)
+        sess.commit()
+        related_id = int(related.id)
+        event_id = int(related_event.id)
+    finally:
+        sess.close()
+
+    related_feed = client.get(
+        f"/api/v1/roles/{related_id}/agent/activity?limit=50",
+        headers=headers,
+    )
+    assert related_feed.status_code == 200, related_feed.text
+    assert [entry["id"] for entry in related_feed.json()["entries"]] == [event_id]
+
+    owner_feed = client.get(
+        f"/api/v1/roles/{seeded['role_id']}/agent/activity?limit=50",
+        headers=headers,
+    )
+    assert owner_feed.status_code == 200, owner_feed.text
+    assert event_id not in {
+        entry["id"]
+        for entry in owner_feed.json()["entries"]
+        if entry["kind"] == "event"
+    }
+
+    org_feed = client.get("/api/v1/agent/activity?limit=50", headers=headers)
+    assert org_feed.status_code == 200, org_feed.text
+    entry = next(
+        item
+        for item in org_feed.json()["entries"]
+        if item["kind"] == "event" and item["id"] == event_id
+    )
+    assert entry["role_id"] == related_id
+    assert entry["role_name"] == "Independent Related Role"
+
+    org_status = client.get("/api/v1/agent/org-status", headers=headers)
+    assert org_status.status_code == 200, org_status.text
+    assert "Independent Related Role" in org_status.json()["last_activity"]["summary"]
 
 
 def test_agent_activity_route_404s_for_other_org(client):

@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.role import Role
 from .workable_actions_service import workable_job_state, workable_job_syncable
 
 
@@ -92,15 +92,6 @@ def job_lifecycle_write_conflict(role: Role | None) -> str | None:
 
     if role is None:
         return None
-    if (
-        getattr(role, "role_kind", None) == ROLE_KIND_SISTER
-        or getattr(role, "ats_owner_role_id", None) is not None
-    ):
-        return (
-            "This related scoring view does not own a job lifecycle. "
-            "Archive or reopen the owner role instead."
-        )
-
     lifecycle = ats_job_lifecycle(role)
     source = _normalized_text(getattr(role, "source", None))
     provider = lifecycle.provider or (

@@ -37,6 +37,7 @@ def _ev(db, *, app, event_type, **fields) -> CandidateApplicationEvent:
     body = {
         "application_id": app.id,
         "organization_id": app.organization_id,
+        "role_id": app.role_id,
         "event_type": event_type,
         "actor_type": "recruiter",
         "actor_id": 1,

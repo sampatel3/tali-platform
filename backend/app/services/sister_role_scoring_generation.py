@@ -15,7 +15,6 @@ from ..models.sister_role_evaluation import (
     SISTER_EVAL_RUNNING,
     SisterRoleEvaluation,
 )
-from . import workable_context_service
 from .sister_role_service import text_fingerprint
 from .workspace_agent_control import workspace_agent_control_snapshot
 
@@ -25,8 +24,9 @@ class SisterScoreLocator:
     evaluation_id: int
     organization_id: int
     role_id: int
-    ats_owner_role_id: int
+    ats_owner_role_id: int | None
     application_id: int
+    ats_application_id: int | None
     candidate_id: int
 
 
@@ -55,6 +55,7 @@ class LockedSisterScoreRows:
     role: Role
     candidate: Candidate
     application: CandidateApplication
+    ats_application: CandidateApplication | None
     evaluation: SisterRoleEvaluation
 
 
@@ -69,6 +70,7 @@ def locate_sister_score(
             SisterRoleEvaluation.role_id,
             Role.ats_owner_role_id,
             SisterRoleEvaluation.source_application_id,
+            SisterRoleEvaluation.ats_application_id,
             CandidateApplication.candidate_id,
         )
         .join(Role, Role.id == SisterRoleEvaluation.role_id)
@@ -76,18 +78,26 @@ def locate_sister_score(
             CandidateApplication,
             CandidateApplication.id == SisterRoleEvaluation.source_application_id,
         )
-        .filter(SisterRoleEvaluation.id == int(evaluation_id))
+        .filter(
+            SisterRoleEvaluation.id == int(evaluation_id),
+            SisterRoleEvaluation.deleted_at.is_(None),
+            SisterRoleEvaluation.application_outcome == "open",
+            SisterRoleEvaluation.pipeline_stage != "advanced",
+            Role.role_kind == ROLE_KIND_SISTER,
+            Role.deleted_at.is_(None),
+        )
         .one_or_none()
     )
-    if row is None or row[2] is None:
+    if row is None:
         return None
     return SisterScoreLocator(
         evaluation_id=int(evaluation_id),
         organization_id=int(row[0]),
         role_id=int(row[1]),
-        ats_owner_role_id=int(row[2]),
+        ats_owner_role_id=(int(row[2]) if row[2] is not None else None),
         application_id=int(row[3]),
-        candidate_id=int(row[4]),
+        ats_application_id=(int(row[4]) if row[4] is not None else None),
+        candidate_id=int(row[5]),
     )
 
 
@@ -102,11 +112,13 @@ def lock_sister_score_rows(
     workspace_agent_control_snapshot(
         db, organization_id=locator.organization_id, lock=True
     )
-    role_ids = sorted({locator.role_id, locator.ats_owner_role_id})
+    role_ids = {locator.role_id}
+    if locator.ats_owner_role_id is not None:
+        role_ids.add(locator.ats_owner_role_id)
     roles = (
         db.query(Role)
         .filter(
-            Role.id.in_(role_ids),
+            Role.id.in_(sorted(role_ids)),
             Role.organization_id == locator.organization_id,
             Role.deleted_at.is_(None),
         )
@@ -117,14 +129,21 @@ def lock_sister_score_rows(
     )
     by_id = {int(item.id): item for item in roles}
     role = by_id.get(locator.role_id)
-    owner_role = by_id.get(locator.ats_owner_role_id)
+    current_owner_id = (
+        int(role.ats_owner_role_id)
+        if role is not None and role.ats_owner_role_id is not None
+        else None
+    )
     if (
         role is None
-        or owner_role is None
         or str(role.role_kind or "") != ROLE_KIND_SISTER
-        or int(role.ats_owner_role_id or 0) != locator.ats_owner_role_id
+        or current_owner_id != locator.ats_owner_role_id
     ):
         return None
+    owner_available = bool(
+        locator.ats_owner_role_id is not None
+        and locator.ats_owner_role_id in by_id
+    )
     candidate = (
         db.query(Candidate)
         .filter(
@@ -144,8 +163,6 @@ def lock_sister_score_rows(
             CandidateApplication.id == locator.application_id,
             CandidateApplication.organization_id == locator.organization_id,
             CandidateApplication.candidate_id == locator.candidate_id,
-            CandidateApplication.role_id == locator.ats_owner_role_id,
-            CandidateApplication.deleted_at.is_(None),
         )
         .with_for_update(of=CandidateApplication)
         .populate_existing()
@@ -153,6 +170,30 @@ def lock_sister_score_rows(
     )
     if application is None:
         return None
+    ats_application = None
+    if owner_available and locator.ats_application_id is not None:
+        if locator.ats_application_id == locator.application_id:
+            ats_application = application
+        else:
+            ats_application = (
+                db.query(CandidateApplication)
+                .filter(
+                    CandidateApplication.id == locator.ats_application_id,
+                    CandidateApplication.organization_id == locator.organization_id,
+                    CandidateApplication.candidate_id == locator.candidate_id,
+                    CandidateApplication.role_id == locator.ats_owner_role_id,
+                )
+                .with_for_update(of=CandidateApplication)
+                .populate_existing()
+                .one_or_none()
+            )
+    elif (
+        owner_available
+        and int(application.role_id or 0) == int(locator.ats_owner_role_id or 0)
+    ):
+        # Rolling-deploy fallback for memberships created before the explicit
+        # ATS application link existed.
+        ats_application = application
     evaluation = (
         db.query(SisterRoleEvaluation)
         .filter(
@@ -160,6 +201,9 @@ def lock_sister_score_rows(
             SisterRoleEvaluation.organization_id == locator.organization_id,
             SisterRoleEvaluation.role_id == locator.role_id,
             SisterRoleEvaluation.source_application_id == locator.application_id,
+            SisterRoleEvaluation.deleted_at.is_(None),
+            SisterRoleEvaluation.application_outcome == "open",
+            SisterRoleEvaluation.pipeline_stage != "advanced",
         )
         .with_for_update(
             of=SisterRoleEvaluation,
@@ -174,24 +218,26 @@ def lock_sister_score_rows(
         role=role,
         candidate=candidate,
         application=application,
+        ats_application=ats_application,
         evaluation=evaluation,
     )
 
 
 def capture_sister_score_inputs(rows: LockedSisterScoreRows) -> SisterScoreInputs:
-    """Capture the exact strings consumed by the provider call."""
+    """Capture only evidence owned by this independent role score.
+
+    The source application supplies candidate CV evidence and the related role
+    supplies its own specification.  ``ats_application`` exists solely for ATS
+    action restrictions; its questionnaire, comments, activity, stage, and
+    owner-role context must never influence this role's score.
+    """
 
     cv_text = (
         str(rows.application.cv_text or "").strip()
         or str(rows.candidate.cv_text or "").strip()
     )
     job_spec = str(rows.role.job_spec_text or "").strip()
-    context = (
-        workable_context_service.format_workable_context(
-            rows.candidate, rows.application
-        )
-        or None
-    )
+    context = None
     return SisterScoreInputs(
         cv_text=cv_text,
         job_spec=job_spec,
@@ -216,8 +262,17 @@ def capture_sister_score_generation(
             evaluation_id=int(evaluation.id),
             organization_id=int(evaluation.organization_id),
             role_id=int(evaluation.role_id),
-            ats_owner_role_id=int(rows.role.ats_owner_role_id),
+            ats_owner_role_id=(
+                int(rows.role.ats_owner_role_id)
+                if rows.role.ats_owner_role_id is not None
+                else None
+            ),
             application_id=int(evaluation.source_application_id),
+            ats_application_id=(
+                int(evaluation.ats_application_id)
+                if evaluation.ats_application_id is not None
+                else None
+            ),
             candidate_id=int(rows.application.candidate_id),
         ),
         attempts=int(evaluation.attempts or 0),

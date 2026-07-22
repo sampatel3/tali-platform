@@ -229,13 +229,19 @@ jobs:
         run: npm run check:architecture
       - name: Targeted frontend regression tests
         # Guards merge-prone role dimming, optimistic decision reconciliation,
-        # and immutable asset caching/404 routing.
+        # immutable asset caching/404 routing, and the registered candidate
+        # capability surfaces. These files are exact bindings in the offline AI
+        # eval registry; removing one from CI makes the backend coverage gate fail.
         run: |
           npm test -- \
             src/features/jobs/JobsPage.test.jsx \
+            src/features/jobs/JobPipelinePage.test.jsx \
             src/features/home/HomeNow.optimistic.test.jsx \
             src/features/chat/Thread.test.jsx \
-            src/features/chat/useChatStream.session.test.jsx
+            src/features/chat/useChatStream.session.test.jsx \
+            src/features/candidates/DecisionRail.test.jsx \
+            src/shared/layout/GlobalSearch.test.jsx \
+            src/test/CandidateBackLink.test.jsx
           npm test -- src/features/candidates/candidatesUiUtils.test.js
           npm test -- src/test/vercelCaching.test.js
       - name: Build frontend

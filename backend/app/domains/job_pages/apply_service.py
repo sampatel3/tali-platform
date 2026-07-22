@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
-from ...models.role import Role
+from ...models.role import ROLE_KIND_SISTER, Role
 from ...services.candidate_identity_service import normalize_phone, resolve_candidate
 from ...services.job_page_lifecycle import lock_native_intake_authority
 from ...services.pre_screen_decision_emitter import queue_knockout_reject
@@ -190,6 +190,25 @@ def _promote_matching_prospect(
     db.flush()
 
 
+def _ensure_direct_related_membership(
+    db: Session,
+    *,
+    role: Role,
+    application: CandidateApplication,
+) -> None:
+    """Keep native intake inside the related role's explicit candidate pool."""
+
+    if str(role.role_kind or "") != ROLE_KIND_SISTER:
+        return
+    from ...services.sister_role_service import create_direct_related_membership
+
+    create_direct_related_membership(
+        db,
+        role=role,
+        application=application,
+    )
+
+
 def _restore_soft_deleted_application(
     db: Session,
     application: CandidateApplication,
@@ -338,6 +357,11 @@ def submit_application(
         and (existing.pipeline_stage or "").strip().lower() == "sourced"
     )
     if existing is not None and existing.deleted_at is None and not is_sourced_engagement:
+        _ensure_direct_related_membership(
+            db,
+            role=role,
+            application=existing,
+        )
         meta = (existing.screening_answers or {}).get("_knockout", {})
         _ensure_eeo_token(db, existing)
         return ApplyResult(
@@ -397,6 +421,12 @@ def submit_application(
         )
         db.add(application)
         db.flush()
+
+    _ensure_direct_related_membership(
+        db,
+        role=role,
+        application=application,
+    )
 
     # Provenance: if this applicant was a sourced prospect, the application it
     # engaged into should carry the "sourced" strategy and the prospect flips to

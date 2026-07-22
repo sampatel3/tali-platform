@@ -25,7 +25,7 @@ export const DECISION_ACTIONS = {
         icon: X,
         kicker: 'REJECT CANDIDATE',
         headline: 'Reject {name}?',
-        body: 'This rejects the shared ATS application across the original and every related role. Cannot be undone from this screen.',
+        body: 'This rejects the candidate for this role. Cannot be undone from this screen.',
         confirmLabel: 'Reject',
         confirmClass: 'rq-override',
         placeholder: 'e.g. Missing AWS Glue experience confirmed by the recruiter screen',
@@ -78,7 +78,7 @@ export const DECISION_ACTIONS = {
         icon: X,
         kicker: 'REJECT CANDIDATE',
         headline: 'Reject {name}?',
-        body: 'This rejects the shared ATS application across the original and every related role.',
+        body: 'This rejects the candidate for this role.',
         confirmLabel: 'Reject',
         confirmClass: 'rq-override',
       },
@@ -141,7 +141,7 @@ export const DECISION_ACTIONS = {
         icon: X,
         kicker: 'REJECT CANDIDATE',
         headline: 'Reject {name}?',
-        body: 'This rejects the shared ATS application across the original and every related role.',
+        body: 'This rejects the candidate for this role.',
         confirmLabel: 'Reject',
         confirmClass: 'rq-override',
       },
@@ -178,7 +178,7 @@ export const isRejectDecisionType = (decisionType) =>
 // actions/reject_application.py); any candidate-facing message is the ATS's own
 // disqualify workflow, so we don't claim one on Taali's behalf.
 export const REJECT_CONSEQUENCE_COPY =
-  'Rejects this candidate\'s ATS application. If this role shares a candidate pool, the rejection also applies to the original and every related role.';
+  'Rejects this candidate for this role. Other roles keep their own candidate status.';
 
 const normaliseRoleReference = (reference, relationship) => {
   const name = String(reference?.name || '').trim();
@@ -219,21 +219,49 @@ export const formatRoleFamilyReferences = (roleFamily) => {
   return joinRoleReferences(roles.map((role) => role.label));
 };
 
-export const buildRejectConsequenceCopy = (roleFamily) => {
-  const linkedRoles = formatRoleFamilyReferences(roleFamily);
-  return linkedRoles
-    ? `Rejects the shared ATS application across all linked roles: ${linkedRoles}.`
-    : REJECT_CONSEQUENCE_COPY;
+const roleReferenceForId = (roleFamily, roleId) => {
+  const owner = roleFamily?.owner;
+  const related = Array.isArray(roleFamily?.related) ? roleFamily.related : [];
+  const candidates = [owner, ...related].filter(Boolean);
+  return candidates.find((reference) => (
+    reference?.id != null
+    && roleId != null
+    && String(reference.id) === String(roleId)
+  )) || null;
+};
+
+/**
+ * Explain the effect on the logical role that owns the decision. Related-role
+ * membership, pipeline state, and outcomes are independent; the owner ATS
+ * application is only a transport/write-back boundary.
+ */
+export const buildRejectConsequenceCopy = (roleFamily, roleId) => {
+  const owner = normaliseRoleReference(roleFamily?.owner, 'original');
+  const currentReference = roleReferenceForId(roleFamily, roleId);
+  const current = normaliseRoleReference(
+    currentReference,
+    owner && currentReference && String(currentReference.id) === String(roleFamily?.owner?.id)
+      ? 'original'
+      : 'related',
+  );
+
+  if (current && owner && current.key !== owner.key) {
+    return `Rejects this candidate only for ${current.label}. The linked ATS application and other roles are unchanged.`;
+  }
+  if (current && owner && current.key === owner.key) {
+    return `Rejects this candidate for ${current.label} and writes the rejection to its ATS application. Related roles keep their own candidate status.`;
+  }
+  return REJECT_CONSEQUENCE_COPY;
 };
 
 /** Resolve the reject modal copy at click-time while preserving its undo note. */
-export const withRoleAwareRejectCopy = (alternative, roleFamily) => {
+export const withRoleAwareRejectCopy = (alternative, roleFamily, roleId) => {
   if (alternative?.action !== 'reject') return alternative;
   const undoCopy = /cannot be undone from this screen/i.test(alternative?.body || '')
     ? ' Cannot be undone from this screen.'
     : '';
   return {
     ...alternative,
-    body: `${buildRejectConsequenceCopy(roleFamily)}${undoCopy}`,
+    body: `${buildRejectConsequenceCopy(roleFamily, roleId)}${undoCopy}`,
   };
 };

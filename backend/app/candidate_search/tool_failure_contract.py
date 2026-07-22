@@ -21,6 +21,7 @@ CANDIDATE_SEARCH_TOOL_NAMES = frozenset(
     {
         "search_candidates",
         "search_applications",
+        "search_role_candidates",
         "nl_search_candidates",
         "find_top_candidates",
         "screen_pool_against_requirement",

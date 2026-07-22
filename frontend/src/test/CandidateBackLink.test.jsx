@@ -77,6 +77,7 @@ vi.mock('../shared/api', () => ({
     createApplicationShareLink: vi.fn(),
     revokeShareLink: vi.fn(),
     listApplicationEvents: vi.fn().mockResolvedValue({ data: [] }),
+    addApplicationNote: vi.fn().mockResolvedValue({ data: {} }),
     listTasks: vi.fn().mockResolvedValue({ data: [] }),
     batchScoreStatus: vi.fn(),
     fetchCvsStatus: vi.fn(),
@@ -135,6 +136,7 @@ vi.mock('recharts', () => ({
   YAxis: () => <div />,
   CartesianGrid: () => <div />,
   Tooltip: () => <div />,
+  Legend: () => <div />,
 }));
 
 vi.mock('@monaco-editor/react', () => ({
@@ -313,6 +315,95 @@ describe('Candidate report back link', () => {
       limit: 1,
     });
     expect(screen.getByLabelText('77 of 100')).toBeInTheDocument();
+  });
+
+  it('mints a share link in the logical role rendered by the report', async () => {
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        ...roleBearingApplication,
+        role_id: 135,
+        role_name: 'Related AI Engineer',
+        cv_match_score: 77,
+        taali_score: 77,
+      },
+    });
+    rolesApi.createApplicationShareLink.mockResolvedValue({
+      data: { token: 'shr_related_role_report' },
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    renderAppAt('/candidates/77?from=home&view_role_id=135');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Share with client' }));
+    await waitFor(() => {
+      expect(rolesApi.createApplicationShareLink).toHaveBeenCalledWith(77, {
+        mode: 'client',
+        expiry: '7d',
+        viewRoleId: 135,
+      });
+    });
+    expect(writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/share/shr_related_role_report`,
+    );
+  });
+
+  it('saves notes and supporting links in the viewed logical role', async () => {
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        ...roleBearingApplication,
+        role_id: 135,
+        role_name: 'Related AI Engineer',
+      },
+    });
+
+    renderAppAt('/candidates/77?from=jobs/135&view_role_id=135');
+
+    fireEvent.click(await screen.findByRole('link', { name: 'Notes & timeline' }));
+    await waitFor(() => {
+      expect(rolesApi.listApplicationEvents).toHaveBeenCalledWith(77, {
+        role_id: 135,
+      });
+    });
+    fireEvent.change(await screen.findByPlaceholderText('Write a note for the hiring team…'), {
+      target: { value: 'Use the related-role interview rubric.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+
+    await waitFor(() => {
+      expect(rolesApi.addApplicationNote).toHaveBeenCalledWith(
+        77,
+        'Use the related-role interview rubric.',
+        true,
+        { role_id: 135 },
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /add supporting link/i }));
+    fireEvent.change(await screen.findByLabelText(/^URL$/), {
+      target: { value: 'https://example.com/related-role-portfolio' },
+    });
+    fireEvent.change(screen.getByLabelText(/Label/), {
+      target: { value: 'Portfolio' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add link' }));
+
+    await waitFor(() => {
+      expect(rolesApi.addApplicationNote).toHaveBeenLastCalledWith(
+        77,
+        'Portfolio',
+        true,
+        {
+          kind: 'link',
+          link_url: 'https://example.com/related-role-portfolio',
+          link_label: 'Portfolio',
+          role_id: 135,
+        },
+      );
+    });
   });
 
   it('keeps the decision aligned if a viewed role can no longer be projected', async () => {
