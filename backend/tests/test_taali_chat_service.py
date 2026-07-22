@@ -24,6 +24,8 @@ from app.candidate_search.tool_failure_contract import (
     CANDIDATE_SEARCH_UNAVAILABLE_CODE,
     CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE,
 )
+from app.components.ai_routing.contracts import TaskKey
+from app.components.ai_routing.lineage import current_route
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -88,6 +90,10 @@ class _FakeMessagesResource:
 
 
 class _FakeClient:
+    ai_routing_metered_transport = True
+    ai_routing_sdk_max_retries = 0
+    organization_id = None
+
     def __init__(self, plans):
         self.messages = _FakeMessagesResource(plans)
 
@@ -250,7 +256,7 @@ def test_insufficient_credits_does_not_persist_an_unanswered_turn(db):
             required=10_000,
             available=0,
         ),
-    ), patch("app.taali_chat.service.get_client_for_org") as get_client:
+    ), patch("app.taali_chat.service.routed_messages_client") as get_client:
         frames = _drain(
             run_chat_turn(
                 db=db,
@@ -361,7 +367,7 @@ def test_text_only_turn_persists_and_streams(db):
     )
 
     with patch(
-        "app.taali_chat.service.get_client_for_org", return_value=fake_client
+        "app.taali_chat.service.routed_messages_client", return_value=fake_client
     ) as get_client, patch(
         "app.taali_chat.service.record_event"
     ):
@@ -385,10 +391,18 @@ def test_text_only_turn_persists_and_streams(db):
         for item in payload
     )
     assert fake_client.messages.calls[0]["timeout"] == CHAT_ROUND_IDLE_TIMEOUT_SECONDS
-    assert get_client.call_args.kwargs == {
-        "timeout": CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
-        "max_retries": 0,
-    }
+    routed_call = fake_client.messages.calls[0]
+    assert routed_call["model"] == "claude-haiku-4-5-20251001"
+    assert routed_call["metering"]["feature"] == "taali_chat"
+    assert routed_call["metering"]["metadata"]["round"] == 0
+    route = get_client.call_args.args[0]
+    assert get_client.call_args.kwargs == {}
+    assert route.decision.task is TaskKey.GENERAL_CHAT_ORCHESTRATION
+    assert route.selected_model_id == "claude-haiku-4-5-20251001"
+    assert route.decision.route_id
+    assert route.invocation_id
+    assert route.attribution.organization_id == org.id
+    assert route.attribution.user_id == user.id
     assert transaction_states == [False]
 
     # One conversation, exactly two messages (user + assistant).
@@ -407,6 +421,7 @@ def test_text_only_turn_persists_and_streams(db):
     assert [m.role for m in msgs] == ["user", "assistant"]
     assert msgs[0].content[0]["text"] == "hello"
     assert msgs[1].stop_reason == "end_turn"
+    assert msgs[1].model == "claude-haiku-4-5-20251001"
 
 
 def test_tool_call_dispatches_and_emits_result(db):
@@ -443,9 +458,25 @@ def test_tool_call_dispatches_and_emits_result(db):
         _text_only_plan("Found one strong candidate above 70."),
     ]
     fake_client = _FakeClient(plans)
+    from app.taali_chat import tool_execution
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
+    real_dispatch = tool_execution.dispatch_tool
+    scoped_routes = []
+
+    def scoped_dispatch(*args, **kwargs):
+        scoped_routes.append(current_route())
+        return real_dispatch(*args, **kwargs)
+
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client",
+            return_value=fake_client,
+        ) as route_client,
+        patch("app.taali_chat.service.record_event"),
+        patch(
+            "app.taali_chat.tool_execution.dispatch_tool",
+            side_effect=scoped_dispatch,
+        ),
     ):
         frames = _drain(
             run_chat_turn(
@@ -473,6 +504,11 @@ def test_tool_call_dispatches_and_emits_result(db):
     # Anthropic was called twice: once with no prior assistant turn, then
     # with the tool_use + tool_result appended.
     assert len(fake_client.messages.calls) == 2
+    assert len(scoped_routes) == 1
+    assert scoped_routes[0] is not None
+    assert scoped_routes[0].decision.task is TaskKey.GENERAL_CHAT_ORCHESTRATION
+    route_client.assert_called_once_with(scoped_routes[0])
+    assert current_route() is None
     second_messages = fake_client.messages.calls[1]["messages"]
     assert any(
         m["role"] == "user"
@@ -506,7 +542,7 @@ def test_sensitive_tool_result_is_available_live_but_not_persisted(db):
     ]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake_client), patch(
         "app.taali_chat.service.record_event"
     ):
         frames = _drain(
@@ -540,7 +576,7 @@ def test_tool_error_emits_is_error_frame(db):
     ]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake_client), patch(
         "app.taali_chat.service.record_event"
     ):
         frames = _drain(
@@ -585,7 +621,7 @@ def test_candidate_search_failure_recovers_and_ends_without_model_synthesis(db):
         raise AssertionError("duplicate organization flush should fail")
 
     with (
-        patch("app.taali_chat.service.get_client_for_org", return_value=fake_client),
+        patch("app.taali_chat.service.routed_messages_client", return_value=fake_client),
         patch("app.taali_chat.service.record_event"),
         patch("app.taali_chat.tool_execution.dispatch_tool", side_effect=fail_search),
         patch.object(db, "rollback", wraps=db.rollback) as rollback,
@@ -650,7 +686,10 @@ def test_narrowed_structural_zero_ends_without_model_synthesis(db):
     }
 
     with (
-        patch("app.taali_chat.service.get_client_for_org", return_value=fake_client),
+        patch(
+            "app.taali_chat.service.routed_messages_client",
+            return_value=fake_client,
+        ),
         patch("app.taali_chat.service.record_event"),
         patch("app.taali_chat.tool_execution.dispatch_tool", return_value=result),
     ):
@@ -711,7 +750,7 @@ def test_verified_search_result_is_durable_before_later_tool_failure(db):
         raise AssertionError("duplicate organization flush should fail")
 
     with (
-        patch("app.taali_chat.service.get_client_for_org", return_value=fake_client),
+        patch("app.taali_chat.service.routed_messages_client", return_value=fake_client),
         patch("app.taali_chat.service.record_event"),
         patch("app.taali_chat.tool_execution.dispatch_tool", side_effect=dispatch),
     ):
@@ -747,7 +786,7 @@ def test_max_tool_rounds_guard(db):
     ]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake_client), patch(
         "app.taali_chat.service.record_event"
     ):
         frames = _drain(
@@ -793,7 +832,7 @@ def test_continuing_conversation_loads_history(db):
 
     plans = [_text_only_plan("Continuing.")]
     fake_client = _FakeClient(plans)
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake_client), patch(
         "app.taali_chat.service.record_event"
     ):
         _drain(
@@ -816,7 +855,7 @@ def test_unknown_conversation_id_emits_error(db):
     user, org = _seed_user(db)
     plans: list[dict] = []  # no Anthropic call expected
     fake_client = _FakeClient(plans)
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake_client), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake_client), patch(
         "app.taali_chat.service.record_event"
     ):
         frames = _drain(

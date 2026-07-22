@@ -162,6 +162,7 @@ def one_call(
     temperature: float = 0.0,
     tools: Optional[list[dict[str, Any]]] = None,
     tool_choice: Optional[dict[str, Any]] = None,
+    timeout: Optional[float] = None,
     retry_attempt: int = 0,
     usage_sink: Optional[CallUsage] = None,
 ) -> Any:
@@ -186,6 +187,8 @@ def one_call(
         kwargs["tools"] = tools
     if tool_choice is not None:
         kwargs["tool_choice"] = tool_choice
+    if timeout is not None:
+        kwargs["timeout"] = float(timeout)
 
     response = client.messages.create(**kwargs)
     if usage_sink is not None:

@@ -40,6 +40,16 @@ from ..candidate_search.tool_failure_contract import (
     skipped_after_search_failure_result,
     unexpected_tool_failure_result,
 )
+from ..components.ai_routing import (
+    RouteExecution,
+    RoutingAttribution,
+    TaskKey,
+    estimate_anthropic_messages,
+    finish_route_with_transaction,
+    prepare_route,
+    routed_messages_client,
+    routing_scope,
+)
 from ..llm import CallUsage, MeteringContext, one_call
 from ..models.agent_conversation import (
     AUTHOR_ROLE_ASSISTANT,
@@ -54,9 +64,7 @@ from ..models.agent_conversation import (
 from ..models.organization import Organization
 from ..models.role import Role
 from ..models.user import User
-from ..platform.config import settings
 from ..llm.tool_pairs import sanitize_tool_pairs
-from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from .system_prompt import build_system_blocks
@@ -208,6 +216,38 @@ def run_agent_response(
     conversation: AgentConversation,
     accepted_role_version: int | None = None,
 ) -> AgentConversationMessage:
+    """Run the routed response workflow and close its telemetry on all exits."""
+
+    route_holder: list[RouteExecution] = []
+    try:
+        return _run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+            accepted_role_version=accepted_role_version,
+            route_holder=route_holder,
+        )
+    except BaseException:
+        finish_route_with_transaction(
+            db,
+            route_holder[0] if route_holder else None,
+            succeeded=False,
+        )
+        raise
+
+
+def _run_agent_response(
+    *,
+    db: Session,
+    role: Role,
+    user: User,
+    organization: Organization,
+    conversation: AgentConversation,
+    accepted_role_version: int | None = None,
+    route_holder: list[RouteExecution],
+) -> AgentConversationMessage:
     """Run the tool-use loop for a turn whose user message is ALREADY in history,
     then persist + return the final assistant message. The slow, credit-spending,
     role-mutating half of a turn — handed to a Celery worker by the web path
@@ -224,12 +264,7 @@ def run_agent_response(
     user_id = int(user.id)
     conversation_id = int(conversation.id)
 
-    client = get_client_for_org(
-        organization,
-        timeout=AGENT_CHAT_MODEL_TIMEOUT_SECONDS,
-        max_retries=0,
-    )
-    model = settings.resolved_claude_model
+    client = None
     system_blocks = build_system_blocks(db, role=role)
     messages = _load_history(db, conversation)
     # Immutable-at-enqueue baseline, advanced only after this turn completes one
@@ -261,6 +296,8 @@ def run_agent_response(
     previous_tool_signature: str | None = None
     identical_tool_rounds = 0
     consecutive_error_rounds = 0
+    route: RouteExecution | None = None
+    workflow_succeeded = False
 
     for _round in range(MAX_TOOL_ROUNDS):
         try:
@@ -270,7 +307,9 @@ def run_agent_response(
                 feature=Feature.AGENT_CHAT,
             )
         except InsufficientCreditsError:
-            final_text = "This organization does not have enough credits for another agent step."
+            final_text = (
+                "This organization does not have enough credits for another agent step."
+            )
             final_stop = "insufficient_credits"
             break
         # ``one_call`` reserves and records provider usage in an independent
@@ -281,9 +320,28 @@ def run_agent_response(
         # plumbing durable and replay-safe if the worker later fails.
         db.commit()
         try:
+            if route is None:
+                route = prepare_route(
+                    TaskKey.ROLE_CHAT_ORCHESTRATION,
+                    request_estimate=estimate_anthropic_messages(
+                        system=system_blocks,
+                        messages=messages,
+                        tools=AGENT_CHAT_TOOLS,
+                        max_tokens=MAX_TOKENS_PER_ROUND,
+                    ),
+                    attribution=RoutingAttribution(
+                        organization_id=organization_id,
+                        user_id=user_id,
+                        role_id=role_id,
+                        entity_id=str(conversation_id),
+                    ),
+                    operation="agent_chat.turn",
+                )
+                route_holder.append(route)
+                client = routed_messages_client(route)
             response = one_call(
                 client,
-                model=model,
+                model=route.selected_model_id,
                 system=system_blocks,
                 messages=messages,
                 max_tokens=MAX_TOKENS_PER_ROUND,
@@ -312,6 +370,7 @@ def run_agent_response(
                     "\n\n_(I hit my response length limit here — say “continue” "
                     "and I'll pick up where I left off.)_"
                 )
+            workflow_succeeded = True
             break
 
         # Tool round: persist the assistant tool_use turn (hidden), dispatch,
@@ -323,13 +382,11 @@ def run_agent_response(
             content=blocks,
             kind=MESSAGE_KIND_TOOL,
             text=_extract_text(blocks) or None,
-            model=model,
+            model=route.selected_model_id,
             stop_reason=stop_reason,
         )
 
-        tool_blocks = [
-            block for block in blocks if block.get("type") == "tool_use"
-        ]
+        tool_blocks = [block for block in blocks if block.get("type") == "tool_use"]
         signature = json.dumps(
             [
                 {"name": b.get("name"), "input": b.get("input") or {}}
@@ -346,7 +403,9 @@ def run_agent_response(
             identical_tool_rounds = 0
         previous_tool_signature = signature
         if identical_tool_rounds >= MAX_IDENTICAL_TOOL_ROUNDS:
-            final_text = "I stopped a repeated tool loop before it could waste more credits."
+            final_text = (
+                "I stopped a repeated tool loop before it could waste more credits."
+            )
             final_stop = "circuit_breaker"
             break
 
@@ -390,15 +449,16 @@ def run_agent_response(
                         # search/grounding). Release hidden-message or previous-tool
                         # locks before dispatch for the same reason as ``one_call``.
                         db.commit()
-                        result = dispatch_tool(
-                            name,
-                            args,
-                            db=db,
-                            role=role,
-                            user=user,
-                            conversation=conversation,
-                            expected_role_version=expected_role_version,
-                        )
+                        with routing_scope(route):
+                            result = dispatch_tool(
+                                name,
+                                args,
+                                db=db,
+                                role=role,
+                                user=user,
+                                conversation=conversation,
+                                expected_role_version=expected_role_version,
+                            )
                         is_error = False
                         if candidate_search_result_failed(name, result):
                             search_failure_incident = new_candidate_search_incident_id()
@@ -496,9 +556,7 @@ def run_agent_response(
                                 tool=str(block.get("name") or ""),
                                 incident_id=search_failure_incident,
                             )
-                            if is_candidate_search_tool(
-                                str(block.get("name") or "")
-                            )
+                            if is_candidate_search_tool(str(block.get("name") or ""))
                             else skipped_after_search_failure_result(
                                 tool=str(block.get("name") or ""),
                                 incident_id=search_failure_incident,
@@ -515,8 +573,7 @@ def run_agent_response(
             collected_cards.extend(round_cards)
 
         tool_results = [
-            tool_results_by_id[str(block.get("id") or "")]
-            for block in tool_blocks
+            tool_results_by_id[str(block.get("id") or "")] for block in tool_blocks
         ]
 
         _persist(
@@ -537,13 +594,16 @@ def run_agent_response(
             # recruiter seeing a contradictory error; close deterministically.
             final_text = terminal_receipt_message
             final_stop = "operation_complete"
+            workflow_succeeded = True
             break
         if tool_count > 0 and error_count == tool_count:
             consecutive_error_rounds += 1
         else:
             consecutive_error_rounds = 0
         if consecutive_error_rounds >= MAX_CONSECUTIVE_ERROR_ROUNDS:
-            final_text = "I stopped after repeated tool errors. Please try a narrower request."
+            final_text = (
+                "I stopped after repeated tool errors. Please try a narrower request."
+            )
             final_stop = "circuit_breaker"
             break
     else:
@@ -557,6 +617,7 @@ def run_agent_response(
         final_text = "Done."
 
     has_mutation = any(c.get("type") in MUTATION_CARD_TYPES for c in collected_cards)
+    selected_model_id = route.selected_model_id if route is not None else None
     assistant_row = _persist(
         db,
         conversation,
@@ -565,7 +626,7 @@ def run_agent_response(
         kind=MESSAGE_KIND_ACTION if has_mutation else MESSAGE_KIND_CHAT,
         text=final_text,
         actions=collected_cards or None,
-        model=model,
+        model=selected_model_id,
         stop_reason=final_stop,
         token_usage={
             "input": usage.input_tokens,
@@ -579,6 +640,7 @@ def run_agent_response(
     conversation.last_message_at = now
     conversation.updated_at = now
     db.flush()
+    finish_route_with_transaction(db, route, succeeded=workflow_succeeded)
 
     return assistant_row
 

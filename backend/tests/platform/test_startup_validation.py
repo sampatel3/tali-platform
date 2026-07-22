@@ -9,7 +9,6 @@ from app.platform.startup_validation import (
     url_uses_sqlite,
 )
 
-
 _STRONG_ADMIN_SECRET = "dedicated-admin-secret-at-least-32-characters"
 
 
@@ -35,9 +34,19 @@ def _settings(**overrides):
         "CLAUDE_SCORING_MODEL": "",
         "CLAUDE_SCORING_BATCH_MODEL": "claude-haiku-4-5-20251001",
         "CLAUDE_CHAT_MODEL": "claude-haiku-4-5-20251001",
-        "CLAUDE_AGENT_AUTONOMOUS_MODEL": "claude-sonnet-4-20250514",
+        "CLAUDE_AGENT_AUTONOMOUS_MODEL": "",
+        "AI_ROUTER_MODEL_OVERRIDES_JSON": "",
     }
     defaults.update(overrides)
+    defaults.setdefault(
+        "resolved_claude_model",
+        str(defaults["CLAUDE_MODEL"] or "").strip() or "claude-haiku-4-5-20251001",
+    )
+    defaults.setdefault(
+        "resolved_agent_autonomous_model",
+        str(defaults["CLAUDE_AGENT_AUTONOMOUS_MODEL"] or "").strip()
+        or str(defaults["resolved_claude_model"]),
+    )
     return SimpleNamespace(**defaults)
 
 
@@ -50,9 +59,7 @@ def test_is_production_like_when_deployment_env_is_production():
 
 
 def test_collect_startup_failures_requires_strong_secret_in_production():
-    failures = collect_startup_failures(
-        _settings(FRONTEND_URL="https://app.taali.ai")
-    )
+    failures = collect_startup_failures(_settings(FRONTEND_URL="https://app.taali.ai"))
 
     assert any("SECRET_KEY" in failure for failure in failures)
 
@@ -191,6 +198,43 @@ def test_collect_startup_failures_rejects_retired_model_in_production():
     assert any("retired Anthropic model" in failure for failure in failures)
 
 
+def test_collect_startup_failures_rejects_unregistered_legacy_selector():
+    failures = collect_startup_failures(
+        _settings(CLAUDE_AGENT_AUTONOMOUS_MODEL="claude-unregistered")
+    )
+
+    assert any("legacy model selector" in failure for failure in failures)
+
+
+def test_collect_startup_failures_validates_legacy_selector_for_each_task(
+    monkeypatch,
+):
+    # Haiku is registered, but it does not satisfy the parser's quality floor.
+    # Startup must validate task compatibility, not merely alias existence.
+    monkeypatch.setenv("CLAUDE_SEARCH_PARSER_MODEL", "haiku")
+
+    failures = collect_startup_failures(_settings())
+
+    assert any(
+        "legacy model selector for candidate_search.parse" in failure
+        for failure in failures
+    )
+
+
+def test_collect_startup_failures_checks_masked_legacy_selector():
+    failures = collect_startup_failures(
+        _settings(
+            CLAUDE_MODEL="claude-unregistered",
+            AI_ROUTER_MODEL_OVERRIDES_JSON=(
+                '{"general_chat.orchestration":"haiku",'
+                '"role_chat.orchestration":"haiku"}'
+            ),
+        )
+    )
+
+    assert any("legacy model selector" in failure for failure in failures)
+
+
 def test_collect_railway_failures_flags_localhost_database_urls():
     failures = collect_railway_failures(
         _settings(DATABASE_URL="postgresql://user:pass@localhost:5432/app"),
@@ -225,4 +269,6 @@ def test_url_helpers_handle_localhost_and_sqlite():
     assert url_points_to_localhost("postgresql://user:pass@127.0.0.1:5432/app") is True
     assert url_points_to_localhost("https://app.taali.ai") is False
     assert url_uses_sqlite("sqlite:///./test.db") is True
-    assert url_uses_sqlite("postgresql://user:pass@db.railway.internal:5432/app") is False
+    assert (
+        url_uses_sqlite("postgresql://user:pass@db.railway.internal:5432/app") is False
+    )

@@ -62,8 +62,8 @@ def test_grounded_fixture_matches_real_canonical_postgres_route(
     )
     monkeypatch.setattr(
         parser,
-        "_resolve_anthropic_client",
-        lambda **_kwargs: (_ for _ in ()).throw(
+        "routed_messages_client",
+        lambda _execution: (_ for _ in ()).throw(
             AssertionError("model parser must not resolve")
         ),
     )

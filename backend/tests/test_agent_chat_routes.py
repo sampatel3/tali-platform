@@ -367,7 +367,7 @@ def test_send_message_runs_simulate_tool_and_returns_card(client, db):
         _resp([_text("Dropping the cut-off from 70 to 60 brings Bo back through.")], "end_turn"),
     ]
     with patch(
-        "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
+        "app.agent_chat.engine.routed_messages_client", return_value=_FakeClient(scripted)
     ):
         resp = client.post(
             f"/api/v1/agent-chat/conversations/{role.id}/messages",
@@ -405,7 +405,7 @@ def test_send_message_truncated_reply_gets_continue_note(client, db):
         ),
     ]
     with patch(
-        "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
+        "app.agent_chat.engine.routed_messages_client", return_value=_FakeClient(scripted)
     ):
         resp = client.post(
             f"/api/v1/agent-chat/conversations/{role.id}/messages",
@@ -444,7 +444,7 @@ def test_constraint_change_is_opt_in_then_rescreens(client, db):
         _resp([_text("That confirmation was already used; I need a new preview.")], "end_turn"),
     ]
     with patch(
-        "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
+        "app.agent_chat.engine.routed_messages_client", return_value=_FakeClient(scripted)
     ), patch(
         "app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=3
     ) as stale, patch("app.tasks.scoring_tasks.sweep_stale_scores"):
@@ -492,7 +492,7 @@ def test_same_turn_model_confirmation_cannot_start_paid_rescreen(client, db):
         _resp([_text("I need your confirmation in a new message before I spend.")], "end_turn"),
     ]
     with patch(
-        "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
+        "app.agent_chat.engine.routed_messages_client", return_value=_FakeClient(scripted)
     ), patch("app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=1) as stale:
         response = client.post(
             f"/api/v1/agent-chat/conversations/{role.id}/messages",
@@ -531,7 +531,7 @@ def test_negative_later_message_cannot_be_treated_as_paid_confirmation(client, d
         _resp([_text("I did not start it.")], "end_turn"),
     ]
     with patch(
-        "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
+        "app.agent_chat.engine.routed_messages_client", return_value=_FakeClient(scripted)
     ), patch("app.services.cv_score_orchestrator.mark_role_scores_stale", return_value=1) as stale:
         first = client.post(
             f"/api/v1/agent-chat/conversations/{role.id}/messages",

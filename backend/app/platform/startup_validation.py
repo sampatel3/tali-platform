@@ -3,13 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from urllib.parse import urlparse
 
-
-INSECURE_DEFAULTS = frozenset({
-    "",
-    "changeme",
-    "dev-secret-key-change-in-production",
-    "secret",
-})
+INSECURE_DEFAULTS = frozenset(
+    {
+        "",
+        "changeme",
+        "dev-secret-key-change-in-production",
+        "secret",
+    }
+)
 MIN_ADMIN_SECRET_LENGTH = 32
 LOCALHOST_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 PRODUCTION_ENV_NAMES = frozenset({"prod", "production"})
@@ -24,9 +25,7 @@ RETIRED_CLAUDE_MODELS = frozenset(
 
 
 def is_production_like(settings) -> bool:
-    deployment_env = (
-        getattr(settings, "DEPLOYMENT_ENV", "") or ""
-    ).strip().lower()
+    deployment_env = (getattr(settings, "DEPLOYMENT_ENV", "") or "").strip().lower()
     frontend_url = (getattr(settings, "FRONTEND_URL", "") or "").strip()
     return (
         deployment_env in PRODUCTION_ENV_NAMES
@@ -56,6 +55,12 @@ def is_railway_environment(environ: Mapping[str, str] | None = None) -> bool:
 
 def collect_startup_failures(settings) -> list[str]:
     failures: list[str] = []
+    try:
+        from ..components.ai_routing.runtime import validate_routing_configuration
+
+        validate_routing_configuration(settings)
+    except Exception as exc:
+        failures.append(f"CRITICAL: invalid AI routing configuration: {exc}")
     production_like = is_production_like(settings)
     secret_raw = (getattr(settings, "SECRET_KEY", "") or "").strip()
     secret = secret_raw.lower()
@@ -84,11 +89,7 @@ def collect_startup_failures(settings) -> list[str]:
             False,
         )
     )
-    if (
-        production_like
-        and not usage_meter_live
-        and not usage_meter_emergency_override
-    ):
+    if production_like and not usage_meter_live and not usage_meter_emergency_override:
         failures.append(
             "CRITICAL: USAGE_METER_LIVE must be true in production so credit "
             "debits and spend gates are enforced. Set USAGE_METER_LIVE=true. "
@@ -111,9 +112,7 @@ def collect_startup_failures(settings) -> list[str]:
                 "CRITICAL: LIVE_ASSESSMENT_DEMO_ENABLED must remain false in production; "
                 "the public showcase is fixture-backed."
             )
-        if not bool(
-            getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", True)
-        ):
+        if not bool(getattr(settings, "AUTO_GENERATE_ASSESSMENT_TASKS", True)):
             failures.append(
                 "CRITICAL: AUTO_GENERATE_ASSESSMENT_TASKS must be true in "
                 "production so a published requisition can reach its "
@@ -147,7 +146,11 @@ def collect_startup_failures(settings) -> list[str]:
             "Assessments are terminal-only (Claude CLI) in production mode."
         )
 
-    mode = (getattr(settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "") or "").strip().lower()
+    mode = (
+        (getattr(settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "") or "")
+        .strip()
+        .lower()
+    )
     if mode != "claude_cli_terminal":
         failures.append(
             "CRITICAL: ASSESSMENT_TERMINAL_DEFAULT_MODE must be claude_cli_terminal."
@@ -156,7 +159,9 @@ def collect_startup_failures(settings) -> list[str]:
     return failures
 
 
-def collect_railway_failures(settings, environ: Mapping[str, str] | None = None) -> list[str]:
+def collect_railway_failures(
+    settings, environ: Mapping[str, str] | None = None
+) -> list[str]:
     if not is_railway_environment(environ):
         return []
 
@@ -178,7 +183,9 @@ def collect_railway_failures(settings, environ: Mapping[str, str] | None = None)
     return failures
 
 
-def collect_railway_warnings(settings, environ: Mapping[str, str] | None = None) -> list[str]:
+def collect_railway_warnings(
+    settings, environ: Mapping[str, str] | None = None
+) -> list[str]:
     if not is_railway_environment(environ):
         return []
 

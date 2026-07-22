@@ -20,6 +20,7 @@ import time
 from collections import OrderedDict
 from typing import Optional
 
+from ..components.ai_routing import TaskKey, route_behavior_fingerprint
 from . import PROMPT_VERSION
 from .schemas import ParsedFilter
 
@@ -36,11 +37,17 @@ _store: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
 
 
 def compute_cache_key(*, organization_id: int, query: str) -> str:
-    """Stable SHA256 over (org_id, normalised query, prompt version)."""
+    """Stable SHA256 over the query and its complete routing behavior.
+
+    The route fingerprint includes the task's semantic/schema revisions and
+    selected deployment. A policy, prompt-contract, schema, or model change
+    therefore cannot serve a parser result produced under older behavior.
+    """
     payload = {
         "org": int(organization_id),
         "q": (query or "").strip().lower(),
-        "v": PROMPT_VERSION,
+        "prompt": PROMPT_VERSION,
+        "route": route_behavior_fingerprint(TaskKey.SEARCH_PARSE),
     }
     blob = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()

@@ -14,6 +14,8 @@ from app.candidate_search.tool_failure_contract import (
 )
 from app.agent_chat.engine import persist_user_message, run_agent_response
 from app.agent_chat.tools import AGENT_CHAT_TOOLS, dispatch_tool
+from app.components.ai_routing.contracts import TaskKey
+from app.components.ai_routing.lineage import current_route
 from app.models.agent_conversation import (
     AUTHOR_ROLE_USER,
     MESSAGE_KIND_CHAT,
@@ -24,6 +26,15 @@ from app.models.agent_conversation import (
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
+
+
+def _routed_transport_stub():
+    return SimpleNamespace(
+        messages=object(),
+        ai_routing_metered_transport=True,
+        ai_routing_sdk_max_retries=0,
+        organization_id=None,
+    )
 
 
 def _world(db):
@@ -48,9 +59,7 @@ def _world(db):
     )
     db.add_all([user, role])
     db.flush()
-    conversation = AgentConversation(
-        organization_id=int(org.id), role_id=int(role.id)
-    )
+    conversation = AgentConversation(organization_id=int(org.id), role_id=int(role.id))
     db.add(conversation)
     db.flush()
     return user, role, conversation
@@ -120,22 +129,36 @@ def test_paid_boundaries_never_hold_the_agent_chat_transaction(db):
         stop_reason="tool_use",
     )
     final_round = SimpleNamespace(
-        content=[SimpleNamespace(type="text", text="Here are the strongest candidates.")],
+        content=[
+            SimpleNamespace(type="text", text="Here are the strongest candidates.")
+        ],
         stop_reason="end_turn",
     )
     responses = iter([tool_round, final_round])
     boundaries: list[tuple[str, bool]] = []
+    routed_calls: list[tuple[object, str]] = []
+    scoped_routes: list[object] = []
 
-    def model_call(*_args, **_kwargs):
+    def model_call(*args, **kwargs):
         boundaries.append(("model", db.in_transaction()))
+        routed_calls.append((args[0], kwargs["model"]))
         return next(responses)
 
     def run_tool(*_args, **_kwargs):
         boundaries.append(("tool", db.in_transaction()))
+        scoped_routes.append(current_route())
         return {"status": "ok"}
 
     with (
-        patch("app.agent_chat.engine.get_client_for_org", return_value=object()) as resolver,
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=SimpleNamespace(
+                messages=object(),
+                ai_routing_metered_transport=True,
+                ai_routing_sdk_max_retries=0,
+                organization_id=None,
+            ),
+        ) as resolver,
         patch("app.agent_chat.engine.reserve"),
         patch("app.agent_chat.engine.one_call", side_effect=model_call),
         patch("app.agent_chat.engine.dispatch_tool", side_effect=run_tool),
@@ -150,11 +173,24 @@ def test_paid_boundaries_never_hold_the_agent_chat_transaction(db):
 
     assert assistant.text == "Here are the strongest candidates."
     assert boundaries == [("model", False), ("tool", False), ("model", False)]
-    resolver.assert_called_once_with(
-        organization,
-        timeout=60.0,
-        max_retries=0,
-    )
+    routed_client = routed_calls[0][0]
+    assert routed_calls == [
+        (routed_client, "claude-haiku-4-5-20251001"),
+        (routed_client, "claude-haiku-4-5-20251001"),
+    ]
+    route = resolver.call_args.args[0]
+    assert route.decision.task is TaskKey.ROLE_CHAT_ORCHESTRATION
+    assert route.attribution.organization_id == organization.id
+    assert route.attribution.role_id == role.id
+    assert route.attribution.user_id == user.id
+    assert route.attribution.entity_id == str(conversation.id)
+    assert scoped_routes == [route]
+    assert current_route() is None
+    assert route.terminal_status is None
+    db.commit()
+    assert route.terminal_status == "cancelled"
+    assert assistant.model == "claude-haiku-4-5-20251001"
+    resolver.assert_called_once_with(route)
 
 
 def test_registry_exposes_every_new_command_once():
@@ -492,7 +528,10 @@ def test_model_round_cannot_batch_two_state_changes(db):
     )
 
     with (
-        patch("app.agent_chat.engine.get_client_for_org", return_value=object()),
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
         patch("app.agent_chat.engine.reserve"),
         patch("app.agent_chat.engine.one_call", side_effect=[tool_round, final_round]),
         patch("app.agent_chat.engine.dispatch_tool") as execute,
@@ -519,7 +558,10 @@ def test_model_round_cannot_batch_two_state_changes(db):
     )
     assert len(tool_results.content) == 2
     assert all(block["is_error"] is True for block in tool_results.content)
-    assert all("one state-changing command" in block["content"] for block in tool_results.content)
+    assert all(
+        "one state-changing command" in block["content"]
+        for block in tool_results.content
+    )
 
 
 def test_candidate_search_failure_is_terminal_sanitized_and_precedes_mutation(db):
@@ -559,7 +601,10 @@ def test_candidate_search_failure_is_terminal_sanitized_and_precedes_mutation(db
         raise AssertionError("duplicate organization flush should fail")
 
     with (
-        patch("app.agent_chat.engine.get_client_for_org", return_value=object()),
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
         patch("app.agent_chat.engine.reserve"),
         patch("app.agent_chat.engine.one_call", return_value=tool_round) as model_call,
         patch("app.agent_chat.engine.dispatch_tool", side_effect=fail_search),
@@ -651,7 +696,10 @@ def test_warning_shaped_search_failure_is_terminal_and_discards_raw_message(
     failure_shape["warnings"][0]["message"] = raw_marker
 
     with (
-        patch("app.agent_chat.engine.get_client_for_org", return_value=object()),
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
         patch("app.agent_chat.engine.reserve"),
         patch(
             "app.agent_chat.engine.one_call",
@@ -707,7 +755,9 @@ def test_unexpected_non_search_tool_error_is_sanitized_before_model_followup(db)
         stop_reason="tool_use",
     )
     final_round = SimpleNamespace(
-        content=[SimpleNamespace(type="text", text="That tool could not be completed.")],
+        content=[
+            SimpleNamespace(type="text", text="That tool could not be completed.")
+        ],
         stop_reason="end_turn",
     )
 
@@ -718,7 +768,10 @@ def test_unexpected_non_search_tool_error_is_sanitized_before_model_followup(db)
         raise AssertionError("duplicate organization flush should fail")
 
     with (
-        patch("app.agent_chat.engine.get_client_for_org", return_value=object()),
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
         patch("app.agent_chat.engine.reserve"),
         patch(
             "app.agent_chat.engine.one_call",

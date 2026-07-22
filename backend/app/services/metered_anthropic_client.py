@@ -59,6 +59,7 @@ Streaming
 context manager and reads ``stream.get_final_message().usage`` after the
 ``with`` block exits. Callers iterate the stream exactly like before.
 """
+
 from __future__ import annotations
 
 import json
@@ -69,6 +70,13 @@ from typing import Any, Iterator, Optional
 
 from anthropic import Anthropic
 
+from ..components.ai_routing.pricing import (
+    RoutedPricing,
+    RoutedPricingContractError,
+    RoutedPricingOutcomeError,
+    resolve_routed_pricing,
+    resolve_routed_pricing_receipt,
+)
 from ..models.claude_call_log import ClaudeCallLog
 from ..models.usage_event import UsageEvent
 from ..platform.database import SessionLocal
@@ -113,6 +121,24 @@ def _extract_cache_creation_1h(usage: Any) -> Optional[int]:
         return None
 
 
+def _safe_call_log_usage_int(usage: Any, field: str) -> int:
+    """Return exact non-negative provider evidence, or a non-billable zero.
+
+    Receipt-error rows are intentionally excluded from settlement. Their call
+    log must still survive malformed SDK fields so operators retain the trace
+    and provider request ID that explain the protected hold.
+    """
+
+    if usage is None:
+        return 0
+    value = getattr(usage, field, 0)
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
 # Sentinel returned by ``MeteredMessages._extract_metering`` when a caller
 # explicitly opts out (``metering={"skip": True}``). We still strip the
 # kwarg from the SDK call but skip recording. Used by tests and by the
@@ -131,6 +157,8 @@ class MeteringRequiredError(ValueError):
 
 class ProviderAttemptMarkerError(RuntimeError):
     """Raised before the SDK when a paid attempt cannot be durably marked."""
+
+    provider_not_called = True
 
 
 class _MeteredMessages:
@@ -159,8 +187,7 @@ class _MeteredMessages:
 
     # ----- public API -----------------------------------------------------
 
-    @staticmethod
-    def _retry_context(metering: Any) -> tuple[int, Optional[int], Optional[str]]:
+    def _retry_context(self, metering: Any) -> tuple[int, Optional[int], Optional[str]]:
         """B1: pull retry threading hints off the metering dict.
 
         Callers that orchestrate their own retries (cv_match's
@@ -183,12 +210,57 @@ class _MeteredMessages:
                 parent = None
         trace = metering.get("trace_id")
         trace = str(trace) if trace else None
+        if parent is None and attempt > 0:
+            parent = self._routed_retry_parent(metering)
         return (attempt, parent, trace)
+
+    @staticmethod
+    def _routed_retry_parent(metering: dict[str, Any]) -> Optional[int]:
+        """Link an adapter-owned retry to the preceding physical call log.
+
+        Routed callers cannot know the independently committed call-log ID when
+        they render the next attempt. The immutable invocation/ordinal pair is
+        enough to recover that link without trusting feature code.
+        """
+
+        metadata = metering.get("metadata")
+        route = metadata.get("ai_routing") if isinstance(metadata, dict) else None
+        if not isinstance(route, dict):
+            return None
+        invocation_id = str(route.get("invocation_id") or "").strip()
+        try:
+            ordinal = int(route.get("attempt_ordinal"))
+        except (TypeError, ValueError):
+            return None
+        if not invocation_id or ordinal <= 1:
+            return None
+        previous_trace = f"ai-route:{invocation_id}:{ordinal - 1}"
+        try:
+            with SessionLocal() as session:
+                row = (
+                    session.query(ClaudeCallLog.id)
+                    .filter(ClaudeCallLog.trace_id == previous_trace)
+                    .order_by(ClaudeCallLog.id.desc())
+                    .first()
+                )
+                return int(row[0]) if row is not None else None
+        except Exception:
+            logger.exception(
+                "metered_anthropic: could not link routed retry parent trace=%s",
+                previous_trace,
+            )
+            return None
 
     def create(self, **kwargs: Any) -> Any:
         metering = self._extract_metering(kwargs)
-        self._ensure_provider_reservation(metering)
         model = str(kwargs.get("model") or "")
+        routed_pricing = resolve_routed_pricing(
+            metering,
+            model=model,
+            inference_geo=kwargs.get("inference_geo"),
+        )
+        self._reject_routed_service_tier_override(routed_pricing, kwargs)
+        self._ensure_provider_reservation(metering)
         feature_hint = self._feature_hint_from(metering)
         retry_attempt, parent_call_log_id, trace_id = self._retry_context(metering)
         try:
@@ -220,7 +292,7 @@ class _MeteredMessages:
                     else "sdk_error"
                 ),
                 error_reason=str(exc)[:500],
-                anthropic_request_id=None,
+                anthropic_request_id=self._extract_error_request_id(exc),
                 error_class=error_class,
                 http_status=http_status,
                 retry_attempt=retry_attempt,
@@ -231,6 +303,39 @@ class _MeteredMessages:
 
         usage = getattr(response, "usage", None)
         request_id = self._extract_request_id(response)
+        try:
+            routed_receipt = (
+                resolve_routed_pricing_receipt(
+                    metering,
+                    routed_pricing=routed_pricing,
+                    response=response,
+                )
+                if routed_pricing is not None
+                else None
+            )
+            provider_cost_usd_micro = (
+                routed_receipt.pricing.cost_usd_micro(usage)
+                if routed_receipt is not None and usage is not None
+                else None
+            )
+        except Exception as exc:
+            if routed_pricing is None:
+                raise
+            self._record_routed_receipt_error(
+                metering=metering,
+                requested_model=model,
+                response=response,
+                usage=usage,
+                feature_hint=feature_hint,
+                request_id=request_id,
+                retry_attempt=retry_attempt,
+                parent_call_log_id=parent_call_log_id,
+                trace_id=trace_id,
+                error=exc,
+            )
+            raise
+        if routed_receipt is not None:
+            model = routed_receipt.model_id
         usage_event: Optional[UsageEvent] = None
 
         if metering is not _SKIP:
@@ -239,11 +344,13 @@ class _MeteredMessages:
                 model=model,
                 metering=metering,
                 provider_request_id=request_id,
+                provider_cost_usd_micro=provider_cost_usd_micro,
             )
             usage_event = self._record_from_usage(
                 usage=usage,
                 model=model,
                 metering=metering,
+                provider_cost_usd_micro=provider_cost_usd_micro,
             )
 
         # Unconditional call_log write — the structural guarantee that
@@ -258,14 +365,22 @@ class _MeteredMessages:
             usage=usage,
             feature_hint=feature_hint,
             status=(
-                "metering_error"
-                if (
-                    usage is not None
-                    and isinstance(metering, dict)
-                    and metering.get("credit_reservation")
-                    and usage_event is None
+                (
+                    "routed_contract_mismatch"
+                    if usage is not None
+                    else "routed_contract_mismatch_no_usage"
                 )
-                else "ok" if usage is not None else "no_usage_on_response"
+                if routed_receipt is not None and routed_receipt.contract_mismatch
+                else (
+                    "metering_error_completed"
+                    if (
+                        usage is not None
+                        and isinstance(metering, dict)
+                        and metering.get("credit_reservation")
+                        and usage_event is None
+                    )
+                    else "ok" if usage is not None else "no_usage_on_response"
+                )
             ),
             error_reason=None,
             anthropic_request_id=request_id,
@@ -273,13 +388,69 @@ class _MeteredMessages:
             retry_attempt=retry_attempt,
             parent_call_log_id=parent_call_log_id,
             trace_id=trace_id,
+            provider_cost_usd_micro=provider_cost_usd_micro,
         )
+        if routed_receipt is not None and routed_receipt.contract_mismatch:
+            raise RoutedPricingOutcomeError(
+                "billed Anthropic response model or region differs from its route"
+            )
         return response
+
+    def _record_routed_receipt_error(
+        self,
+        *,
+        metering: dict[str, Any],
+        requested_model: str,
+        response: Any,
+        usage: Any,
+        feature_hint: Optional[str],
+        request_id: Optional[str],
+        retry_attempt: int,
+        parent_call_log_id: Optional[int],
+        trace_id: Optional[str],
+        error: BaseException,
+    ) -> None:
+        """Persist post-provider, price-unknown evidence before propagating.
+
+        Once transport returned, a malformed or unpriceable receipt is never a
+        pre-call contract failure. The hold remains protected as known-billable
+        with unknown usage cost, and the traced call log gives reconciliation a
+        durable incident record without inventing a fallback price.
+        """
+
+        actual_model = str(getattr(response, "model", None) or requested_model)
+        self._mark_provider_success(
+            usage=None,
+            model=actual_model,
+            metering=metering,
+            provider_request_id=request_id,
+        )
+        self._record_call_log_safe(
+            organization_id=self._call_org_id(metering),
+            model=actual_model,
+            usage=usage,
+            feature_hint=feature_hint,
+            status="routed_pricing_receipt_error",
+            error_reason=str(error)[:500],
+            anthropic_request_id=request_id,
+            error_class="routed_pricing_receipt",
+            retry_attempt=retry_attempt,
+            parent_call_log_id=parent_call_log_id,
+            trace_id=trace_id,
+            cost_unknown=True,
+        )
 
     def stream(self, **kwargs: Any):
         metering = self._extract_metering(kwargs)
         if metering is _SKIP:
             return self._inner.stream(**kwargs)
+        model = str(kwargs.get("model") or "")
+        routed_pricing = resolve_routed_pricing(
+            metering,
+            model=model,
+            inference_geo=kwargs.get("inference_geo"),
+        )
+        self._reject_routed_service_tier_override(routed_pricing, kwargs)
         # Anthropic does not start the paid request until the returned context
         # manager is entered. Defer both the hold and attempt marker until
         # ``__enter__`` so constructing-but-never-using a stream cannot strand
@@ -288,8 +459,9 @@ class _MeteredMessages:
         return _MeteredStreamCtx(
             inner=inner_cm,
             messages=self,
-            model=str(kwargs.get("model") or ""),
+            model=model,
             metering=metering,
+            routed_pricing=routed_pricing,
         )
 
     # Async surface — kept thin and currently unused. Added so anyone
@@ -299,28 +471,125 @@ class _MeteredMessages:
         metering = self._extract_metering(kwargs)
         if metering is _SKIP:
             return await self._inner.create(**kwargs)
+        model = str(kwargs.get("model") or "")
+        routed_pricing = resolve_routed_pricing(
+            metering,
+            model=model,
+            inference_geo=kwargs.get("inference_geo"),
+        )
+        self._reject_routed_service_tier_override(routed_pricing, kwargs)
         self._ensure_provider_reservation(metering)
+        feature_hint = self._feature_hint_from(metering)
+        retry_attempt, parent_call_log_id, trace_id = self._retry_context(metering)
         try:
             response = await self._inner.create(**kwargs)
         except Exception as exc:
-            release_provider_usage_if_definitely_nonbillable(
-                metering.get("credit_reservation"),
+            reservation_payload = metering.get("credit_reservation")
+            released = release_provider_usage_if_definitely_nonbillable(
+                reservation_payload,
                 error=exc,
                 reason="async_sdk_error",
             )
+            error_class, http_status = self._classify_exception(exc)
+            self._record_call_log_safe(
+                organization_id=self._call_org_id(metering),
+                model=model,
+                usage=None,
+                feature_hint=feature_hint,
+                status=(
+                    "sdk_ambiguous_error"
+                    if reservation_payload and not released
+                    else "sdk_error"
+                ),
+                error_reason=str(exc)[:500],
+                anthropic_request_id=self._extract_error_request_id(exc),
+                error_class=error_class,
+                http_status=http_status,
+                retry_attempt=retry_attempt,
+                parent_call_log_id=parent_call_log_id,
+                trace_id=trace_id,
+            )
             raise
         usage = getattr(response, "usage", None)
+        request_id = self._extract_request_id(response)
+        try:
+            routed_receipt = (
+                resolve_routed_pricing_receipt(
+                    metering,
+                    routed_pricing=routed_pricing,
+                    response=response,
+                )
+                if routed_pricing is not None
+                else None
+            )
+            provider_cost_usd_micro = (
+                routed_receipt.pricing.cost_usd_micro(usage)
+                if routed_receipt is not None and usage is not None
+                else None
+            )
+        except Exception as exc:
+            if routed_pricing is None:
+                raise
+            self._record_routed_receipt_error(
+                metering=metering,
+                requested_model=model,
+                response=response,
+                usage=usage,
+                feature_hint=feature_hint,
+                request_id=request_id,
+                retry_attempt=retry_attempt,
+                parent_call_log_id=parent_call_log_id,
+                trace_id=trace_id,
+                error=exc,
+            )
+            raise
+        if routed_receipt is not None:
+            model = routed_receipt.model_id
         self._mark_provider_success(
             usage=usage,
-            model=str(kwargs.get("model") or ""),
+            model=model,
             metering=metering,
-            provider_request_id=self._extract_request_id(response),
+            provider_request_id=request_id,
+            provider_cost_usd_micro=provider_cost_usd_micro,
         )
-        self._record_from_usage(
+        usage_event = self._record_from_usage(
             usage=usage,
-            model=str(kwargs.get("model") or ""),
+            model=model,
             metering=metering,
+            provider_cost_usd_micro=provider_cost_usd_micro,
         )
+        self._record_call_log_safe(
+            organization_id=self._call_org_id(metering),
+            model=model,
+            usage=usage,
+            feature_hint=feature_hint,
+            status=(
+                (
+                    "routed_contract_mismatch"
+                    if usage is not None
+                    else "routed_contract_mismatch_no_usage"
+                )
+                if routed_receipt is not None and routed_receipt.contract_mismatch
+                else (
+                    "metering_error_completed"
+                    if usage is not None
+                    and metering.get("credit_reservation")
+                    and usage_event is None
+                    else "ok" if usage is not None else "no_usage_on_response"
+                )
+            ),
+            error_reason=None,
+            anthropic_request_id=request_id,
+            usage_event_id=int(usage_event.id) if usage_event is not None else None,
+            retry_attempt=retry_attempt,
+            parent_call_log_id=parent_call_log_id,
+            trace_id=trace_id,
+            provider_cost_usd_micro=provider_cost_usd_micro,
+        )
+        if routed_receipt is not None and routed_receipt.contract_mismatch:
+            raise RoutedPricingOutcomeError(
+                "billed Anthropic response model or region differs from its route"
+            )
         return response
 
     # ----- internals ------------------------------------------------------
@@ -338,16 +607,14 @@ class _MeteredMessages:
             # so attribution is *visible* but flagged. Better than dropping.
             logger.warning(
                 "metered_anthropic: call to %s did not pass `metering=` — "
-                "falling back to Feature.OTHER. Add `metering={\"feature\": Feature.X, ...}` "
+                'falling back to Feature.OTHER. Add `metering={"feature": Feature.X, ...}` '
                 "to attribute spend correctly.",
                 kwargs.get("model") or "<unknown-model>",
             )
             return {"feature": Feature.OTHER}
 
         if not isinstance(meter, dict):
-            raise TypeError(
-                f"`metering` must be a dict, got {type(meter).__name__}"
-            )
+            raise TypeError(f"`metering` must be a dict, got {type(meter).__name__}")
 
         if meter.get("skip"):
             return _SKIP
@@ -408,9 +675,11 @@ class _MeteredMessages:
                 "invalid provider credit reservation payload"
             )
 
+        attempt_ref = self._routed_attempt_ref(metering)
         if not mark_provider_attempt_started(
             reservation_payload,
             provider="anthropic",
+            attempt_ref=attempt_ref,
         ):
             release_provider_usage(
                 reservation_payload,
@@ -418,6 +687,37 @@ class _MeteredMessages:
             )
             raise ProviderAttemptMarkerError(
                 "could not durably mark Anthropic provider attempt"
+            )
+
+    @staticmethod
+    def _routed_attempt_ref(metering: dict[str, Any]) -> Optional[str]:
+        """Return the adapter's exact marker identity for idempotent re-marking."""
+
+        metadata = metering.get("metadata")
+        route = metadata.get("ai_routing") if isinstance(metadata, dict) else None
+        if not isinstance(route, dict):
+            return None
+        invocation_id = str(route.get("invocation_id") or "").strip()
+        try:
+            ordinal = int(route.get("attempt_ordinal"))
+        except (TypeError, ValueError) as exc:
+            raise ProviderAttemptMarkerError(
+                "routed metering requires an integer attempt ordinal"
+            ) from exc
+        if not invocation_id or ordinal <= 0:
+            raise ProviderAttemptMarkerError(
+                "routed metering requires an invocation and positive attempt ordinal"
+            )
+        return f"{invocation_id}:{ordinal}"
+
+    @staticmethod
+    def _reject_routed_service_tier_override(
+        routed_pricing: RoutedPricing | None,
+        kwargs: dict[str, Any],
+    ) -> None:
+        if routed_pricing is not None and kwargs.get("service_tier") is not None:
+            raise RoutedPricingContractError(
+                "routed Anthropic Messages service tier is control-plane-owned"
             )
 
     # ----- claude_call_log helpers (P0 — source-of-truth log) ------------
@@ -487,10 +787,25 @@ class _MeteredMessages:
         """Pull Anthropic's request_id from the response for cross-ref with
         the Console Logs page during incident response. Best effort — the
         SDK has put it in different places across versions."""
-        for path in ("id", "_request_id"):
+        # Prefer the HTTP request identity when the SDK exposes it; fall back
+        # to the message ID for older response/stream objects.
+        for path in ("_request_id", "id"):
             val = getattr(response, path, None)
             if val:
                 return str(val)
+        return None
+
+    @staticmethod
+    def _extract_error_request_id(error: Any) -> Optional[str]:
+        """Best-effort provider request identity from an SDK exception."""
+
+        for source in (error, getattr(error, "response", None)):
+            if source is None:
+                continue
+            for attribute in ("request_id", "_request_id", "id"):
+                value = getattr(source, attribute, None)
+                if value:
+                    return str(value)
         return None
 
     @staticmethod
@@ -579,6 +894,8 @@ class _MeteredMessages:
         parent_call_log_id: Optional[int] = None,
         trace_id: Optional[str] = None,
         service_tier: str = "standard",
+        provider_cost_usd_micro: Optional[int] = None,
+        cost_unknown: bool = False,
     ) -> bool:
         """Write one ``ClaudeCallLog`` row. Never raises — call_log failures
         must not break Claude calls. Logs at WARNING so ops sees them.
@@ -590,13 +907,11 @@ class _MeteredMessages:
         every call lands a row, regardless of whether the application
         layer's metering succeeded.
         """
-        input_tokens = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
-        output_tokens = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
-        cache_read_tokens = (
-            int(getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
-        )
-        cache_creation_tokens = (
-            int(getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
+        input_tokens = _safe_call_log_usage_int(usage, "input_tokens")
+        output_tokens = _safe_call_log_usage_int(usage, "output_tokens")
+        cache_read_tokens = _safe_call_log_usage_int(usage, "cache_read_input_tokens")
+        cache_creation_tokens = _safe_call_log_usage_int(
+            usage, "cache_creation_input_tokens"
         )
         # Anthropic returns the 5m/1h split nested under
         # ``usage.cache_creation`` (CacheCreation object). We persist
@@ -605,18 +920,26 @@ class _MeteredMessages:
         # ``cache_creation_tokens`` stays as the source of truth for
         # the total — pricing derives 5m = total - 1h.
         cache_creation_1h_tokens = _extract_cache_creation_1h(usage)
-        try:
-            cost_micro = raw_cost_usd_micro(
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                cache_read_tokens=cache_read_tokens,
-                cache_creation_tokens=cache_creation_tokens,
-                cache_creation_1h_tokens=cache_creation_1h_tokens,
-                model=model,
-                service_tier=service_tier,
-            )
-        except Exception:
+        if cost_unknown:
+            # The provider returned, but the routed registry could not price
+            # its receipt exactly. Zero is a sentinel on this non-billable
+            # evidence status, not an invented cost used for settlement.
             cost_micro = 0
+        elif provider_cost_usd_micro is not None:
+            cost_micro = max(0, int(provider_cost_usd_micro))
+        else:
+            try:
+                cost_micro = raw_cost_usd_micro(
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cache_read_tokens=cache_read_tokens,
+                    cache_creation_tokens=cache_creation_tokens,
+                    cache_creation_1h_tokens=cache_creation_1h_tokens,
+                    model=model,
+                    service_tier=service_tier,
+                )
+            except Exception:
+                cost_micro = 0
 
         row = ClaudeCallLog(
             organization_id=organization_id,
@@ -671,6 +994,7 @@ class _MeteredMessages:
         model: str,
         metering: dict[str, Any],
         service_tier: str = "standard",
+        provider_cost_usd_micro: Optional[int] = None,
     ) -> Optional[dict[str, Any]]:
         """Build one JSON-safe receipt shared by live and deferred writes."""
 
@@ -692,9 +1016,7 @@ class _MeteredMessages:
             "model": str(model),
             "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
             "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
-            "cache_read_tokens": int(
-                getattr(usage, "cache_read_input_tokens", 0) or 0
-            ),
+            "cache_read_tokens": int(getattr(usage, "cache_read_input_tokens", 0) or 0),
             "cache_creation_tokens": int(
                 getattr(usage, "cache_creation_input_tokens", 0) or 0
             ),
@@ -709,6 +1031,7 @@ class _MeteredMessages:
                 else None
             ),
             "metadata": safe_metadata,
+            "provider_cost_usd_micro": provider_cost_usd_micro,
         }
 
     def _mark_provider_success(
@@ -719,6 +1042,7 @@ class _MeteredMessages:
         metering: dict[str, Any],
         provider_request_id: Optional[str],
         service_tier: str = "standard",
+        provider_cost_usd_micro: Optional[int] = None,
     ) -> None:
         reservation = metering.get("credit_reservation")
         if not reservation:
@@ -728,6 +1052,7 @@ class _MeteredMessages:
             model=model,
             metering=metering,
             service_tier=service_tier,
+            provider_cost_usd_micro=provider_cost_usd_micro,
         )
         if not mark_provider_usage_succeeded(
             reservation,
@@ -749,6 +1074,7 @@ class _MeteredMessages:
         usage: Any,
         model: str,
         metering: dict[str, Any],
+        provider_cost_usd_micro: Optional[int] = None,
     ) -> Optional[UsageEvent]:
         """Pull token counts off ``response.usage`` and write a usage_event.
 
@@ -763,6 +1089,7 @@ class _MeteredMessages:
             usage=usage,
             model=model,
             metering=metering,
+            provider_cost_usd_micro=provider_cost_usd_micro,
         )
         if payload is None:
             logger.warning(
@@ -793,6 +1120,7 @@ class _MeteredMessages:
         entity_id: Optional[str],
         metadata: Optional[dict],
         service_tier: str = "standard",
+        provider_cost_usd_micro: Optional[int] = None,
         credit_reservation: Optional[dict] = None,
     ) -> Optional[UsageEvent]:
         """Write a usage_event row in a fresh, independently-committed
@@ -824,6 +1152,7 @@ class _MeteredMessages:
                     role_id=role_id,
                     entity_id=entity_id,
                     metadata=metadata,
+                    provider_cost_usd_micro=provider_cost_usd_micro,
                     credit_reservation=credit_reservation,
                 )
                 fresh.commit()
@@ -840,7 +1169,9 @@ class _MeteredMessages:
             logger.exception(
                 "metered_anthropic: failed to record usage_event "
                 "(org=%s feature=%s model=%s)",
-                organization_id, feature, model,
+                organization_id,
+                feature,
+                model,
             )
             return None
 
@@ -858,11 +1189,13 @@ class _MeteredStreamCtx:
         messages: _MeteredMessages,
         model: str,
         metering: dict[str, Any],
+        routed_pricing: RoutedPricing | None,
     ):
         self._inner = inner
         self._messages = messages
         self._model = model
         self._metering = metering
+        self._routed_pricing = routed_pricing
         self._stream = None
 
     def __enter__(self):
@@ -877,6 +1210,9 @@ class _MeteredStreamCtx:
                 reason="stream_enter_error",
             )
             error_class, http_status = self._messages._classify_exception(exc)
+            retry_attempt, parent_call_log_id, trace_id = self._messages._retry_context(
+                self._metering
+            )
             self._messages._record_call_log_safe(
                 organization_id=self._call_org_id(self._metering),
                 model=self._model,
@@ -888,9 +1224,12 @@ class _MeteredStreamCtx:
                     else "sdk_error"
                 ),
                 error_reason=str(exc)[:500],
-                anthropic_request_id=None,
+                anthropic_request_id=self._messages._extract_error_request_id(exc),
                 error_class=error_class,
                 http_status=http_status,
+                retry_attempt=retry_attempt,
+                parent_call_log_id=parent_call_log_id,
+                trace_id=trace_id,
             )
             raise
         return self._stream
@@ -899,71 +1238,147 @@ class _MeteredStreamCtx:
         # Snapshot final usage *before* closing the stream — the SDK
         # exposes it on the live stream object and on the final message.
         usage = None
+        final_message = None
+        final_message_error: BaseException | None = None
         if self._stream is not None:
             try:
                 final_message = self._stream.get_final_message()
                 usage = getattr(final_message, "usage", None)
-            except Exception:
+            except BaseException as final_exc:
+                final_message_error = final_exc
                 logger.debug(
                     "metered_anthropic: get_final_message() failed; "
                     "skipping meter for this stream",
                     exc_info=True,
                 )
-        result = self._inner.__exit__(exc_type, exc, tb)
+        inner_exit_error: BaseException | None = None
+        try:
+            result = self._inner.__exit__(exc_type, exc, tb)
+        except BaseException as inner_exc:
+            # Closing the SDK stream can itself fail after provider acceptance.
+            # Persist whatever receipt evidence we captured before propagating.
+            inner_exit_error = inner_exc
+            result = False
+
+        retry_attempt, parent_call_log_id, trace_id = self._messages._retry_context(
+            self._metering
+        )
+        request_id = (
+            self._messages._extract_request_id(final_message)
+            if final_message is not None
+            else self._messages._extract_error_request_id(
+                inner_exit_error or exc or final_message_error
+            )
+        )
+        routed_receipt = None
+        receipt_error: BaseException | None = None
+        provider_cost_usd_micro = None
+        try:
+            routed_receipt = (
+                resolve_routed_pricing_receipt(
+                    self._metering,
+                    routed_pricing=self._routed_pricing,
+                    response=final_message,
+                )
+                if self._routed_pricing is not None and final_message is not None
+                else None
+            )
+            provider_cost_usd_micro = (
+                routed_receipt.pricing.cost_usd_micro(usage)
+                if routed_receipt is not None and usage is not None
+                else None
+            )
+        except BaseException as pricing_exc:
+            receipt_error = pricing_exc
+        if routed_receipt is not None:
+            self._model = routed_receipt.model_id
+
+        interrupted = exc_type is not None or inner_exit_error is not None
+        evidence_error = inner_exit_error or exc or final_message_error
 
         # A client disconnect / generator cancellation can interrupt a stream
         # after Anthropic has already billed tokens.  If the SDK exposes a
         # usage snapshot, meter it even on exceptional exit; otherwise those
         # are exactly the paid calls reconciliation can never attribute.
         self._messages._mark_provider_success(
-            usage=usage,
+            # An invalid routed receipt is known provider success, but its cost
+            # is not safe to reconstruct until the receipt contract is fixed.
+            usage=None if receipt_error is not None else usage,
             model=self._model,
             metering=self._metering,
-            provider_request_id=None,
+            provider_request_id=request_id,
+            provider_cost_usd_micro=provider_cost_usd_micro,
         )
-        if usage is not None:
-            usage_event: Optional[UsageEvent] = None
+        usage_event: Optional[UsageEvent] = None
+        if usage is not None and receipt_error is None:
             try:
                 usage_event = self._messages._record_from_usage(
                     usage=usage,
                     model=self._model,
                     metering=self._metering,
+                    provider_cost_usd_micro=provider_cost_usd_micro,
                 )
             except Exception:
-                logger.exception(
-                    "metered_anthropic: stream meter write failed"
-                )
-            # Stream path used to ONLY write a usage_event — the
-            # claude_call_log row was silently skipped. That meant the
-            # taali_chat path (the only streaming caller in prod) bypassed
-            # the #237 "every call writes a call_log row" invariant, so
-            # those calls never showed up in reconciliation. Volume is
-            # small (taali_chat = $0.01/day over 3 days as of 2026-05-26)
-            # but it's a latent leak — closing it now so any future
-            # streaming caller doesn't reopen the gap.
-            try:
-                self._messages._record_call_log_safe(
-                    organization_id=self._call_org_id(self._metering),
-                    model=self._model,
-                    usage=usage,
-                    feature_hint=self._messages._feature_hint_from(self._metering),
-                    status=(
-                        "metering_error"
-                        if (
-                            self._metering.get("credit_reservation")
-                            and usage_event is None
-                        )
-                        else "ok" if exc_type is None else "interrupted"
-                    ),
-                    error_reason=None if exc_type is None else getattr(exc_type, "__name__", str(exc_type)),
-                    anthropic_request_id=None,
-                    usage_event_id=int(usage_event.id) if usage_event is not None else None,
-                )
-            except Exception:
-                logger.exception(
-                    "metered_anthropic: stream call_log write failed"
-                )
+                logger.exception("metered_anthropic: stream meter write failed")
+
+        if receipt_error is not None:
+            status = "routed_pricing_receipt_error"
+            error_reason = str(receipt_error)[:500]
+            error_class = "routed_pricing_receipt"
+        elif routed_receipt is not None and routed_receipt.contract_mismatch:
+            status = (
+                "routed_contract_mismatch"
+                if usage is not None
+                else "routed_contract_mismatch_no_usage"
+            )
+            error_reason = "provider response violated the routed model/region contract"
+            error_class = "routed_contract_mismatch"
+        elif usage is None:
+            status = "interrupted_no_usage" if interrupted else "no_usage_on_response"
+            error_reason = (
+                type(evidence_error).__name__ if evidence_error is not None else None
+            )
+            error_class = None
+        elif self._metering.get("credit_reservation") and usage_event is None:
+            status = (
+                "metering_error_interrupted"
+                if interrupted
+                else "metering_error_completed"
+            )
+            error_reason = (
+                type(evidence_error).__name__
+                if evidence_error is not None
+                else "usage_event_write_failed"
+            )
+            error_class = None
         else:
+            status = "interrupted" if interrupted else "ok"
+            error_reason = (
+                type(evidence_error).__name__ if evidence_error is not None else None
+            )
+            error_class = None
+
+        # Every entered stream writes evidence, including completed or
+        # interrupted streams with no usage snapshot. Routed retry/trace
+        # threading mirrors the non-streaming path exactly.
+        self._messages._record_call_log_safe(
+            organization_id=self._call_org_id(self._metering),
+            model=self._model,
+            usage=usage,
+            feature_hint=self._messages._feature_hint_from(self._metering),
+            status=status,
+            error_reason=error_reason,
+            anthropic_request_id=request_id,
+            usage_event_id=int(usage_event.id) if usage_event is not None else None,
+            error_class=error_class,
+            retry_attempt=retry_attempt,
+            parent_call_log_id=parent_call_log_id,
+            trace_id=trace_id,
+            provider_cost_usd_micro=provider_cost_usd_micro,
+            cost_unknown=receipt_error is not None,
+        )
+
+        if usage is None:
             # A completed stream with no usage is outcome-ambiguous: Anthropic
             # may still have accepted/billed it. The pre-call marker (or the
             # success/usage-unknown marker above) deliberately retains the
@@ -973,6 +1388,19 @@ class _MeteredStreamCtx:
                 "provider hold for reconciliation (model=%s error=%s)",
                 self._model,
                 getattr(exc_type, "__name__", None),
+            )
+
+        if inner_exit_error is not None:
+            raise inner_exit_error
+        if not interrupted and receipt_error is not None:
+            raise receipt_error
+        if (
+            not interrupted
+            and routed_receipt is not None
+            and routed_receipt.contract_mismatch
+        ):
+            raise RoutedPricingOutcomeError(
+                "billed Anthropic response model or region differs from its route"
             )
         return result
 
@@ -1035,9 +1463,7 @@ class _MeteredBatches:
             )
             metering = {"feature": Feature.OTHER}
         if not isinstance(metering, dict):
-            raise TypeError(
-                f"`metering` must be a dict, got {type(metering).__name__}"
-            )
+            raise TypeError(f"`metering` must be a dict, got {type(metering).__name__}")
         feature = metering.get("feature")
         if feature is None:
             raise MeteringRequiredError(
@@ -1060,9 +1486,7 @@ class _MeteredBatches:
         reservation_entries = [
             (str(custom_id), per, per.get("credit_reservation"))
             for custom_id, per in (
-                by_custom_id.items()
-                if isinstance(by_custom_id, dict)
-                else ()
+                by_custom_id.items() if isinstance(by_custom_id, dict) else ()
             )
             if isinstance(per, dict) and per.get("credit_reservation")
         ]
@@ -1108,16 +1532,12 @@ class _MeteredBatches:
                 )
                 self._messages._record_call_log_safe(
                     organization_id=(
-                        int(evidence_org_id)
-                        if evidence_org_id is not None
-                        else None
+                        int(evidence_org_id) if evidence_org_id is not None else None
                     ),
                     model=request_models.get(custom_id, ""),
                     usage=None,
                     feature_hint=feature_str,
-                    status=(
-                        "sdk_error" if released else "sdk_ambiguous_error"
-                    ),
+                    status=("sdk_error" if released else "sdk_ambiguous_error"),
                     error_reason=str(exc)[:500],
                     anthropic_request_id=None,
                     service_tier="batch",
@@ -1161,7 +1581,9 @@ class _MeteredBatches:
                         model=model,
                         request_count=len(requests),
                         status="submitted",
-                        context=by_custom_id if isinstance(by_custom_id, dict) else None,
+                        context=(
+                            by_custom_id if isinstance(by_custom_id, dict) else None
+                        ),
                     )
                 )
                 session.commit()
@@ -1267,9 +1689,7 @@ class _MeteredBatches:
                 batch_id,
             )
 
-    def _meter_one_result(
-        self, entry: Any, *, batch_row: Any, context: dict
-    ) -> str:
+    def _meter_one_result(self, entry: Any, *, batch_row: Any, context: dict) -> str:
         """Meter one result entry. Returns ``"metered"``, ``"skipped"``
         (nothing billable) or ``"failed"`` (a metering write was swallowed
         — the caller must not latch, so the next results() call retries).
@@ -1381,7 +1801,9 @@ class _MeteredBatches:
             status="ok",
             error_reason=None,
             anthropic_request_id=(
-                str(getattr(message, "id", None)) if getattr(message, "id", None) else None
+                str(getattr(message, "id", None))
+                if getattr(message, "id", None)
+                else None
             ),
             usage_event_id=usage_event_id,
             service_tier="batch",
@@ -1451,9 +1873,18 @@ class MeteredAnthropicClient:
     ``metering=`` kwarg on ``messages.create`` / ``messages.stream``.
     """
 
-    def __init__(self, *, inner: Anthropic, organization_id: Optional[int]):
+    ai_routing_metered_transport = True
+
+    def __init__(
+        self,
+        *,
+        inner: Anthropic,
+        organization_id: Optional[int],
+        sdk_max_retries: Optional[int] = None,
+    ):
         self._inner = inner
         self._organization_id = organization_id
+        self.ai_routing_sdk_max_retries = sdk_max_retries
         self._messages = _MeteredMessages(
             inner=inner.messages,
             organization_id=organization_id,
@@ -1494,5 +1925,6 @@ def temporary_metering_override(
     overridden = MeteredAnthropicClient(
         inner=client._inner,
         organization_id=organization_id,
+        sdk_max_retries=client.ai_routing_sdk_max_retries,
     )
     yield overridden

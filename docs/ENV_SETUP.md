@@ -64,6 +64,7 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 | `CLAUDE_SCORING_BATCH_MODEL` | No | `claude-haiku-4-5-20251001` | Cost-optimised model used by batch scoring jobs. Falls back to `CLAUDE_MODEL` when unset. |
 | `CLAUDE_CHAT_MODEL` | No | `claude-haiku-4-5-20251001` | Pinned candidate-facing agentic-chat model; independent of `CLAUDE_MODEL`. |
 | `CLAUDE_AGENT_AUTONOMOUS_MODEL` | No | `""` | Optional autonomous cohort-loop override. Empty means the pinned `CLAUDE_MODEL` is used; a per-role `agent_model` remains the final override. |
+| `AI_ROUTER_MODEL_OVERRIDES_JSON` | No | `""` | Optional JSON object mapping registered AI task keys to deployment IDs or approved aliases. Unknown, retired, unpriced, or task-incompatible values fail before provider execution. |
 | `CLAUDE_SCORING_MODEL` | No | `""` | **Deprecated.** Old single-model selector. If set it must equal `CLAUDE_MODEL`, otherwise startup fails. Leave unset on new deployments. |
 | `MAX_TOKENS_PER_RESPONSE` | No | `1024` | Maximum tokens returned per Claude response. |
 | `ANTHROPIC_ADMIN_API_KEY` | No | `""` | Anthropic Admin API key for provisioning per-org workspace keys. Empty = workspace provisioning disabled, all calls fall back to `ANTHROPIC_API_KEY`. |

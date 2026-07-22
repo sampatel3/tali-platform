@@ -13,6 +13,7 @@ Two modes, switched by ``settings.USAGE_METER_LIVE``:
 
 All accounting is in micro-credits (see ``pricing_service``).
 """
+
 from __future__ import annotations
 
 import logging
@@ -178,7 +179,9 @@ def record_event(
     # unlimited free re-scoring. ``cost_usd_micro`` and the token columns,
     # however, must reflect what Anthropic ACTUALLY billed us for THIS event.
     charged = credits_charged(
-        feature=feature_enum, cost_usd_micro=raw_anthropic_cost_micro, cache_hit=cache_hit
+        feature=feature_enum,
+        cost_usd_micro=raw_anthropic_cost_micro,
+        cache_hit=cache_hit,
     )
     pricing = feature_pricing(feature_enum)
     multiplier = (
@@ -215,7 +218,14 @@ def record_event(
     # spend stays queryable and reconciliation can tell standard vs batch apart.
     meta = dict(metadata or {})
     if provider_cost_usd_micro is not None:
-        meta.setdefault("cost_source", "provider_reported")
+        route = meta.get("ai_routing")
+        route_cost_authority = (
+            route.get("cost_authority") if isinstance(route, dict) else None
+        )
+        meta.setdefault(
+            "cost_source",
+            str(route_cost_authority or "provider_reported"),
+        )
     if service_tier and service_tier != "standard":
         meta.setdefault("service_tier", service_tier)
 
@@ -264,7 +274,11 @@ def record_event(
     else:
         logger.debug(
             "usage_metering[shadow] org=%s feature=%s tokens=%s/%s charged=%s",
-            organization_id, feature_enum.value, input_tokens, output_tokens, charged,
+            organization_id,
+            feature_enum.value,
+            input_tokens,
+            output_tokens,
+            charged,
         )
 
     return event
@@ -327,9 +341,7 @@ def grant_credits(
 
     if external_ref:
         existing = (
-            db.query(UsageGrant)
-            .filter(UsageGrant.external_ref == external_ref)
-            .first()
+            db.query(UsageGrant).filter(UsageGrant.external_ref == external_ref).first()
         )
         if existing is not None:
             return None

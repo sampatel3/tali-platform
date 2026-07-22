@@ -266,7 +266,7 @@ def test_marker_and_meter_failure_after_provider_success_never_refunds_hold(
     assert db.query(UsageEvent).count() == 0
     assert (
         db.query(ClaudeCallLog)
-        .filter(ClaudeCallLog.status == "metering_error")
+        .filter(ClaudeCallLog.status == "metering_error_completed")
         .count()
         == 1
     )

@@ -1,15 +1,15 @@
-"""Claude rerank for soft NL-search criteria.
+"""Routed model verification for soft NL-search criteria.
 
 When a query carries qualitative phrases ("large enterprise", "in
-production") that the SQL layer can't decide, this module asks Claude
+production") that the SQL layer can't decide, this module asks a routed model
 which of the SQL-passing candidates actually match. Each candidate is
 sent with a compact summary plus their graph neighbourhood (top
 companies, schools, skills, colleagues) so the model can reason about
 employer scale, peer cohort, etc.
 
-Single Claude call PER CANDIDATE in v1. Caller bounds the input set
-(``RERANK_TOP_N`` in runner.py). Each call is ~$0.001 at Haiku rates;
-for a 50-candidate rerank, that's ~$0.05 worst-case per query.
+One logical route per candidate. The caller bounds the input set
+(``RERANK_TOP_N`` in runner.py), while the task profile owns deployment,
+iteration, output, and cost ceilings.
 """
 
 from __future__ import annotations
@@ -21,13 +21,19 @@ from typing import Literal
 
 from sqlalchemy.orm import Session
 
-from ..llm import strip_json_fences
-from . import MODEL_VERSION
+from ..components.ai_routing import (
+    RoutingAttribution,
+    TaskKey,
+    estimate_anthropic_messages,
+    prepare_route,
+    routed_messages_client,
+)
+from ..llm import CallUsage, MeteringContext, one_call, strip_json_fences
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..services.pricing_service import Feature
 from ..services.metered_async_anthropic_client import GraphProviderAdmissionError
-from .metering import admitted_search_metering
+from .metering import search_metering
 
 logger = logging.getLogger("taali.candidate_search.rerank")
 
@@ -81,17 +87,10 @@ class _EvaluationResult:
     error_code: str | None = None
 
 
-def _resolve_anthropic_client(*, organization_id: int | None = None):
-    """Build a metered Anthropic client. ``organization_id`` is bound at
-    construction so every rerank call records to the right org without
-    each call repeating it."""
-    from ..services.claude_client_resolver import get_metered_client
-
-    return get_metered_client(organization_id=organization_id)
-
-
-def _build_candidate_summary(candidate: Candidate, application: CandidateApplication) -> dict:
-    """Compact summary used as Claude prompt context. Token-bounded by truncation."""
+def _build_candidate_summary(
+    candidate: Candidate, application: CandidateApplication
+) -> dict:
+    """Compact model context, token-bounded by truncation."""
     cv_sections = candidate.cv_sections or {}
     skills_top = (cv_sections.get("skills") or candidate.skills or [])[:30]
     experience = (cv_sections.get("experience") or [])[:6]
@@ -138,7 +137,9 @@ def _build_graph_context(
     except GraphProviderAdmissionError:
         raise
     except Exception as exc:
-        logger.debug("Graph context unavailable for candidate=%s: %s", candidate_id, exc)
+        logger.debug(
+            "Graph context unavailable for candidate=%s: %s", candidate_id, exc
+        )
         return None
 
 
@@ -146,7 +147,7 @@ _SYSTEM_PROMPT = (
     "You are a recruiter's qualitative filter. Given soft criteria and one "
     "candidate's profile (with optional graph neighbourhood), decide if the "
     "candidate clearly matches ALL the criteria.\n\n"
-    "Respond with ONLY this JSON: {\"match\": true|false, \"reason\": \"<short>\"}.\n"
+    'Respond with ONLY this JSON: {"match": true|false, "reason": "<short>"}.\n'
     "- 'match' is true ONLY when every soft criterion has supporting evidence.\n"
     "- 'reason' is one sentence, ≤25 words, citing the strongest evidence (or absence).\n"
     "- Do not invent facts. If evidence is absent, set match=false.\n"
@@ -160,10 +161,9 @@ def _shared_prefix_text(soft_criteria: list[str]) -> str:
     ``cache_control=ephemeral`` so Anthropic can serve it at the cheap
     cache-read rate on candidates 2..N.
 
-    Note: the cache only materializes when the cached prefix exceeds the
-    Haiku 4.5 minimum (~4096 tokens). Short queries (1-2 brief criteria)
-    won't actually cache — but the structural cost is zero, so we mark it
-    unconditionally and let Anthropic decide.
+    Short queries may not meet the selected deployment's minimum cacheable
+    prefix. The structural cost is zero, so we mark it unconditionally and let
+    the provider decide.
     """
     rendered_criteria = "\n".join(f"- {c}" for c in soft_criteria) or "(none)"
     return (
@@ -197,18 +197,20 @@ def _evaluate_one(
     summary: dict,
     graph: dict | None,
     client,
-    metrics: dict | None = None,
+    model: str,
+    usage: CallUsage | None = None,
     metering: dict | None = None,
+    messages: list[dict] | None = None,
 ) -> _EvaluationResult:
     """Return a completed positive/negative decision or an explicit error.
 
-    ``metrics`` (optional) is mutated in place to accumulate
+    ``usage`` (optional) accumulates
     ``input_tokens`` / ``output_tokens`` / ``cache_read_tokens`` /
     ``cache_creation_tokens`` across all candidates in a rerank batch,
     so the caller can observe whether prompt caching is actually
     materialising for this query.
     """
-    messages = [
+    messages = messages or [
         {
             "role": "user",
             "content": [
@@ -224,32 +226,22 @@ def _evaluate_one(
             ],
         }
     ]
-    if not metering or not metering.get("credit_reservation"):
+    if not metering or metering.get("organization_id") is None:
         return _EvaluationResult(status="error", error_code="metering_unavailable")
     try:
-        response = client.messages.create(
-            model=MODEL_VERSION,
+        response = one_call(
+            client,
+            model=model,
             max_tokens=RERANK_MAX_TOKENS,
             temperature=RERANK_TEMPERATURE,
             system=_SYSTEM_PROMPT,
             messages=messages,
-            metering=metering,
+            metering=MeteringContext.from_dict(
+                metering,
+                default_feature=Feature.CV_RERANK,
+            ),
+            usage_sink=usage,
         )
-        if metrics is not None:
-            usage = getattr(response, "usage", None)
-            if usage is not None:
-                metrics["input_tokens"] = metrics.get("input_tokens", 0) + int(
-                    getattr(usage, "input_tokens", 0) or 0
-                )
-                metrics["output_tokens"] = metrics.get("output_tokens", 0) + int(
-                    getattr(usage, "output_tokens", 0) or 0
-                )
-                metrics["cache_read_tokens"] = metrics.get("cache_read_tokens", 0) + int(
-                    getattr(usage, "cache_read_input_tokens", 0) or 0
-                )
-                metrics["cache_creation_tokens"] = metrics.get(
-                    "cache_creation_tokens", 0
-                ) + int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     except Exception as exc:
         logger.debug("Rerank model call failed: %s", exc)
         return _EvaluationResult(status="error", error_code="model_call_failed")
@@ -258,7 +250,9 @@ def _evaluate_one(
         raw = response.content[0].text  # type: ignore[attr-defined]
         text = strip_json_fences(str(raw or ""))
         decision = json.loads(text)
-        if not isinstance(decision, dict) or not isinstance(decision.get("match"), bool):
+        if not isinstance(decision, dict) or not isinstance(
+            decision.get("match"), bool
+        ):
             raise ValueError("match must be a JSON boolean")
     except (AttributeError, IndexError, TypeError, ValueError) as exc:
         logger.debug("Rerank response invalid: %s", exc)
@@ -279,7 +273,7 @@ def rerank_application_ids(
     role_id: int | None = None,
     application_ids: list[int],
     soft_criteria: list[str],
-    client=None,
+    route_client_factory=None,
     require_role_authority: bool = False,
 ) -> RerankBatchResult:
     """Tri-state verification for ``application_ids``.
@@ -290,17 +284,6 @@ def rerank_application_ids(
     """
     if not application_ids or not soft_criteria:
         return RerankBatchResult(application_ids=list(application_ids), outcomes=[])
-
-    if client is None:
-        try:
-            client = _resolve_anthropic_client(organization_id=organization_id)
-        except Exception as exc:
-            logger.warning("Rerank client init failed; skipping rerank: %s", exc)
-            # Let the runner retain the deterministic database matches while
-            # reporting rerank_applied=false/deep_checked=0. Returning the
-            # untouched ids here used to make the caller falsely claim that a
-            # complete evidence pass qualified every candidate.
-            raise RerankUnavailable("candidate evidence verification unavailable") from exc
 
     apps = (
         db.query(CandidateApplication)
@@ -313,7 +296,7 @@ def rerank_application_ids(
     )
     by_id = {int(a.id): a for a in apps}
 
-    metrics: dict = {}
+    usage = CallUsage()
     kept: list[int] = []
     outcomes: list[CandidateRerankOutcome] = []
     for app_id in application_ids:
@@ -328,6 +311,8 @@ def rerank_application_ids(
                 )
             )
             continue
+        execution = None
+        evaluation: _EvaluationResult | None = None
         try:
             candidate = application.candidate
             summary = _build_candidate_summary(candidate, application)
@@ -337,7 +322,38 @@ def rerank_application_ids(
                 role_id=role_id,
                 require_role_authority=bool(require_role_authority),
             )
-            call_metering = admitted_search_metering(
+            evaluation_messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": _shared_prefix_text(soft_criteria),
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                        {
+                            "type": "text",
+                            "text": _candidate_block_text(summary, graph),
+                        },
+                    ],
+                }
+            ]
+            execution = prepare_route(
+                TaskKey.SEARCH_RERANK,
+                request_estimate=estimate_anthropic_messages(
+                    system=_SYSTEM_PROMPT,
+                    messages=evaluation_messages,
+                    max_tokens=RERANK_MAX_TOKENS,
+                ),
+                attribution=RoutingAttribution(
+                    organization_id=int(organization_id),
+                    role_id=int(role_id) if role_id is not None else None,
+                    entity_id=f"application:{app_id}",
+                ),
+                operation="candidate_search.rerank_candidate",
+                require_role_authority=bool(require_role_authority),
+            )
+            call_metering = search_metering(
                 organization_id=organization_id,
                 role_id=role_id,
                 feature=Feature.CV_RERANK,
@@ -351,15 +367,24 @@ def rerank_application_ids(
                 soft_criteria=soft_criteria,
                 summary=summary,
                 graph=graph,
-                client=client,
-                metrics=metrics,
+                client=(route_client_factory or routed_messages_client)(execution),
+                model=execution.selected_model_id,
+                usage=usage,
                 metering=call_metering,
+                messages=evaluation_messages,
             )
         except Exception as exc:  # one admission/profile failure must stay local
             logger.debug("Rerank setup failed for app=%s: %s", app_id, exc)
             evaluation = _EvaluationResult(
                 status="error", error_code="verification_setup_failed"
             )
+        finally:
+            if execution is not None:
+                execution.finish_workflow(
+                    succeeded=(evaluation is not None and evaluation.status != "error")
+                )
+
+        assert evaluation is not None
 
         outcomes.append(
             CandidateRerankOutcome(
@@ -372,10 +397,17 @@ def rerank_application_ids(
         if evaluation.status != "not_qualified":
             kept.append(int(app_id))
 
-    if metrics:
-        cached = metrics.get("cache_read_tokens", 0)
-        written = metrics.get("cache_creation_tokens", 0)
-        billed = metrics.get("input_tokens", 0)
+    if any(
+        (
+            usage.input_tokens,
+            usage.output_tokens,
+            usage.cache_read_tokens,
+            usage.cache_creation_tokens,
+        )
+    ):
+        cached = usage.cache_read_tokens
+        written = usage.cache_creation_tokens
+        billed = usage.input_tokens
         total_input = cached + written + billed
         cache_hit_pct = (cached / total_input * 100.0) if total_input else 0.0
         logger.info(

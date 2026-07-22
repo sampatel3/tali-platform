@@ -18,8 +18,30 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
+from app.candidate_search import grounded_evidence as ge
 from app.candidate_search import top_candidates as tc
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
+
+
+@pytest.fixture(autouse=True)
+def _routing_seam(monkeypatch):
+    """Keep these search-behavior tests independent of durable router storage."""
+
+    monkeypatch.setattr(ge, "_redis", lambda: None)
+
+    class _Execution:
+        selected_model_id = "test-grounding-model"
+        last_attempt_model_id = "test-grounding-model"
+        decision = SimpleNamespace(
+            behavior_fingerprint="test-grounding-behavior",
+        )
+
+        def finish_workflow(self, *, succeeded: bool) -> None:
+            self.succeeded = succeeded
+
+    monkeypatch.setattr(ge, "prepare_route", lambda *_args, **_kwargs: _Execution())
 
 
 def _text_block(text, citations=None):
@@ -60,11 +82,17 @@ def _run_search(parsed, *, ids=None, database_matches=None):
     )
 
 
+def _route_factory(client):
+    return lambda _execution: client
+
+
 def _no_grounding_client(monkeypatch):
-    """Force the resolved grounding client to None (grounding unavailable)."""
-    monkeypatch.setattr(
-        "app.services.claude_client_resolver.get_metered_client", lambda **kw: None
-    )
+    """Make the central routed transport unavailable after route planning."""
+
+    def _unavailable(_execution):
+        raise RuntimeError("transport unavailable")
+
+    monkeypatch.setattr(ge, "routed_messages_client", _unavailable)
 
 
 def _verdict_client(marker_to_blocks):
@@ -109,7 +137,8 @@ def test_screen_ranks_by_new_requirement_fit_not_stale_score(monkeypatch):
 
     out = tc.screen_pool_against_requirement(
         db=MagicMock(), organization_id=1, requirement="banking domain",
-        base_query=MagicMock(), evidence_client=client, deep_verify=True,
+        base_query=MagicMock(), evidence_route_client_factory=_route_factory(client),
+        deep_verify=True,
     )
 
     assert out["mode"] == "rediscovery"
@@ -141,7 +170,8 @@ def test_screen_caps_window_and_says_so(monkeypatch):
 
     out = tc.screen_pool_against_requirement(
         db=MagicMock(), organization_id=1, requirement="banking domain",
-        base_query=MagicMock(), evidence_client=client, deep_verify=True,
+        base_query=MagicMock(), evidence_route_client_factory=_route_factory(client),
+        deep_verify=True,
     )
     assert out["capped"] is True
     assert out["screened"] == 1
@@ -175,7 +205,8 @@ def test_screen_hides_failed_hard_constraint(monkeypatch):
 
     out = tc.screen_pool_against_requirement(
         db=MagicMock(), organization_id=1, requirement="salary under 30k AED",
-        base_query=MagicMock(), evidence_client=client, deep_verify=True,
+        base_query=MagicMock(), evidence_route_client_factory=_route_factory(client),
+        deep_verify=True,
     )
     ids = [c["application_id"] for c in out["candidates"]]
     assert ids == [1]  # B (over cap) hidden
@@ -192,8 +223,8 @@ def test_screen_grounding_unavailable_fails_closed_for_required_evidence(monkeyp
     )
     _no_grounding_client(monkeypatch)
 
-    a = _fake_app(1, taali=60, name="A")
-    b = _fake_app(2, taali=90, name="B")
+    a = _fake_app(1, taali=60, name="A", cv_text="Kafka streaming")
+    b = _fake_app(2, taali=90, name="B", cv_text="Kafka streaming")
     monkeypatch.setattr(tc, "_pool_count", lambda bq: 2)
     monkeypatch.setattr(tc, "_load_candidates_by_ids", lambda bq, ids: [a, b])
 
@@ -202,10 +233,11 @@ def test_screen_grounding_unavailable_fails_closed_for_required_evidence(monkeyp
         deep_verify=True,
     )
     assert out["candidates"] == []
-    assert out["evidence_model"] is None
-    assert out["screened"] == 0
-    assert out["search_status"] == "rerank_skipped"
-    assert any(w["code"] == "rerank_skipped" for w in out["warnings"])
+    assert out["evidence_model"] == "test-grounding-model"
+    assert out["screened"] == 2
+    assert out["evidence_succeeded"] == 0
+    assert out["search_status"] == "no_verified_matches"
+    assert any(w["code"] == "evidence_incomplete" for w in out["warnings"])
 
 
 def test_screen_no_criteria_ranks_by_recall(monkeypatch):

@@ -697,6 +697,48 @@ def test_stale_reaper_protects_ambiguous_started_provider_attempt(
     )
 
 
+def test_provider_attempt_marker_binds_one_live_hold_to_one_attempt(
+    db, monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.services.usage_credit_reservations.settings.USAGE_METER_LIVE",
+        True,
+    )
+    org = _org(db, balance=200_000)
+    reservation = reserve_credits(
+        db,
+        organization_id=int(org.id),
+        feature=Feature.GRAPH_SYNC,
+        external_ref="usage-reservation:one-physical-attempt",
+        amount=100_000,
+    )
+    db.commit()
+
+    assert mark_provider_attempt_started(
+        reservation,
+        provider="anthropic",
+        attempt_ref="invocation-a:1",
+    )
+    assert mark_provider_attempt_started(
+        reservation,
+        provider="anthropic",
+        attempt_ref="invocation-a:1",
+    )
+    assert not mark_provider_attempt_started(
+        reservation,
+        provider="anthropic",
+        attempt_ref="invocation-b:1",
+    )
+
+    db.expire_all()
+    hold = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.external_ref == reservation.external_ref)
+        .one()
+    )
+    assert hold.entry_metadata["provider_attempt_ref"] == "invocation-a:1"
+
+
 def test_broad_caller_release_cannot_refund_provider_success_marker(
     db, monkeypatch,
 ):

@@ -7,7 +7,8 @@ These cover the core control-flow paths in ``run_cycle``:
 - Budget pre-check fails → status=budget_paused, role paused
 - Anthropic call raises → status=failed
 
-The Anthropic client is patched at ``app.agent_runtime.orchestrator.get_client_for_org``;
+The routed messages transport is patched at
+``app.agent_runtime.orchestrator.routed_messages_client``;
 the stub returns scripted responses round-by-round so the test can shape
 the loop precisely.
 """
@@ -165,6 +166,9 @@ def _scripted_client(responses: list):
         return next(iterator)
 
     client = MagicMock()
+    client.ai_routing_metered_transport = True
+    client.ai_routing_sdk_max_retries = 0
+    client.organization_id = None
     client.messages.create = MagicMock(side_effect=_create)
     return client
 
@@ -193,7 +197,7 @@ def test_run_cycle_calls_agent_run_complete_immediately(db):
     ])
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -210,7 +214,8 @@ def test_run_cycle_calls_agent_run_complete_immediately(db):
     # decisions_emitted unchanged (no queue tools called).
     assert run.decisions_emitted == 0
     metering = client.messages.create.call_args.kwargs["metering"]
-    assert metering["credit_reservation"]["feature"] == "agent_autonomous"
+    assert metering["feature"] == "agent_autonomous"
+    assert metering["require_role_authority"] is True
 
 
 def test_run_cycle_records_tool_call_then_finishes(db):
@@ -243,7 +248,7 @@ def test_run_cycle_records_tool_call_then_finishes(db):
     ])
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -284,7 +289,7 @@ def test_run_cycle_threads_agent_run_trace_id_to_every_anthropic_round(db):
     ])
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -302,6 +307,74 @@ def test_run_cycle_threads_agent_run_trace_id_to_every_anthropic_round(db):
         metering["metadata"]["agent_run_id"] == int(run.id)
         for metering in meterings
     )
+
+
+def test_run_cycle_rolls_up_exact_route_cost_delta(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_app(db, org=org, role=role)
+    client = _scripted_client(
+        [
+            _response(
+                blocks=[
+                    _block_tool_use(
+                        tool_use_id="tu_1",
+                        name="get_application",
+                        input_={"application_id": int(app.id)},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+            _response(
+                blocks=[
+                    _block_tool_use(
+                        tool_use_id="tu_2",
+                        name="agent_run_complete",
+                        input_={"summary": "Reviewed."},
+                    )
+                ],
+                stop_reason="tool_use",
+            ),
+        ]
+    )
+    route = SimpleNamespace(
+        selected_model_id="claude-haiku-4-5-20251001",
+        cumulative_cost_usd_micro=0,
+        terminal_status=None,
+        invocation_id="test-exact-agent-cost-route",
+    )
+    route.finish_workflow = lambda *, succeeded: setattr(
+        route,
+        "terminal_status",
+        "succeeded" if succeeded else "failed",
+    )
+    exact_round_costs = iter([101_003, 902_007])
+    native_create = client.messages.create
+
+    def priced_create(**kwargs):
+        response = native_create(**kwargs)
+        route.cumulative_cost_usd_micro += next(exact_round_costs)
+        return response
+
+    client.messages.create = MagicMock(side_effect=priced_create)
+
+    with (
+        patch("app.agent_runtime.orchestrator.prepare_route", return_value=route),
+        patch(
+            "app.agent_runtime.orchestrator.routed_messages_client",
+            return_value=client,
+        ),
+    ):
+        run = orchestrator.run_cycle(
+            db,
+            role=role,
+            trigger="manual",
+            application_id=app.id,
+        )
+
+    assert run.status == "succeeded"
+    assert route.cumulative_cost_usd_micro == 1_003_010
+    assert run.total_cost_micro_usd == route.cumulative_cost_usd_micro
 
 
 def test_run_cycle_increments_decisions_after_policy_evaluation_and_queue(db):
@@ -355,7 +428,7 @@ def test_run_cycle_increments_decisions_after_policy_evaluation_and_queue(db):
     )
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ), patch(
         "app.agent_runtime.tool_registry.policy_evaluator.evaluate_for_application",
         return_value=(verdict, {}),
@@ -420,7 +493,7 @@ def test_run_cycle_can_queue_policy_low_confidence_escalation(db):
     )
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ), patch(
         "app.agent_runtime.tool_registry.policy_evaluator.evaluate_for_application",
         return_value=(verdict, {}),
@@ -478,7 +551,7 @@ def test_run_cycle_drops_actions_when_agent_is_disabled_during_provider_call(db)
     client.messages.create = MagicMock(side_effect=_disable_before_return)
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -532,7 +605,7 @@ def test_run_cycle_rechecks_role_version_before_a_second_provider_round(db):
         return result
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ), patch(
         "app.agent_runtime.orchestrator.dispatch",
         side_effect=_dispatch_then_change_version,
@@ -592,7 +665,7 @@ def test_run_cycle_rechecks_power_between_tools_in_one_response(db):
         return result
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ), patch(
         "app.agent_runtime.orchestrator.dispatch",
         side_effect=_dispatch_then_disable,
@@ -640,7 +713,7 @@ def test_candidate_search_failure_recovers_fails_run_and_blocks_later_tools(db):
         raise AssertionError("duplicate organization flush should fail")
 
     with (
-        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch("app.agent_runtime.orchestrator.routed_messages_client", return_value=client),
         patch("app.agent_runtime.orchestrator.dispatch", side_effect=fail_search),
         patch.object(db, "rollback", wraps=db.rollback) as rollback,
     ):
@@ -695,7 +768,10 @@ def test_narrowed_structural_zero_fails_run_before_model_narration(db):
     }
 
     with (
-        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch(
+            "app.agent_runtime.orchestrator.routed_messages_client",
+            return_value=client,
+        ),
         patch("app.agent_runtime.orchestrator.dispatch", return_value=result),
     ):
         run = orchestrator.run_cycle(
@@ -759,7 +835,7 @@ def test_successful_candidate_search_releases_authority_lock_and_continues(db):
         )
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org",
+        "app.agent_runtime.orchestrator.routed_messages_client",
         return_value=client,
     ), patch("app.agent_runtime.orchestrator.dispatch", side_effect=dispatch):
         run = orchestrator.run_cycle(
@@ -796,7 +872,13 @@ def test_pause_after_search_lock_release_blocks_provider_admission(db):
         stop_reason="tool_use",
     )
     client = _scripted_client([response])
-    parser_provider = SimpleNamespace(messages=MagicMock())
+    denied_parser_transport = SimpleNamespace(
+        messages=SimpleNamespace(
+            create=MagicMock(
+                side_effect=AutomaticProviderAuthorityError("role agent is paused")
+            )
+        )
+    )
     original_dispatch = orchestrator.dispatch
     dispatch_transaction_states: list[bool] = []
 
@@ -817,11 +899,11 @@ def test_pause_after_search_lock_release_blocks_provider_admission(db):
         )
 
     with (
-        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch("app.agent_runtime.orchestrator.routed_messages_client", return_value=client),
         patch("app.agent_runtime.orchestrator.dispatch", side_effect=pause_then_dispatch),
         patch(
-            "app.candidate_search.parser._resolve_anthropic_client",
-            return_value=parser_provider,
+            "app.candidate_search.parser.routed_messages_client",
+            return_value=denied_parser_transport,
         ),
     ):
         run = orchestrator.run_cycle(
@@ -836,7 +918,7 @@ def test_pause_after_search_lock_release_blocks_provider_admission(db):
     assert (run.error or "").startswith(f"{CANDIDATE_SEARCH_UNAVAILABLE_CODE}:")
     assert dispatch_transaction_states == [False]
     assert client.messages.create.call_count == 1
-    parser_provider.messages.create.assert_not_called()
+    denied_parser_transport.messages.create.assert_called_once()
 
 
 def test_evaluate_policy_releases_authority_lock_before_provider_capable_dispatch(db):
@@ -889,7 +971,7 @@ def test_evaluate_policy_releases_authority_lock_before_provider_capable_dispatc
         )
 
     with (
-        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch("app.agent_runtime.orchestrator.routed_messages_client", return_value=client),
         patch("app.agent_runtime.orchestrator.dispatch", side_effect=dispatch),
     ):
         run = orchestrator.run_cycle(
@@ -936,7 +1018,7 @@ def test_pause_after_policy_lock_release_aborts_before_subagent_provider(db):
         raise AutomaticProviderAuthorityError("role agent is paused")
 
     with (
-        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch("app.agent_runtime.orchestrator.routed_messages_client", return_value=client),
         patch("app.agent_runtime.orchestrator.dispatch", side_effect=pause_then_deny),
     ):
         run = orchestrator.run_cycle(
@@ -960,7 +1042,7 @@ def test_main_round_reservation_requires_current_role_authority(db):
     client = MagicMock()
     captured: dict = {}
 
-    def pause_then_deny(**kwargs):
+    def pause_then_deny(*_args, **kwargs):
         captured.update(kwargs)
         with SessionLocal() as concurrent:
             current = concurrent.get(Role, role_id)
@@ -971,9 +1053,9 @@ def test_main_round_reservation_requires_current_role_authority(db):
         raise AutomaticProviderAuthorityError("role agent is paused")
 
     with (
-        patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client),
+        patch("app.agent_runtime.orchestrator.routed_messages_client", return_value=client),
         patch(
-            "app.agent_runtime.orchestrator.reserve_provider_usage",
+            "app.agent_runtime.orchestrator.one_call",
             side_effect=pause_then_deny,
         ),
     ):
@@ -984,7 +1066,7 @@ def test_main_round_reservation_requires_current_role_authority(db):
             application_id=app.id,
         )
 
-    assert captured["require_role_authority"] is True
+    assert captured["metering"].require_role_authority is True
     assert run.status == "aborted"
     assert (run.error or "").startswith("provider_authority_revoked:")
     client.messages.create.assert_not_called()
@@ -1016,7 +1098,7 @@ def test_run_cycle_aborts_repeated_tool_loop_before_max_rounds(db):
     client.messages.create = MagicMock(return_value=spinning)
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1055,7 +1137,7 @@ def test_build_system_prompt_called_once_per_cycle(db):
     client.messages.create = MagicMock(return_value=spinning)
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ), patch(
         "app.agent_runtime.orchestrator.build_system_prompt",
         wraps=orchestrator.build_system_prompt,
@@ -1083,7 +1165,7 @@ def test_run_cycle_pauses_role_on_monthly_budget_exhausted(db):
         "app.agent_runtime.orchestrator.budget_guard.check_monthly_usd",
         return_value=fake_check,
     ), patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=MagicMock()
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=MagicMock()
     ) as resolve_client:
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1113,9 +1195,9 @@ def test_run_cycle_durably_pauses_when_org_credits_are_exhausted(db):
     client = MagicMock()
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ), patch(
-        "app.agent_runtime.orchestrator.reserve_provider_usage", side_effect=depleted
+        "app.agent_runtime.orchestrator.one_call", side_effect=depleted
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1140,9 +1222,9 @@ def test_run_cycle_durably_pauses_when_hard_role_admission_is_exhausted(db):
     client = MagicMock()
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ), patch(
-        "app.agent_runtime.orchestrator.reserve_provider_usage", side_effect=capped
+        "app.agent_runtime.orchestrator.one_call", side_effect=capped
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1179,7 +1261,7 @@ def test_run_cycle_token_budget_blocks_actions_from_over_budget_response(db):
         output_tokens=200,
     )
     client = _scripted_client([response])
-    with patch("app.agent_runtime.orchestrator.get_client_for_org", return_value=client):
+    with patch("app.agent_runtime.orchestrator.routed_messages_client", return_value=client):
         run = orchestrator.run_cycle(db, role=role, trigger="manual", application_id=app.id)
     assert run.status == "aborted"
     assert "token budget exceeded" in (run.error or "")
@@ -1192,10 +1274,19 @@ def test_run_cycle_marks_failed_when_anthropic_call_raises(db):
     app = _make_app(db, org=org, role=role)
 
     boom_client = MagicMock()
-    boom_client.messages.create = MagicMock(side_effect=RuntimeError("network down"))
+    failed_attempt_cost = 456_789
+
+    def bind_failing_transport(route):
+        def fail_after_cost(**_kwargs):
+            route._cumulative_cost_usd_micro += failed_attempt_cost
+            raise RuntimeError("network down")
+
+        boom_client.messages.create = MagicMock(side_effect=fail_after_cost)
+        return boom_client
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=boom_client
+        "app.agent_runtime.orchestrator.routed_messages_client",
+        side_effect=bind_failing_transport,
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1204,6 +1295,7 @@ def test_run_cycle_marks_failed_when_anthropic_call_raises(db):
 
     assert run.status == "failed"
     assert "anthropic call failed" in (run.error or "").lower()
+    assert run.total_cost_micro_usd == failed_attempt_cost
     failed_call_metering = boom_client.messages.create.call_args.kwargs["metering"]
     assert failed_call_metering["trace_id"] == f"agent-run:{int(run.id)}"
     assert failed_call_metering["metadata"]["agent_run_id"] == int(run.id)
@@ -1218,14 +1310,14 @@ def test_run_cycle_records_safe_failure_when_model_client_is_unavailable(db):
     role = _make_role(db, org)
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org",
+        "app.agent_runtime.orchestrator.routed_messages_client",
         side_effect=RuntimeError("Authorization: Bearer sk-ant-SECRET"),
     ):
         run = orchestrator.run_cycle(db, role=role, trigger="cron")
     db.commit()
 
     assert run.status == "failed"
-    assert run.error == "model_client_unavailable"
+    assert run.error == "model route unavailable: RuntimeError"
     cards = _role_event_cards(db, role)
     assert len(cards) == 1
     assert cards[0]["severity"] == "error"
@@ -1254,7 +1346,7 @@ def test_run_cycle_uses_role_agent_model_when_set(db):
     ])
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1262,10 +1354,10 @@ def test_run_cycle_uses_role_agent_model_when_set(db):
     db.commit()
 
     # Run record stamps the model that was actually used.
-    assert run.model_version == "claude-sonnet-4-5"
+    assert run.model_version == "claude-sonnet-4-5-20250929"
     # And the Anthropic call was invoked with that model id.
     create_kwargs = client.messages.create.call_args.kwargs
-    assert create_kwargs["model"] == "claude-sonnet-4-5"
+    assert create_kwargs["model"] == "claude-sonnet-4-5-20250929"
 
 
 def test_run_cycle_falls_back_to_settings_model_when_role_override_blank(db):
@@ -1289,15 +1381,15 @@ def test_run_cycle_falls_back_to_settings_model_when_role_override_blank(db):
     ])
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
         )
     db.commit()
 
-    # Default conftest CLAUDE_MODEL is claude-3-5-haiku-latest.
-    assert run.model_version == "claude-3-5-haiku-latest"
+    # The test default is the current exact Haiku deployment.
+    assert run.model_version == "claude-haiku-4-5-20251001"
 
 
 def test_run_cycle_finishes_on_end_turn_without_complete(db):
@@ -1323,7 +1415,7 @@ def test_run_cycle_finishes_on_end_turn_without_complete(db):
     ])
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1361,7 +1453,7 @@ def test_aborted_cycle_persists_last_cycle_to_calibration(db):
     client.messages.create = MagicMock(return_value=spinning)
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1396,7 +1488,7 @@ def test_successful_cycle_persists_last_cycle_with_finished_via_complete(db):
     ])
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1445,7 +1537,7 @@ def test_record_observation_tool_appends_to_calibration_notes(db):
     ])
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1490,7 +1582,7 @@ def test_record_observation_empty_note_is_skipped(db):
     ])
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id
@@ -1539,7 +1631,7 @@ def test_record_observation_survives_aborted_cycle(db):
     client = _scripted_client(responses)
 
     with patch(
-        "app.agent_runtime.orchestrator.get_client_for_org", return_value=client
+        "app.agent_runtime.orchestrator.routed_messages_client", return_value=client
     ):
         run = orchestrator.run_cycle(
             db, role=role, trigger="manual", application_id=app.id

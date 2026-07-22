@@ -5,7 +5,25 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from app.candidate_search import grounded_evidence as ge
+
+
+@pytest.fixture(autouse=True)
+def _unit_route_seam(monkeypatch):
+    class _Execution:
+        selected_model_id = "test-grounding-model"
+        last_attempt_model_id = "test-grounding-model"
+        decision = SimpleNamespace(
+            limits=SimpleNamespace(max_iterations=3),
+            behavior_fingerprint="test-grounding-behavior",
+        )
+
+        def finish_workflow(self, *, succeeded: bool) -> None:
+            self.succeeded = succeeded
+
+    monkeypatch.setattr(ge, "prepare_route", lambda *_a, **_k: _Execution())
 
 
 def _text(text: str, citations=None):
@@ -44,6 +62,9 @@ class _Client:
 
         self.messages = _Messages()
 
+    def __call__(self, _execution):
+        return self
+
 
 def test_parse_marks_criterion_without_explicit_verdict_as_error():
     verdicts = ge.parse_citation_response(
@@ -78,7 +99,7 @@ def test_extract_does_not_cache_omitted_verdict(monkeypatch):
     verdicts = ge.extract_cv_evidence(
         cv_text="Project delivery for a commercial bank.",
         criteria=["Treasury experience", "banking domain experience"],
-        client=client,
+        route_client_factory=client,
         organization_id=1,
         application_id=42,
     )
@@ -98,7 +119,7 @@ def test_explicit_missing_verdict_remains_cacheable(monkeypatch):
     kwargs = {
         "cv_text": "Project delivery for a commercial bank.",
         "criteria": ["Treasury experience"],
-        "client": client,
+        "route_client_factory": client,
         "organization_id": 1,
         "application_id": 42,
     }

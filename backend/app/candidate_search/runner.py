@@ -2,7 +2,7 @@
 
 Steps:
 1. Cache lookup on (org_id, normalised query, prompt_version).
-2. On miss: parse via Haiku → ``ParsedFilter`` → cache.
+2. On miss: parse through the universal AI route → ``ParsedFilter`` → cache.
 3. Compile a backend-independent ``SearchPlan``.
 4. Run semantic GraphDB recall plus ranked PostgreSQL retrieval, fused behind
    the PostgreSQL tenant/role/lifecycle authorization boundary.
@@ -26,6 +26,7 @@ from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from . import cache as cache_module
 from .criteria_policy import DEFAULT_MAX_CRITERIA, _collect_criteria, _required_criteria
+from .deterministic_parser import parse_common_query
 from .hybrid import retrieve_graph_backend, run_hybrid_retrieval
 from .parser import ProviderCallsForbiddenError, parse_nl_query
 from .person_retrieval import MAX_PERSON_RETRIEVAL_LIMIT, bounded_person_rows
@@ -54,7 +55,7 @@ from .schemas import (
 
 logger = logging.getLogger("taali.candidate_search.runner")
 
-# How many candidates to rerank with Claude in the soft-criteria pass.
+# How many candidates to verify in the soft-criteria pass.
 RERANK_TOP_N = 50
 DEFAULT_RETRIEVAL_LIMIT = 200
 MAX_RETRIEVAL_LIMIT = MAX_PERSON_RETRIEVAL_LIMIT
@@ -100,8 +101,8 @@ def run_search(
     base_query,
     rerank_enabled: bool = False,
     include_subgraph: bool = False,
-    parser_client=None,
-    rerank_client=None,
+    parser_route_client_factory=None,
+    rerank_route_client_factory=None,
     defer_qualitative: bool = False,
     inherited_titles_all: list[str] | None = None,
     inherited_titles_any: list[str] | None = None,
@@ -132,20 +133,42 @@ def run_search(
         organization_id=organization_id,
     )
     warnings: list[SearchWarning] = []
-    cache_key = cache_module.compute_cache_key(
-        organization_id=organization_id, query=nl_query
-    )
+    # Deterministic parsing always precedes route selection and the
+    # model-derived cache. A query the free parser understands therefore does
+    # no routing, telemetry, client resolution, admission, or provider work.
+    cleaned_query = (nl_query or "").strip()
+    parsed = None
+    cache_key = None
+    if provider_mode != "forbid":
+        parsed = (
+            ParsedFilter(free_text="")
+            if not cleaned_query
+            else parse_common_query(cleaned_query)
+        )
+        if parsed is None:
+            try:
+                cache_key = cache_module.compute_cache_key(
+                    organization_id=organization_id,
+                    query=cleaned_query,
+                )
+                parsed = cache_module.get(cache_key)
+            except Exception as exc:
+                # A bad latent route override must not turn search into a 500.
+                # Skip the model-derived cache and let parse_nl_query degrade to
+                # its lexical fallback without making a provider call.
+                logger.warning("Parser route fingerprint unavailable: %s", exc)
+                cache_key = None
 
-    # Provider-forbidden execution bypasses the model-derived cache. It must
-    # prove that this exact request is understood by today's deterministic
-    # parser rather than trusting a structure produced by an earlier model
-    # call or an older parser version.
-    parsed = None if provider_mode == "forbid" else cache_module.get(cache_key)
+    # Provider-forbidden execution also bypasses the model-derived cache. It
+    # must prove that this exact request is understood by today's deterministic
+    # parser rather than trusting a structure produced by an earlier model call
+    # or an older parser version. This avoids even the pure routing-policy lookup
+    # used to fingerprint model-derived entries.
     if parsed is None:
         try:
             parsed = parse_nl_query(
                 nl_query,
-                client=parser_client,
+                route_client_factory=parser_route_client_factory,
                 organization_id=organization_id,
                 role_id=role_id,
                 metering={
@@ -185,6 +208,7 @@ def run_search(
             )
         if (
             provider_mode != "forbid"
+            and cache_key is not None
             and parsed
             and not parsed.is_empty()
             and not parsed.parse_degraded
@@ -452,7 +476,7 @@ def run_search(
                 role_id=role_id,
                 application_ids=checked_ids,
                 soft_criteria=rerank_criteria,
-                client=rerank_client,
+                route_client_factory=rerank_route_client_factory,
                 require_role_authority=bool(require_role_authority),
             )
             # Deep verification is an explicit qualified subset. Candidates

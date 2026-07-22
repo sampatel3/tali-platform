@@ -94,7 +94,7 @@ def test_post_turn_streams_aisdk_frames(client, db):
     headers, _email = auth_headers(client, organization_name="ChatRouteOrg")
     fake = _FakeClient([_text_plan("Hello recruiter.")])
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake), patch(
         "app.taali_chat.service.record_event"
     ):
         resp = client.post(
@@ -143,7 +143,7 @@ def test_post_turn_persists_conversation_visible_via_list_endpoint(client, db):
     headers, _email = auth_headers(client, organization_name="ChatRouteOrg2")
     fake = _FakeClient([_text_plan("First answer.")])
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake), patch(
         "app.taali_chat.service.record_event"
     ):
         resp = client.post(
@@ -165,7 +165,7 @@ def test_get_conversation_detail_returns_messages(client, db):
     headers, _email = auth_headers(client, organization_name="ChatRouteOrg3")
     fake = _FakeClient([_text_plan("Hi.")])
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake), patch(
         "app.taali_chat.service.record_event"
     ):
         client.post("/api/v1/taali-chat/turn", headers=headers, json={"message": "hello"})
@@ -184,7 +184,7 @@ def test_delete_conversation_archives_and_hides(client, db):
     headers, _email = auth_headers(client, organization_name="ChatRouteOrg4")
     fake = _FakeClient([_text_plan("Hi.")])
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake), patch(
         "app.taali_chat.service.record_event"
     ):
         client.post("/api/v1/taali-chat/turn", headers=headers, json={"message": "hi"})
@@ -201,7 +201,7 @@ def test_rename_conversation(client, db):
     headers, _email = auth_headers(client, organization_name="ChatRouteOrg5")
     fake = _FakeClient([_text_plan("Hi.")])
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake), patch(
         "app.taali_chat.service.record_event"
     ):
         client.post("/api/v1/taali-chat/turn", headers=headers, json={"message": "hi"})
@@ -222,7 +222,7 @@ def test_cross_user_cannot_see_others_conversation(client, db):
     headers_b, _ = auth_headers(client, organization_name="OrgB")
     fake = _FakeClient([_text_plan("Hi A.")])
 
-    with patch("app.taali_chat.service.get_client_for_org", return_value=fake), patch(
+    with patch("app.taali_chat.service.routed_messages_client", return_value=fake), patch(
         "app.taali_chat.service.record_event"
     ):
         client.post(
