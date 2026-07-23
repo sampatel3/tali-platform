@@ -746,7 +746,19 @@
      screen too (read-only showcase — the live workspace is not meant to be
      poked at from the deck). */
   .surf-shot { display: none; }
-  [data-slide="surf-assess"] .surf-shot { display: block; flex: 1; width: 100%; min-height: 0; object-fit: cover; object-position: top center; }
+  /* A4 shows the whole candidate workspace — brief, guidance, timer, chat and
+     editor — so the still is portrait-ish and sits beside a labelled column
+     rather than filling the full width. */
+  [data-slide="surf-assess"] .surf-shot { display: block; flex: 1; width: 100%; min-height: 0; object-fit: contain; object-position: top center; background: var(--bg-2); }
+  .assess-two { flex: 1; min-height: 0; display: grid; grid-template-columns: 1268px 1fr; gap: 22px; }
+  .assess-two .surf-frame { min-height: 0; }
+  .assess-notes { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+  .assess-note { flex: 1; min-height: 0; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); display: flex; flex-direction: column; justify-content: center; }
+  .assess-note.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .assess-note b { display: block; font: 600 17px/1.2 var(--font-display); letter-spacing: -.01em; color: var(--ink); }
+  .assess-note.dark b { color: #fff; }
+  .assess-note span { display: block; margin-top: 6px; font-size: 13px; line-height: 1.4; color: var(--ink-2); }
+  .assess-note.dark span { color: rgba(255,255,255,.76); }
   @media print {
     /* Force the deck's dark slabs + colour accents to print even when the
        browser's "Background graphics" toggle is off — they're essential. */
@@ -1652,15 +1664,17 @@
       <div class="eyebrow"><span class="num">A4</span><span class="dot">·</span><span>Appendix · product demo</span></div>
       <h2 class="surf-title">AI-native assessment — <em>observe how candidates work with AI.</em></h2>
     </div>
-    <div class="surf">
+    <div class="assess-two">
       <div class="surf-frame">
-        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/assess · candidate workspace</span><span class="surf-badge">Product demo · read-only preview</span></div>
-        <img class="surf-shot" src="img/surf-assess.png" alt="Taali AI-native assessment — candidate workspace with Claude chat, repo and code editor" />
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/assess · candidate workspace</span><span class="surf-badge">Product demo · representative data</span></div>
+        <img class="surf-shot" src="img/surf-assess.png" alt="Taali AI-native assessment — the full candidate workspace: task header and timer, three-step guidance, assessment brief, repo files, Claude chat and the code editor" />
       </div>
-      <div class="surf-out">
-        <span><b>AI in the workflow:</b> a real editor and a safe test environment sit alongside the assistant.</span>
-        <span><b>Inspectable trace:</b> prompts, responses, edits, saves, validation runs and the final deliverable.</span>
-        <span><b>No proctoring theatre:</b> the evidence comes from the work itself, not a webcam or a locked browser.</span>
+      <div class="assess-notes">
+        <div class="assess-note"><b>Brief &amp; guidance</b><span>The task brief, a suggested path — get oriented, decide &amp; direct, verify &amp; submit — and the time remaining. Guidance, not a lock.</span></div>
+        <div class="assess-note dark"><b>Claude, in the workflow</b><span>A live repo assistant. Candidates prompt it, challenge it and iterate — the way they would actually work.</span></div>
+        <div class="assess-note"><b>Real repo, real editor</b><span>The task's own files, a working editor and a safe test environment. Save and run, as on any working day.</span></div>
+        <div class="assess-note"><b>Everything is recorded</b><span>Prompts, responses, edits, saves, validation runs and the final deliverable — the evidence behind every score.</span></div>
+        <div class="assess-note"><b>No proctoring theatre</b><span>No webcam, no screen or microphone recording, no lockdown browser. Light workspace controls keep the work inside the session — the evidence is the work itself.</span></div>
       </div>
     </div>
     <div class="slide-foot"><span>A4 / A6 · Product demo · AI-native assessment</span><span class="brand">taali<span class="p">.</span></span></div>
@@ -1734,14 +1748,14 @@
   "The problem, with numbers a buyer can check: LinkedIn reports around 11,000 applications a minute, up 45% year on year. Checkr found one in three hiring managers has interviewed a candidate using a fake identity, and Gartner projects one in four candidate profiles worldwide will be fake by 2028. Karat's interview data shows flagged cheating up five-fold in two years. Volume is up, signal is down — the response is automation to run the funnel plus evidence you can trust.",
   "Taali combines an agentic ATS with an AI-native assessment. The ATS handles intake, pool search, screening, ranking and orchestration; the assessment captures the work trace and links scores to evidence. Why the output is trustworthy: every match cites the CV verbatim; every verdict follows written rules the team sets, at the autonomy they choose, with held and consequential cases waiting for sign-off; and every action is logged and attributable. The recruiter stays accountable throughout.",
   "The shift slide: in traditional work most time went on producing the artifact. Working with AI, production runs in parallel with the model and human time moves to framing the problem and verifying the result. Software teams felt this first; the same pattern is reaching every knowledge role — and a CV cannot show who is good at it. That is exactly what the five Ds score: Delegation, Description, Discernment, Diligence, Deliverable, each linked back to the recorded session. Proportions on the chart are illustrative.",
-  "The case study comes before the product tour so the depth lands as proven, not promised. The design partner is a UAE-based data and AI consultancy operating across the UAE, UK and US — named on request. As of July 2026: 120+ roles, 63,000 applications, 23,000 agent decisions, 65+ assessments, 24 offers and 18 hires have run through the workflow. These are operating figures, not a claim that Taali alone caused each outcome. A second pilot is live with a European staffing and consultancy firm.",
+  "The case study comes before the product tour so the depth lands as proven, not promised. The design partner is a UAE-based data and AI consultancy operating across the UAE, UK and US — named on request. As of July 2026: 120+ roles, 63,000 applications, 23,000 agent decisions, 65+ assessments, 24 offers extended from Taali shortlists and 18 hires. These are operating figures, not a claim that Taali alone caused each outcome. A second pilot is live with a European staffing and consultancy firm.",
   "The condensed pipeline view: six stages, all live. Emphasise the integrity work in stage two — the agent runs the fraud checks a recruiter never has time to do by hand: flagging job-spec text copied into CVs, detecting hidden prompt-injection aimed at gaming ATS screening, checking timelines and unsupported claims, and spotting suspicious similarity across candidates. Once candidates are scored and shortlisted, flagged claims are corroborated against the candidate's public GitHub work and peers from the same employer — corroboration adds questions, never auto-rejects. Taali runs natively as the ATS or connects to Workable and Bullhorn with decisions written back. The roadmap adds offer management in the next three months, then external discovery, wider job-board distribution and reusable talent pools.",
   "Taali's difference is structural: the role agent, AI-native work sample and evidence-linked decision record operate in one loop. The comparison is category-level and individual providers vary, but most buyers currently assemble these capabilities across separate ATS, assessment and automation products.",
   "The close: two audiences, one usage-based model. The pilot mechanics are on the slide — connect or run native on day one, two to three live roles, four to six weeks, success measures agreed upfront, and the customer's data stays theirs. Free proof-of-value pilot, then credits with a budget per role.",
   "Product demo: the Home Hub starts at the all-roles view, leads with the pipeline and review queue, and opens a role-scoped agent chat when a mandate is selected. All data shown is representative.",
   "Product demo: the Jobs board shows one governed agent per role, with requirements, budget, autonomy and activity together. The role opens directly into the pipeline the team works each morning.",
   "Product demo: natural-language search works across the customer's own applied, uploaded and ATS-synced candidates, and qualitative matches carry verbatim CV citations. Automated external talent discovery is not represented as live.",
-  "Product demo: candidates complete role-specific work with AI, an editor and a safe test environment. Taali records prompts, responses, edits, saves, validation runs and the final deliverable without webcam or lockdown-browser proctoring.",
+  "Product demo — the whole candidate view rather than a crop: the task header and time remaining, the suggested path (get oriented, decide and direct, verify and submit), the assessment brief, the repo files, the Claude chat and the code editor. Candidates complete role-specific work with AI in a safe test environment. Taali records prompts, responses, edits, saves, validation runs and the final deliverable — without webcam or lockdown-browser proctoring.",
   "Product demo: the internal candidate report includes an Assessment tab when completed assessment evidence is linked. Scores open into the five Ds, rubric criteria, the work trace and final deliverable, while client-safe sharing remains a separate audience view.",
   "Data protection: the left card is what the product enforces today — tenant-scoped access, review holds, exportable decision history, revocable sharing, data-access and erasure. The right card is no longer aspiration — the compliance pack exists as artifacts: DPA template, DPIA support, candidate notice templates, a contest route, and a public subprocessor list with per-subprocessor transfer mechanisms at taali.ai/subprocessors, alongside the privacy notice at taali.ai/privacy. The wording is deliberate: Taali is operated in line with UK and EU requirements under each customer's instructions — the customer is the controller; Taali is the processor. Be straight if a DPO asks about automated decisions: advancing a candidate always waits for a person, and pre-screen rejection can be applied automatically when a candidate misses the screening rules or score threshold the recruiter set — on by default, switchable per role, every rejection logged with its reason and reversible. In the UK that is expressly permitted with the safeguards we run; for EU candidates we can set it to route rejections to human review instead. UK side: UK GDPR and DPA 2018 as amended by the Data (Use and Access) Act 2025. EU side: recruitment AI is high-risk; the June 2026 omnibus confirmed the employment-system obligations land 2 December 2027, and Taali's logging and human-oversight design are built to them today."
 ]

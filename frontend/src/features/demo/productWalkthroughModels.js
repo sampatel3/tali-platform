@@ -785,6 +785,14 @@ export const PRODUCT_WALKTHROUGH_START_DATA = {
     proctoring_enabled: false,
     claude_budget_limit_usd: 8,
   },
+  // normalizeStartData reads claude_budget from the top level, not from task.
+  // Without it the session tracker pins at $0.00, which reads as a dead
+  // assistant beside a full transcript. Sized to the seeded conversation.
+  claude_budget: {
+    used_usd: 0.62,
+    tokens_used: 41800,
+    limit_usd: 8,
+  },
 };
 
 // Seed data for the showcase Jobs board (`/jobs?demo=1&showcase=1`).
