@@ -43,6 +43,10 @@ from ..services.experiment_assignment import (
     RoleTaskMisconfigured,
     resolve_task_and_variant,
 )
+from ..services.logical_role_application_authority import (
+    LogicalRoleApplicationAuthorizationError,
+    authorize_logical_role_action_application,
+)
 from .types import ACTOR_AGENT, ACTOR_SYSTEM, Actor
 
 if TYPE_CHECKING:
@@ -100,7 +104,12 @@ def run(
             status_code=422, detail="duration_minutes must be between 15 and 180"
         )
 
-    app = get_application(application_id, organization_id, db)
+    app = get_application(
+        application_id,
+        organization_id,
+        db,
+        include_deleted=True,
+    )
     if app.role_id is None:
         raise HTTPException(
             status_code=422,
@@ -156,25 +165,19 @@ def run(
                 "blocked",
                 f"Automatic assessment send held: {block_reason}",
             )
-        from ..models.candidate_application import CandidateApplication
-
-        locked_app = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.id == int(application_id),
-                CandidateApplication.organization_id == int(organization_id),
+        try:
+            context = authorize_logical_role_action_application(
+                db,
+                role=role,
+                application_id=int(application_id),
             )
-            .with_for_update()
-            .populate_existing()
-            .one_or_none()
-        )
-        if locked_app is None:
+        except LogicalRoleApplicationAuthorizationError:
             return SendAssessmentResult(
                 None,
                 "blocked",
                 "Automatic assessment send held: application is unavailable",
             )
-        app = locked_app
+        app = context.source_application
         if role_application_is_resolved(
             db,
             role_id=acting_role_id,
@@ -263,11 +266,38 @@ def run(
         role = (
             db.query(Role)
             .options(joinedload(Role.tasks))
-            .filter(Role.id == acting_role_id, Role.organization_id == organization_id)
+            .filter(
+                Role.id == acting_role_id,
+                Role.organization_id == organization_id,
+                Role.deleted_at.is_(None),
+            )
             .first()
         )
     if role is None:
         raise HTTPException(status_code=404, detail=f"role {acting_role_id} not found")
+    if not automatic_actor:
+        try:
+            context = authorize_logical_role_action_application(
+                db,
+                role=role,
+                application_id=int(application_id),
+            )
+        except LogicalRoleApplicationAuthorizationError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Application not found",
+            ) from exc
+        app = context.source_application
+        if role_application_is_resolved(
+            db,
+            role_id=acting_role_id,
+            application=app,
+        ):
+            return SendAssessmentResult(
+                None,
+                "blocked",
+                "Assessment send held: this role application is already resolved",
+            )
 
     candidate = app.candidate
     if candidate is None or not (candidate.email or "").strip():

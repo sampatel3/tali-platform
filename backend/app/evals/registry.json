@@ -191,7 +191,7 @@
     },
     "candidate.decision_history": {
       "risk": "critical",
-      "ground_truth_scope": "Agent recommendations are keyed by logical organization/role/candidate identity even when their physical evidence application is replaced, filtered independently by created and resolved time, ordered deterministically, and never presented as proof that a workflow action completed. Policy feedback and nightly labels resolve the same role/candidate subject.",
+      "ground_truth_scope": "Agent recommendations are admitted and keyed by logical organization/role/candidate identity even when their physical evidence application is replaced or soft-deleted; an active related-role membership remains actionable while a deleted ordinary application remains blocked. Recommendations are filtered independently by created and resolved time, ordered deterministically, and never presented as proof that a workflow action completed. Policy feedback and nightly labels resolve the same role/candidate subject.",
       "required_surfaces": [
         "rest",
         "public_mcp",
@@ -241,6 +241,10 @@
         "tests/decision_policy/test_nightly_policy_fit.py::test_nightly_labels_same_candidate_from_each_logical_roles_local_outcome",
         "tests/decision_policy/test_nightly_policy_fit.py::test_nightly_labels_follow_role_candidate_after_membership_source_changes",
         "tests/postgres/test_candidate_capability_migrations.py::test_migration_188_guard_closes_pre_index_writer_race",
+        "tests/test_decision_input_fingerprint_role_boundary.py::test_direct_related_application_snapshots_membership_owned_inputs_and_staleness",
+        "tests/test_decision_input_fingerprint_role_boundary.py::test_ordinary_application_snapshots_application_owned_inputs",
+        "tests/test_related_role_runtime.py::test_active_related_membership_with_deleted_evidence_still_queues",
+        "tests/test_related_role_runtime.py::test_related_queue_fails_closed_without_exact_live_membership",
         "tests/test_taali_chat_role_scoped.py::test_decision_history_follows_candidate_when_related_source_changes"
       ]
     }
@@ -303,7 +307,7 @@
     "agent_autonomous": {
       "risk": "critical",
       "coverage": "grounded_truth",
-      "ground_truth_scope": "Autonomous candidate tools expose the same complete active logical-role candidate roster, current state, confirmed action history, and agent-decision audit as the constructed ordinary and related role oracles; low/unscored members remain eligible for grounded qualitative search and the ATS owner never supplies membership.",
+      "ground_truth_scope": "Autonomous candidate tools expose and act on the same complete active logical-role candidate roster, current state, confirmed action history, and agent-decision audit as the constructed ordinary and related role oracles; low/unscored members remain eligible for grounded qualitative search, an active related membership remains actionable when its evidence row is soft-deleted, and the ATS owner never supplies membership.",
       "test_cases": [
         "tests/postgres/test_candidate_capability_runtime_matrix.py::test_standard_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
         "tests/postgres/test_candidate_capability_runtime_matrix.py::test_related_role_candidate_capabilities_match_constructed_truth_across_all_surfaces",
@@ -318,6 +322,12 @@
         "tests/agent_runtime_policy/test_policy_evaluator.py::test_sister_role_policy_defers_to_role_local_runtime_before_owner_cache",
         "tests/test_related_role_agent_read_parity.py::test_autonomous_cohort_reads_use_related_membership_and_local_state",
         "tests/test_related_role_agent_read_parity.py::test_autonomous_cohort_reads_keep_live_member_with_deleted_evidence",
+        "tests/test_related_role_runtime.py::test_active_related_membership_with_deleted_evidence_still_queues",
+        "tests/test_related_role_runtime.py::test_related_queue_fails_closed_without_exact_live_membership",
+        "tests/test_related_role_runtime.py::test_deleted_ordinary_application_stays_blocked_at_action_boundaries",
+        "tests/test_related_role_runtime.py::test_auto_send_creates_assessment_owned_by_related_role",
+        "tests/test_related_role_runtime.py::test_deterministic_auto_reject_resolves_only_the_opted_in_related_role",
+        "tests/test_related_role_runtime.py::test_auto_advance_updates_only_the_opted_in_related_role",
         "tests/test_cohort_signals.py::test_related_cohort_signals_use_membership_and_role_local_score",
         "tests/test_autonomous_role_application_boundary.py::test_completed_related_score_is_idempotent_and_preserves_live_decision",
         "tests/test_autonomous_role_application_boundary.py::test_completed_related_batch_scores_are_not_reset_without_force",

@@ -13,7 +13,7 @@ fails closed instead of spending against or changing the valid subset.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable
 
 from sqlalchemy.orm import Session, joinedload
@@ -270,6 +270,70 @@ def authorize_logical_role_application(
     )[0]
 
 
+def authorize_logical_role_action_application(
+    db: Session,
+    *,
+    role: Role,
+    application_id: int,
+) -> LogicalRoleApplicationContext:
+    """Lock and re-authorize one subject at an action side-effect boundary.
+
+    Callers resolve (and, for automatic actions, lock) the acting role first.
+    This helper preserves Role -> Application -> related-membership lock order.
+    A soft-deleted application may remain evidence for a live related
+    membership; the same row remains invalid for its ordinary owner role.
+
+    ATS transport is intentionally not part of membership authority. Missing
+    transport can restrict external write-back without erasing the role-owned
+    candidate or blocking Taali-owned actions.
+    """
+
+    application_query = db.query(CandidateApplication).filter(
+        CandidateApplication.id == int(application_id),
+        CandidateApplication.organization_id == int(role.organization_id),
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        application_query = application_query.with_for_update()
+    locked_application = application_query.populate_existing().one_or_none()
+    if locked_application is None:
+        raise LogicalRoleApplicationAuthorizationError(
+            "Application is unavailable for this role.",
+            role_id=int(role.id),
+            application_ids=(int(application_id),),
+        )
+
+    context = authorize_logical_role_application(
+        db,
+        role=role,
+        application_id=int(application_id),
+    )
+    if not context.is_related:
+        return replace(context, source_application=locked_application)
+
+    membership_query = db.query(SisterRoleEvaluation).filter(
+        SisterRoleEvaluation.organization_id == int(role.organization_id),
+        SisterRoleEvaluation.role_id == int(role.id),
+        SisterRoleEvaluation.candidate_id == int(locked_application.candidate_id),
+        SisterRoleEvaluation.source_application_id == int(locked_application.id),
+        SisterRoleEvaluation.deleted_at.is_(None),
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        membership_query = membership_query.with_for_update()
+    locked_membership = membership_query.populate_existing().one_or_none()
+    if locked_membership is None:
+        raise LogicalRoleApplicationAuthorizationError(
+            "Candidate is no longer in the acting role's candidate pool.",
+            role_id=int(role.id),
+            application_ids=(int(application_id),),
+            candidate_id=int(locked_application.candidate_id),
+        )
+    return replace(
+        context,
+        source_application=locked_application,
+        related_evaluation=locked_membership,
+    )
+
+
 def authorize_historical_logical_role_application(
     db: Session,
     *,
@@ -378,6 +442,7 @@ def authorize_logical_role_candidate(
 __all__ = [
     "LogicalRoleApplicationAuthorizationError",
     "LogicalRoleApplicationContext",
+    "authorize_logical_role_action_application",
     "authorize_logical_role_application",
     "authorize_logical_role_applications",
     "authorize_logical_role_candidate",

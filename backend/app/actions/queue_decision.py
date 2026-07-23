@@ -17,15 +17,19 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..domains.assessments_runtime.role_support import get_application
 from ..models.agent_decision import AGENT_DECISION_TYPES, AgentDecision
 from ..models.candidate_application_event import CandidateApplicationEvent
+from ..models.role import Role
 from ..services.decision_input_fingerprint import (
     capture_input_fingerprint as _capture_input_fingerprint,
 )
 from ..services.agent_decision_admission import (
     latest_active_decision,
     lock_decision_application,
+)
+from ..services.logical_role_application_authority import (
+    LogicalRoleApplicationAuthorizationError,
+    authorize_logical_role_application,
 )
 from .types import ACTOR_AGENT, Actor
 
@@ -347,27 +351,40 @@ def run(
     if actor.agent_run_id is None:
         raise HTTPException(status_code=422, detail="agent actor missing agent_run_id")
 
-    # Validate the application belongs to the org and is genuinely visible in
-    # this role. Related roles intentionally reuse the owner's one ATS
-    # application, so equality with ``app.role_id`` is not the right invariant.
-    app = get_application(application_id, organization_id, db)
+    # Resolve the logical role before applying application-row lifecycle
+    # rules. An ordinary role's membership is its live CandidateApplication,
+    # while a related role's membership is its live SisterRoleEvaluation;
+    # deleting that role's source/evidence row must not make a still-active
+    # related candidate visible-but-unactionable.
+    acting_role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+        )
+        .one_or_none()
+    )
+    if acting_role is None:
+        raise HTTPException(status_code=422, detail="role is unavailable")
+    try:
+        logical_context = authorize_logical_role_application(
+            db,
+            role=acting_role,
+            application_id=int(application_id),
+        )
+    except LogicalRoleApplicationAuthorizationError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Application not found",
+        ) from exc
+    app = logical_context.source_application
+    cross_role = logical_context.is_related
+
     from ..services.related_role_application_runtime import (
         related_role_evaluation_for_application,
-        related_role_for_application,
         role_application_is_resolved,
     )
-
-    related = related_role_for_application(
-        db,
-        role_id=int(role_id),
-        application=app,
-    )
-    cross_role = related is not None
-    if int(app.role_id) != int(role_id) and related is None:
-        raise HTTPException(
-            status_code=422,
-            detail=f"application {application_id} does not belong to role {role_id}",
-        )
 
     # Related-role queue admission must serialize with role-local stage and
     # outcome transitions. Those transitions lock Application -> membership
@@ -501,6 +518,11 @@ def run(
     if locked_subject is None:
         raise HTTPException(status_code=422, detail="application is unavailable")
     app = locked_subject
+    # Close the read/lock race for ordinary roles. Related roles deliberately
+    # remain actionable while their explicit membership is live even if this
+    # evidence row is soft-deleted; their membership lock above is authoritative.
+    if not cross_role and app.deleted_at is not None:
+        raise HTTPException(status_code=422, detail="application is unavailable")
 
     from ..services.decision_policy_generation import (
         validate_queue_policy_generation,

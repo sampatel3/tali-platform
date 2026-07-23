@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import event
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Query
@@ -226,6 +227,248 @@ def test_ownerless_related_role_agent_cycle_uses_local_membership(db):
         .one()
     )
     assert decision.evidence["ats_transport_linked"] is False
+
+
+def test_active_related_membership_with_deleted_evidence_still_queues(
+    db,
+):
+    from app.actions import queue_decision
+
+    org, owner, application, roles, evaluations = _family(
+        db,
+        related_count=1,
+    )
+    related = roles[0]
+    evaluation = evaluations[0]
+    later_candidate = Candidate(
+        organization_id=int(org.id),
+        email=f"later-related-runtime-{org.id}@example.com",
+        full_name="Later Related Runtime Candidate",
+        cv_text="Production AI delivery and Python platform ownership.",
+    )
+    db.add(later_candidate)
+    db.flush()
+    later_application = CandidateApplication(
+        organization_id=int(org.id),
+        candidate_id=int(later_candidate.id),
+        role_id=int(owner.id),
+        source="manual",
+        pipeline_stage="review",
+        application_outcome="open",
+        cv_text=later_candidate.cv_text,
+    )
+    db.add(later_application)
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=int(org.id),
+            role_id=int(related.id),
+            source_application_id=int(later_application.id),
+            ats_application_id=int(later_application.id),
+            status="done",
+            pipeline_stage="review",
+            spec_fingerprint="later-related",
+            role_fit_score=82,
+        )
+    )
+    application.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    result = run_related_role_cycle(db, role=related)
+
+    assert result["status"] == "ok"
+    assert result["created"] == 2
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == int(related.id),
+            AgentDecision.application_id == int(application.id),
+        )
+        .one()
+    )
+    assert decision.candidate_id == application.candidate_id
+    assert decision.evidence["sister_evaluation_id"] == evaluation.id
+    assert decision.evidence["source_application_id"] == application.id
+    assert {
+        int(row.application_id)
+        for row in db.query(AgentDecision)
+        .filter(AgentDecision.role_id == int(related.id))
+        .all()
+    } == {int(application.id), int(later_application.id)}
+
+    replay = run_related_role_cycle(db, role=related)
+    assert replay["status"] == "ok"
+    assert replay["pending"] == 2
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.role_id == int(related.id))
+        .count()
+        == 2
+    )
+
+    # The same soft-deleted physical row is only evidence for the related
+    # role. It is no longer a live membership in its ordinary owner role.
+    run = (
+        db.query(AgentRun)
+        .filter(AgentRun.role_id == int(related.id))
+        .one()
+    )
+    with pytest.raises(HTTPException) as deleted_owner:
+        queue_decision.run(
+            db,
+            Actor.agent(int(run.id)),
+            organization_id=int(org.id),
+            role_id=int(owner.id),
+            application_id=int(application.id),
+            decision_type="advance_to_interview",
+            reasoning="Deleted owner application must remain unavailable.",
+            evidence={},
+            confidence=1.0,
+            model_version="offline-test",
+            prompt_version="deleted-evidence-ground-truth.v1",
+            skip_episode=True,
+        )
+    assert deleted_owner.value.status_code == 404
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.role_id == int(owner.id))
+        .count()
+        == 0
+    )
+
+
+def test_related_queue_fails_closed_without_exact_live_membership(db):
+    from app.actions import queue_decision
+
+    org, _owner, application, roles, evaluations = _family(
+        db,
+        related_count=1,
+    )
+    related = roles[0]
+    evaluation = evaluations[0]
+    run = AgentRun(
+        organization_id=int(org.id),
+        role_id=int(related.id),
+        trigger="manual",
+        status="running",
+        model_version="offline-test",
+        prompt_version="logical-membership-ground-truth.v1",
+    )
+    unrelated = Role(
+        organization_id=int(org.id),
+        name="Unrelated ordinary role",
+        source="manual",
+        job_spec_text="A separate role with no candidate membership.",
+    )
+    other_org = Organization(
+        name="Other tenant",
+        slug=f"other-related-queue-{id(db)}",
+    )
+    db.add_all([run, unrelated, other_org])
+    db.flush()
+    other_role = Role(
+        organization_id=int(other_org.id),
+        name="Other tenant role",
+        source="manual",
+        job_spec_text="A separate tenant's role.",
+    )
+    db.add(other_role)
+    db.commit()
+    actor = Actor.agent(int(run.id))
+
+    def _queue(*, organization_id: int, role_id: int):
+        return queue_decision.run(
+            db,
+            actor,
+            organization_id=organization_id,
+            role_id=role_id,
+            application_id=int(application.id),
+            decision_type="advance_to_interview",
+            reasoning="Only exact live logical membership may authorize this.",
+            evidence={},
+            confidence=1.0,
+            model_version="offline-test",
+            prompt_version="logical-membership-ground-truth.v1",
+            skip_episode=True,
+        )
+
+    with pytest.raises(HTTPException) as wrong_role:
+        _queue(organization_id=int(org.id), role_id=int(unrelated.id))
+    assert wrong_role.value.status_code == 404
+
+    with pytest.raises(HTTPException) as wrong_tenant:
+        _queue(
+            organization_id=int(other_org.id),
+            role_id=int(other_role.id),
+        )
+    assert wrong_tenant.value.status_code == 404
+
+    evaluation.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    with pytest.raises(HTTPException) as removed_membership:
+        _queue(organization_id=int(org.id), role_id=int(related.id))
+    assert removed_membership.value.status_code == 404
+
+    evaluation.deleted_at = None
+    application.candidate.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    with pytest.raises(HTTPException) as deleted_candidate:
+        _queue(organization_id=int(org.id), role_id=int(related.id))
+    assert deleted_candidate.value.status_code == 404
+    assert db.query(AgentDecision).count() == 0
+
+
+def test_deleted_ordinary_application_stays_blocked_at_action_boundaries(db):
+    from app.actions import advance_stage, reject_application, send_assessment
+
+    org, owner, application, _roles, _evaluations = _family(
+        db,
+        related_count=1,
+    )
+    recruiter = User(
+        organization_id=int(org.id),
+        email=f"deleted-action-boundary-{org.id}@example.com",
+        hashed_password="not-used",
+        is_active=True,
+        is_verified=True,
+    )
+    db.add(recruiter)
+    application.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    actor = Actor.recruiter(recruiter)
+
+    calls = (
+        lambda: advance_stage.run(
+            db,
+            actor,
+            organization_id=int(org.id),
+            application_id=int(application.id),
+            to_stage="advanced",
+        ),
+        lambda: reject_application.run(
+            db,
+            actor,
+            organization_id=int(org.id),
+            application_id=int(application.id),
+        ),
+        lambda: send_assessment.run(
+            db,
+            actor,
+            organization_id=int(org.id),
+            application_id=int(application.id),
+            role_id=int(owner.id),
+        ),
+    )
+    for call in calls:
+        with pytest.raises(HTTPException) as blocked:
+            call()
+        assert blocked.value.status_code == 404
+
+    db.refresh(application)
+    assert application.deleted_at is not None
+    assert application.pipeline_stage == "review"
+    assert application.application_outcome == "open"
+    assert db.query(Assessment).count() == 0
 
 
 def test_passive_shared_input_reset_holds_visible_cards_and_blocks_cycle(db):
@@ -684,6 +927,7 @@ def test_auto_send_creates_assessment_owned_by_related_role(db):
     org, _owner, application, roles, evaluations = _family(db, task=True)
     related = roles[0]
     related.auto_send_assessment = True
+    application.deleted_at = datetime.now(timezone.utc)
     db.commit()
     with patch(
         "app.actions.send_assessment.get_assessment_creation_gate",
@@ -703,6 +947,7 @@ def test_auto_send_creates_assessment_owned_by_related_role(db):
     assert assessment.assessment_repo_url is None
     assert assessment.assessment_branch is None
     assert assessment.clone_command is None
+    assert db.get(CandidateApplication, application.id).deleted_at is not None
     assert db.get(CandidateApplication, application.id).pipeline_stage == "review"
     assert db.get(SisterRoleEvaluation, evaluations[0].id).pipeline_stage == "review"
 
@@ -980,6 +1225,7 @@ def test_deterministic_auto_reject_resolves_only_the_opted_in_related_role(db):
     opted_in.auto_reject = True
     for evaluation in evaluations:
         evaluation.role_fit_score = 20
+    application.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
     with patch("app.actions.reject_application.notify_rejection") as provider_reject:
@@ -993,6 +1239,7 @@ def test_deterministic_auto_reject_resolves_only_the_opted_in_related_role(db):
     assert "auto_executed" not in sibling_result
     assert db.get(SisterRoleEvaluation, evaluations[0].id).application_outcome == "rejected"
     assert db.get(SisterRoleEvaluation, evaluations[1].id).application_outcome == "open"
+    assert db.get(CandidateApplication, application.id).deleted_at is not None
     assert db.get(CandidateApplication, application.id).application_outcome == "open"
     assert {
         (decision.role_id, decision.status)
@@ -1012,6 +1259,7 @@ def test_auto_advance_updates_only_the_opted_in_related_role(db):
     related.auto_advance = True
     sibling = _pending_decision(db, role=roles[1], application=application)
     sibling.status = "processing"
+    application.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
     result = run_related_role_cycle(db, role=related)
@@ -1025,6 +1273,7 @@ def test_auto_advance_updates_only_the_opted_in_related_role(db):
     assert result["auto_executed"] == 1
     assert current.status == "approved"
     assert db.get(AgentDecision, sibling.id).status == "processing"
+    assert db.get(CandidateApplication, application.id).deleted_at is not None
     assert db.get(CandidateApplication, application.id).pipeline_stage == "review"
     stages_by_role = {
         row.role_id: row.pipeline_stage

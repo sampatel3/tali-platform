@@ -23,6 +23,11 @@ from ..domains.assessments_runtime.pipeline_service import (
 )
 from ..domains.assessments_runtime.role_support import get_application, is_resolved
 from ..models.candidate_application import CandidateApplication
+from ..models.role import Role
+from ..services.logical_role_application_authority import (
+    LogicalRoleApplicationAuthorizationError,
+    authorize_logical_role_action_application,
+)
 from .types import ACTOR_AGENT, Actor
 
 
@@ -44,14 +49,33 @@ def run(
             detail="Agent cannot directly advance stages — queue_advance_decision and let the recruiter approve.",
         )
 
-    app = get_application(application_id, organization_id, db)
-    application_lock = db.query(CandidateApplication).filter(
-        CandidateApplication.id == int(application_id),
-        CandidateApplication.organization_id == int(organization_id),
+    app = get_application(
+        application_id,
+        organization_id,
+        db,
+        include_deleted=True,
     )
-    if db.bind is not None and db.bind.dialect.name == "postgresql":
-        application_lock = application_lock.with_for_update()
-    app = application_lock.populate_existing().one()
+    acting_role_id = int((metadata or {}).get("acting_role_id") or app.role_id)
+    acting_role = (
+        db.query(Role)
+        .filter(
+            Role.id == acting_role_id,
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+        )
+        .one_or_none()
+    )
+    if acting_role is None:
+        raise HTTPException(status_code=404, detail="Role not found")
+    try:
+        context = authorize_logical_role_action_application(
+            db,
+            role=acting_role,
+            application_id=int(application_id),
+        )
+    except LogicalRoleApplicationAuthorizationError as exc:
+        raise HTTPException(status_code=404, detail="Application not found") from exc
+    app = context.source_application
     stage_source = (
         "agent"
         if actor.type != "recruiter" and (metadata or {}).get("agent_decision_id")

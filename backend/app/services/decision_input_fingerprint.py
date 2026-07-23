@@ -57,22 +57,21 @@ def capture_input_fingerprint(
         assessment_score = getattr(app, "assessment_score_cache_100", None)
         taali_score = getattr(app, "taali_score_cache_100", None)
         pre_screen_cutoff = getattr(role, "pre_screen_cutoff_score_100", None)
-        if int(role_id) != int(app.role_id):
-            from ..models.sister_role_evaluation import SisterRoleEvaluation
+        from .related_role_application_runtime import (
+            related_role_evaluation_for_application,
+        )
 
-            evaluation = (
-                db.query(SisterRoleEvaluation)
-                .filter(
-                    SisterRoleEvaluation.role_id == int(role_id),
-                    SisterRoleEvaluation.source_application_id == int(app.id),
-                )
-                .one_or_none()
-            )
-            role_fit_score = (
-                getattr(evaluation, "role_fit_score", None)
-                if evaluation is not None
-                else None
-            )
+        # Physical row ownership is not the logical-role boundary. A candidate
+        # may apply directly to a related role, making ``app.role_id`` equal to
+        # ``role_id`` while the live SisterRoleEvaluation still owns that
+        # role's score, stage, and freshness lifecycle.
+        evaluation = related_role_evaluation_for_application(
+            db,
+            role_id=int(role_id),
+            application=app,
+        )
+        if evaluation is not None:
+            role_fit_score = getattr(evaluation, "role_fit_score", None)
             frozen = evidence if isinstance(evidence, dict) else {}
             role_fit_score = frozen.get("role_fit_score", role_fit_score)
             assessment_score = frozen.get("assessment_score")
