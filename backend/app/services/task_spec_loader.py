@@ -524,6 +524,50 @@ def _validate_decisions_dim(
     return errors
 
 
+def _validate_comprehension_dim(evaluation_rubric: Dict[str, Any] | None) -> List[str]:
+    """A publishable task MUST carry exactly one ``comprehension_outcome`` dim.
+
+    The post-submit understanding check runs on every assessment regardless of
+    task — it lives in the submit path, not the rubric. The rubric decides only
+    whether those answers are SCORED. So a task without this dimension still
+    asks the candidate five questions and still shows the answers on the
+    report; it just quietly drops them out of Discernment.
+
+    That silent-partial-credit failure is exactly what ``_validate_decisions_dim``
+    guards against for Delegation, and it is the failure mode that shipped: the
+    generator was told to emit this dimension, nothing checked, and generated
+    tasks came out one axis short while passing every other gate (the fluency
+    coverage gate is satisfied by ``output_scrutiny`` alone). Fail at
+    publication instead.
+
+    More than one is also rejected — two dimensions grading the same check
+    would double-count one signal against the axis.
+    """
+    if not isinstance(evaluation_rubric, dict):
+        return []
+    dims = [
+        dim_id
+        for dim_id, details in evaluation_rubric.items()
+        if isinstance(details, dict)
+        and str(details.get("grader") or "").strip() == "comprehension_outcome"
+    ]
+    if not dims:
+        return [
+            "no rubric dimension declares grader=comprehension_outcome; the "
+            "post-submit understanding check would run and be shown on the "
+            "report but never scored into Discernment (add "
+            "submission_comprehension, splitting weight with output_scrutiny)"
+        ]
+    if len(dims) > 1:
+        return [
+            "rubric dim(s) "
+            + ", ".join(sorted(dims))
+            + " all declare grader=comprehension_outcome; exactly one dimension "
+            "may grade the understanding check or the signal is double-counted"
+        ]
+    return []
+
+
 def validate_rubric_weights(evaluation_rubric: Dict[str, Any] | None) -> List[str]:
     if not evaluation_rubric:
         return []
@@ -810,7 +854,19 @@ def validate_task_spec(
     spec: Dict[str, Any],
     *,
     mode: TaskSpecValidationMode | str = TaskSpecValidationMode.PUBLICATION,
+    require_comprehension_dim: bool = True,
 ) -> TaskSpecValidationResult:
+    """Validate one task spec.
+
+    ``require_comprehension_dim`` is an AUTHORING-time rule, which is why it is
+    a separate switch rather than part of the publication contract. Authoring a
+    task without it is a bug — the understanding check would run unscored — so
+    generation and canonical spec loads fail closed. But *starting* an
+    assessment on such a task is not a candidate-facing defect: the check still
+    runs, the answers still reach the report, and only the Discernment rollup is
+    short. Refusing to start the assessment over that would be wildly
+    disproportionate, so ``_enforce_artifact_first_task`` opts out.
+    """
     validation_mode = _coerce_validation_mode(mode)
     task_id = spec.get("task_id") or "unknown"
     errors: List[str] = []
@@ -863,6 +919,8 @@ def validate_task_spec(
     errors.extend(_validate_tiers(spec))
     if validation_mode is TaskSpecValidationMode.PUBLICATION:
         errors.extend(validate_publication_contract(spec))
+        if require_comprehension_dim:
+            errors.extend(_validate_comprehension_dim(spec.get("evaluation_rubric")))
 
     repo_structure = spec.get("repo_structure")
     workspace_bootstrap = spec.get("workspace_bootstrap")
