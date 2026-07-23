@@ -26,7 +26,13 @@ import {
   Card,
   Panel,
 } from '../../shared/ui/TaaliPrimitives';
+import {
+  isIntegritySignalEvent,
+  resolveTabSwitchCount,
+  summarizeIntegritySignals,
+} from '../../shared/assessment/integritySignals';
 import { buildRoleFitEvidenceModel } from './assessmentViewModels';
+import { CandidateIntegritySignalsPanel } from './CandidateIntegritySignalsPanel';
 import { RoleFitEvidenceSections } from './RoleFitEvidenceSections';
 
 const normalizeAssessmentStatus = (status) => {
@@ -58,6 +64,14 @@ export const CandidateAiUsageTab = ({ candidate }) => {
   const assessmentStatus = normalizeAssessmentStatus(assessment.status || candidate?.status);
   const promptEmptyMessage = promptEmptyMessageForStatus(assessmentStatus);
   const promptList = Array.isArray(candidate?.promptsList) ? candidate.promptsList : [];
+  // ``tab_switch_count`` is only submitted when proctoring is on, so with
+  // MVP_DISABLE_PROCTORING it reads 0 while the timeline holds the real
+  // ``visibility_hidden`` events. Derive from the timeline when it does.
+  const integritySummary = useMemo(
+    () => summarizeIntegritySignals(candidate?.timeline),
+    [candidate?.timeline],
+  );
+  const tabSwitchCount = resolveTabSwitchCount(assessment, integritySummary);
 
   return (
     <div className="space-y-4">
@@ -80,9 +94,16 @@ export const CandidateAiUsageTab = ({ candidate }) => {
         </Card>
         <Card className="p-3.5">
           <div className="text-xs font-medium uppercase tracking-[0.05em] text-[var(--taali-muted)]">Tab switches</div>
-          <div className={`mt-1 text-xl font-bold ${assessment.tab_switch_count > 5 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}>{assessment.tab_switch_count ?? '--'}</div>
+          <div
+            className={`mt-1 text-xl font-bold ${tabSwitchCount > 5 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}
+            data-testid="assessment-tab-switch-count"
+          >
+            {integritySummary.hasData || assessment.tab_switch_count != null ? tabSwitchCount : '--'}
+          </div>
         </Card>
       </div>
+
+      <CandidateIntegritySignalsPanel summary={integritySummary} />
 
       {assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? (
         <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
@@ -382,7 +403,13 @@ const timelineIconForType = (type) => {
 };
 
 const normalizeTimelineEvents = (timeline) => {
-  const items = Array.isArray(timeline) ? timeline : [];
+  // Integrity metrics are summarised in CandidateIntegritySignalsPanel with the
+  // framing they need. Left in this list they fell through to the generic
+  // fallback below and rendered as bare "Visibility Hidden" / "Copy Attempt"
+  // rows interleaved with the candidate's actual work.
+  const items = (Array.isArray(timeline) ? timeline : []).filter(
+    (event) => !isIntegritySignalEvent(event),
+  );
   let sawPrompt = false;
   const normalized = items.map((raw, index) => {
     const eventTypeRaw = String(raw?.event_type || raw?.type || raw?.event || '').toLowerCase();

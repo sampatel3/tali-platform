@@ -24,7 +24,7 @@ Taali is your **processor** (and, under the EU AI Act, the **provider**); you ar
 | AI pre-screen | Screens applications against role criteria |
 | CV↔JD scoring | Scores candidate vs. job with cited verbatim evidence (Claude) |
 | Deterministic verdict | Rule-based advance/reject verdict. **Advances are queued for your human sign-off. Pre-screen rejections are applied automatically by default** — you can turn that off per role (see §C) |
-| AI work-sample assessment | Candidate completes a task; session telemetry plus integrity metrics from the assessment tab (clipboard, blocked export attempts, tab-focus changes) captured for cheating deterrence (**no screen, microphone, or camera**) |
+| AI work-sample assessment | Candidate completes a task; session telemetry plus integrity metrics from the assessment tab (clipboard, blocked export attempts, tab-focus and fullscreen changes) captured for cheating deterrence (**no screen, microphone, or camera**) |
 | Interview transcripts | Only if **you** connect Fireflies |
 | Candidate reports | Reports/shortlists shared via time-limited, revocable links |
 
