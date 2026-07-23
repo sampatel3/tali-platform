@@ -124,6 +124,21 @@ vi.mock('../shared/api/authClient', () => ({
   auth: { me: vi.fn(), login: vi.fn(), register: vi.fn() },
 }));
 
+vi.mock('../shared/api/orgClient', () => ({
+  organizations: {
+    get: vi.fn().mockResolvedValue({ data: { id: 1, name: 'Taali' } }),
+  },
+}));
+
+// Candidate report tests do not exercise background batch/sync discovery.
+// AppShell mounts JobStatusProvider on every authenticated recruiter route;
+// leaving the real provider active starts low-level API polling outside the
+// mocked report client and leaks XMLHttpRequests into jsdom.
+vi.mock('../contexts/JobStatusContext', () => ({
+  JobStatusProvider: ({ children }) => children,
+  useJobStatus: () => null,
+}));
+
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
   RadarChart: () => <div data-testid="radar-chart" />,
