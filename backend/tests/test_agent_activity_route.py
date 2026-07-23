@@ -408,3 +408,65 @@ def test_agent_activity_route_404s_for_other_org(client):
         headers=headers,
     )
     assert resp.status_code == 404
+
+
+def test_org_status_last_activity_reports_newest_event_past_scan_window(client):
+    """The header tick bounds how many events it inspects — newest first.
+
+    ``org_header_extras`` narrows to the newest ``ACTIVITY_SCAN_LIMIT`` events
+    before applying the live-logical scope filter, because that filter is a
+    correlated EXISTS that costs the same again for every row it inspects.
+    An org with more events than the window must still report its most recent
+    activity, not whichever row the window happened to start on.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.domains.agentic._hub_shared import ACTIVITY_SCAN_LIMIT
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_activity(org_name="Scan Window Org")
+    _attach_user_to_org(email, seeded["org_id"])
+
+    now = datetime.now(timezone.utc)
+    sess = TestingSessionLocal()
+    try:
+        # Comfortably more events than the scan window, oldest first, so the
+        # newest event sits at the far end of the ledger.
+        for index in range(ACTIVITY_SCAN_LIMIT + 10):
+            sess.add(
+                CandidateApplicationEvent(
+                    application_id=seeded["application_id"],
+                    organization_id=seeded["org_id"],
+                    role_id=seeded["role_id"],
+                    event_type="pipeline_stage_changed",
+                    from_stage="applied",
+                    to_stage="review",
+                    actor_type="agent",
+                    reason=f"filler {index}",
+                    created_at=now - timedelta(minutes=ACTIVITY_SCAN_LIMIT + 10 - index),
+                )
+            )
+        sess.add(
+            CandidateApplicationEvent(
+                application_id=seeded["application_id"],
+                organization_id=seeded["org_id"],
+                role_id=seeded["role_id"],
+                event_type="pipeline_stage_changed",
+                from_stage="review",
+                to_stage="advanced",
+                actor_type="recruiter",
+                reason="newest of all",
+                created_at=now,
+            )
+        )
+        sess.commit()
+    finally:
+        sess.close()
+
+    resp = client.get("/api/v1/agent/org-status", headers=headers)
+    assert resp.status_code == 200, resp.text
+    last_activity = resp.json()["last_activity"]
+    assert last_activity is not None
+    assert last_activity["reason"] == "newest of all"
+    assert last_activity["actor_type"] == "recruiter"

@@ -121,6 +121,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const {
     payload: sharedOrgStatus,
+    error: orgStatusError,
     refetch: refetchOrgStatus,
   } = useAgentStatusOrg(Boolean(user));
 
@@ -765,6 +766,17 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const agentRunningCount = Number(kpis.active_role_count || 0);
   const agentPausedCount = Number(kpis.paused_role_count || 0);
   const headerAgent = useMemo(() => {
+    if (!orgStatus) {
+      // The `kpis` fallback below derives what it can from locally loaded
+      // decisions, but nothing local knows how many roles have the agent on —
+      // it hard-codes zero. Reporting that as OFF told recruiters their agents
+      // were off whenever the org poll was slow or failing. Report unknown.
+      return {
+        loading: !orgStatusError,
+        unavailable: Boolean(orgStatusError),
+        controlScope: 'workspace',
+      };
+    }
     const running = agentRunningCount;
     const paused = agentPausedCount;
     const enabled = running + paused;
@@ -802,6 +814,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     kpis.local_paused_role_count,
     kpis.paused_reason,
     orgAgentAction,
+    orgStatus,
+    orgStatusError,
   ]);
 
   return (
