@@ -299,6 +299,9 @@ def test_runner_reports_unprovable_semantics_as_partial_not_exact_zero(
         ),
     )
     base_query = MagicMock()
+    scoped_query = MagicMock()
+    apply_scope = MagicMock(return_value=scoped_query)
+    monkeypatch.setattr(runner, "apply_searchable_candidate_scope", apply_scope)
     monkeypatch.setattr(runner.cache_module, "get", lambda _key: parsed)
 
     result = runner.run_search(
@@ -320,8 +323,8 @@ def test_runner_reports_unprovable_semantics_as_partial_not_exact_zero(
     assert "exact graph path: n_hop_from" in warning.message
     # The central live-candidate authorization predicate is always applied;
     # unsupported semantics stop before any retrieval/materialization work.
-    base_query.filter.assert_called_once()
-    base_query.filter.return_value.with_entities.assert_not_called()
+    apply_scope.assert_called_once_with(base_query, organization_id=1)
+    scoped_query.with_entities.assert_not_called()
 
 
 def test_production_fusion_enforces_two_independent_evidence_sources() -> None:
