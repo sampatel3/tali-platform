@@ -36,6 +36,12 @@ const SUBPROCESSORS = [
     transfer: 'EU–US DPF + UK Extension (certified); SCCs as fallback',
   },
   {
+    name: 'Amazon Web Services (S3)',
+    function: 'Object storage — CV and job-spec uploads, cached report documents',
+    location: 'US (us-east-1)',
+    transfer: 'EU–US DPF + UK Extension + Swiss–US DPF (certified)',
+  },
+  {
     name: 'GitHub (Microsoft)',
     function: 'Assessment repositories',
     location: 'US',

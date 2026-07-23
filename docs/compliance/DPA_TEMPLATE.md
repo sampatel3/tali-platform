@@ -148,6 +148,8 @@ These describe Taali's **actual** controls; each is kept appropriate to the risk
 
 Canonical, live list: **taali.ai/subprocessors**. DPF statuses below were verified against vendor privacy notices/changelogs on **2026-07-23**; re-confirm each on dataprivacyframework.gov at DPA signature (roadmap R6).
 
+`[CONFIRM]` — object storage is S3-compatible and the provider is set by deployment config (`AWS_S3_ENDPOINT_URL`: unset = AWS S3, or Tigris / Cloudflare R2 / MinIO). The row below assumes the AWS S3 default. Confirm the production endpoint and correct this row plus the public page if production points elsewhere.
+
 | Sub-processor | Function | Location | Transfer mechanism |
 |---|---|---|---|
 | Anthropic | AI model processing (scoring, assessment chat) | US | EU–US DPF + UK Extension (certified, verified 2026-07-23) |
@@ -157,6 +159,7 @@ Canonical, live list: **taali.ai/subprocessors**. DPF statuses below were verifi
 | Fireflies | Interview transcription (only if Customer connects it) | US | EU–US DPF (certified, verified 2026-07-23); SCC fallback per its DPA |
 | Resend | Transactional email | US | EU–US DPF + UK Extension (certified, verified 2026-07-23) |
 | Stripe | Billing (Taali-controller data; listed for completeness) | US | EU–US DPF + UK Extension (certified, verified 2026-07-23); SCC fallback |
+| Amazon Web Services (S3) | Object storage — CV / job-spec uploads, cached report documents (`AWS_S3_BUCKET`, default region `us-east-1`) | US | EU–US DPF + UK Extension + Swiss DPF (certified, verified 2026-07-23) |
 | GitHub / Microsoft | Assessment repositories | US | EU–US DPF + UK Extension + Swiss DPF (certified, verified 2026-07-23) |
 | Neo4j (Aura) | Candidate evidence graph (where enabled) | US | EU–US DPF + UK Extension + Swiss DPF (certified, verified 2026-07-23) |
 | Voyage (MongoDB) | Embeddings for the evidence graph | US | EU–US DPF + UK Extension + Swiss DPF (MongoDB group certification, verified 2026-07-23) |

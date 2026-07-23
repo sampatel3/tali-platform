@@ -33,7 +33,7 @@ Taali is the **processor** (and, under the EU AI Act, the **provider**); the Cus
 
 - **Data subjects:** the Customer's candidates and applicants; interview participants where Fireflies is connected.
 - **Data categories:** as in `ROPA.md` / `DPA_TEMPLATE.md` Annex I. No special-category data is intentionally processed; incidental special-category signals can appear in free-text CVs, transcripts and answers.
-- **Where:** United States today (Railway `us-east4`, Vercel), plus the sub-processors in `DPA_TEMPLATE.md` Annex III. EU region on the 2027 roadmap.
+- **Where:** United States today (Railway `us-east4`, Vercel, AWS S3 object storage for candidate documents), plus the sub-processors in `DPA_TEMPLATE.md` Annex III. EU region on the 2027 roadmap.
 - **Recipients:** the Customer; sub-processors under flow-down contracts.
 - **Retention:** per `RETENTION_SCHEDULE.md` and the Customer's configured period.
 

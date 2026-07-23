@@ -17,13 +17,14 @@ Processing carried out on behalf of each customer (the controller). One row per 
 
 | Activity | Categories of data | Categories of data subjects | Purpose | Transfers | Retention | Sub-processors |
 |---|---|---|---|---|---|---|
-| ATS sync | Identity/contact, CV content, structured profile, raw ATS payloads (`workable_data` / `bullhorn_data`), ATS identifiers | Customer's candidates/applicants | Sync candidate records to/from customer ATS | US (see §3) | Per customer period + `RETENTION_SCHEDULE.md` | Railway |
+| ATS sync | Identity/contact, CV content, structured profile, raw ATS payloads (`workable_data` / `bullhorn_data`), ATS identifiers | Customer's candidates/applicants | Sync candidate records to/from customer ATS | US (see §3) | Per customer period + `RETENTION_SCHEDULE.md` | Railway, AWS S3 |
+| Document storage | CV / job-spec file uploads, cached report documents | Candidates | Durable storage of candidate documents (Railway filesystem is ephemeral) | US | Same clock as candidate record | AWS S3 (S3-compatible; endpoint set by deployment config) |
 | AI pre-screen | CV text, screening answers, profile | Candidates | Screen applications vs role criteria | US | Same clock as candidate record | Railway, Anthropic |
 | CV↔JD scoring | CV content, profile, job spec | Candidates | Score candidate vs job with cited evidence | US | Same clock | Railway, Anthropic, `[Neo4j/Voyage if enabled]` |
 | Deterministic verdict + decision application | Scores, rule path, policy revision, override history, auto-reject state/reason/timestamp | Candidates | Advance/reject verdict. Advances are queued for the customer's human sign-off; **pre-screen rejections are applied automatically** where the customer leaves that setting on (the default), switchable off per role | US | Decision/audit history retained as compliance evidence (see `RETENTION_SCHEDULE.md`) | Railway |
 | AI work-sample assessment | Prompts, Claude responses, file changes, validation runs (no screen/mic/camera) | Candidates | Evaluate work-sample performance | US | Same clock as candidate record | Railway, Anthropic, E2B, GitHub/Microsoft |
 | Interview transcripts | Voice-derived transcript text | Candidates + interview participants | Transcribe interviews (only if customer connects Fireflies) | US | Same clock | Fireflies, Railway |
-| Candidate reports / shortlists | Name, CV text, scores, evidence | Candidates | Share reports to customer via revocable links | US | Same clock (frozen snapshots — see R8) | Railway |
+| Candidate reports / shortlists | Name, CV text, scores, evidence | Candidates | Share reports to customer via revocable links | US | Same clock (frozen snapshots — see R8) | Railway, AWS S3 |
 | Outreach / sourcing | Contact + profile data | Prospective candidates | Candidate sourcing/outreach where enabled | US | `[per customer]` | Railway, Resend |
 | Calibration / re-scoring | Candidate scores/outcomes | Candidates | Tune scoring **within a customer's data only** | US | `[per customer]` | Railway, Anthropic |
 | Transactional email | Name, email | Candidates (assessment invites etc.) | Send platform emails | US | `[transient]` | Resend |
@@ -53,4 +54,4 @@ Notes: `hello@` / `support@` are aliases on `sampatel@taali.ai`; `noreply@` has 
 
 ## Section 3 — Where the data is (shared by both sections)
 
-United States today: Railway `us-east4` (API, Postgres, Redis) and Vercel (frontend/CDN), plus the sub-processors listed above. Transfer mechanisms per sub-processor are published at **taali.ai/subprocessors** and reproduced in `DPA_TEMPLATE.md` Annex III (DPF + UK Extension where certified — all verified 2026-07-23 except E2B, which relies on SCCs + UK Addendum). EU hosting region on the 2027 roadmap.
+United States today: Railway `us-east4` (API, Postgres, Redis), Vercel (frontend/CDN), and S3-compatible object storage for CV / job-spec uploads and cached report documents (AWS S3 `us-east-1` by default; provider set by `AWS_S3_ENDPOINT_URL` — confirm the production endpoint), plus the sub-processors listed above. Transfer mechanisms per sub-processor are published at **taali.ai/subprocessors** and reproduced in `DPA_TEMPLATE.md` Annex III (DPF + UK Extension where certified — all verified 2026-07-23 except E2B, which relies on SCCs + UK Addendum). EU hosting region on the 2027 roadmap.
