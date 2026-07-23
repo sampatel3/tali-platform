@@ -19,7 +19,11 @@ from ...components.assessments.task_snapshot import (
     freeze_assessment_task,
     task_view_for_assessment,
 )
-from ...components.assessments.submission_runtime import build_submission_receipt
+from ...components.assessments import understanding_check
+from ...components.assessments.submission_runtime import (
+    build_submission_receipt,
+    generate_understanding_check_questions,
+)
 from ...components.assessments.service import (
     CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE,
     _enforce_artifact_first_task,
@@ -45,6 +49,7 @@ from ...schemas.assessment import (
     DemoBookingResponse,
     DemoAssessmentStartRequest,
     SubmitRequest,
+    UnderstandingCheckAnswerRequest,
 )
 
 from .candidate_claude_chat_routes import router as candidate_claude_chat_router
@@ -705,3 +710,161 @@ def submit_assessment_endpoint(
         db,
         defer_scoring=True,
     )
+
+
+# --- Post-submit understanding check ---------------------------------------
+#
+# These run against a FROZEN assessment: the artifact is captured, the status
+# is terminal, and nothing here can change the submitted work. They only append
+# answers. That is why they validate the token and live candidate session (the
+# same bar as the CV upload) rather than requiring a signed request proof,
+# which exists to protect workspace mutations.
+
+
+def _load_check_assessment(assessment_id: int, token: str, session: str | None, db: Session) -> Assessment:
+    assessment = (
+        db.query(Assessment)
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.is_voided.is_(False),
+        )
+        .first()
+    )
+    if assessment is None:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    validate_assessment_token(assessment, token)
+    validate_runtime_candidate_session(assessment, session)
+    return assessment
+
+
+def _check_state_payload(assessment: Assessment, *, question: dict | None) -> dict:
+    total = len(assessment.understanding_check_questions or [])
+    return {
+        "status": assessment.understanding_check_status,
+        "question": question,
+        "answered": len(assessment.understanding_check_answers or []),
+        "total": total,
+        "expires_at": (
+            assessment.understanding_check_expires_at.isoformat()
+            if assessment.understanding_check_expires_at
+            else None
+        ),
+    }
+
+
+@router.get("/{assessment_id}/understanding-check")
+def get_understanding_check(
+    assessment_id: int,
+    x_assessment_token: str = Header(..., description="Assessment access token"),
+    x_assessment_session: str | None = Header(None, description="Live candidate browser session key"),
+    db: Session = Depends(get_db),
+):
+    """Serve the next unanswered question, or report the check is over.
+
+    One question at a time and never a look-ahead: a candidate who can see the
+    whole set can spend the entire window on it collectively, which is exactly
+    what the per-question deadline is there to prevent.
+    """
+    assessment = _load_check_assessment(assessment_id, x_assessment_token, x_assessment_session, db)
+    if not understanding_check.is_window_open(assessment):
+        # Covers never-opened, skipped, completed and expired alike. The
+        # candidate surface only needs to know there is nothing left to answer.
+        return _check_state_payload(assessment, question=None)
+
+    if assessment.understanding_check_status == understanding_check.STATUS_GENERATING:
+        # Submit reserved the window without spending a model call on the
+        # request the candidate was watching. Generate now, behind the check
+        # screen's loading state. The row lock serializes a double-fetch (two
+        # tabs, a retry) so only the first caller pays for generation and the
+        # second reads the questions it wrote.
+        assessment = (
+            db.query(Assessment)
+            .filter(Assessment.id == assessment.id)
+            .with_for_update()
+            .one()
+        )
+        if assessment.understanding_check_status == understanding_check.STATUS_GENERATING:
+            generate_understanding_check_questions(
+                assessment,
+                _load_assessment_task(assessment, db),
+                db,
+                settings_obj=settings,
+            )
+        if not understanding_check.is_window_open(assessment):
+            # Generation produced nothing usable; the check is skipped and
+            # grading is free to run.
+            return _check_state_payload(assessment, question=None)
+
+    question = understanding_check.next_question(assessment)
+    if question is None:
+        return _check_state_payload(assessment, question=None)
+    understanding_check.mark_served(assessment, question["id"])
+    db.commit()
+    return _check_state_payload(assessment, question=question)
+
+
+@router.post("/{assessment_id}/understanding-check/answer")
+def answer_understanding_check(
+    assessment_id: int,
+    data: UnderstandingCheckAnswerRequest,
+    x_assessment_token: str = Header(..., description="Assessment access token"),
+    x_assessment_session: str | None = Header(None, description="Live candidate browser session key"),
+    db: Session = Depends(get_db),
+):
+    """Record one answer and hand back the next question.
+
+    Answers are graded here, deterministically, so the stored record is
+    self-describing and a later re-score never re-runs a model over it.
+    """
+    assessment = _load_check_assessment(assessment_id, x_assessment_token, x_assessment_session, db)
+    if not understanding_check.is_window_open(assessment):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "UNDERSTANDING_CHECK_CLOSED",
+                "message": "The understanding check has already finished.",
+            },
+        )
+    try:
+        understanding_check.record_answer(
+            assessment,
+            question_id=data.question_id,
+            selected_index=data.selected_index,
+            elapsed_ms=data.elapsed_ms,
+            tab_switches=data.tab_switches,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    question = understanding_check.next_question(assessment)
+    if question is None:
+        score = understanding_check.close_window(
+            assessment, status=understanding_check.STATUS_COMPLETED
+        )
+        append_assessment_timeline_event(
+            assessment,
+            "understanding_check_completed",
+            {
+                "questions_total": len(assessment.understanding_check_questions or []),
+                "score": score,
+            },
+        )
+        db.commit()
+        # Grading has been parked behind the open window since submit. Kick it
+        # now so results land promptly; the every-minute sweep still covers a
+        # broker outage, so this is latency only, never correctness.
+        try:
+            from ...tasks.rubric_retry_tasks import retry_incomplete_rubric_scoring
+
+            retry_incomplete_rubric_scoring.delay(int(assessment.id))
+        except Exception:
+            logger.exception(
+                "Failed to enqueue grading after understanding check assessment_id=%s;"
+                " sweep will recover",
+                assessment.id,
+            )
+        return _check_state_payload(assessment, question=None)
+
+    understanding_check.mark_served(assessment, question["id"])
+    db.commit()
+    return _check_state_payload(assessment, question=question)

@@ -90,6 +90,55 @@ const humanizeSourceColumn = (column) => humanizeDimensionId(
   String(column || '').replace(/_score$/, ''),
 );
 
+// Post-submit understanding check, shown as evidence under Discernment.
+//
+// This is the one place a recruiter can see whether the candidate could read
+// back the code the agent produced for them. Renders nothing at all when no
+// check was asked (a run from before the feature, or one whose generator
+// failed) — an empty block would read as "they scored zero", which is a
+// different and much worse claim than "we didn't ask".
+const UnderstandingCheckEvidence = ({ check }) => {
+  if (!check || !check.status || check.status === 'skipped') return null;
+  const total = Number(check.questions_total || 0);
+  if (total <= 0) return null;
+  const correct = Number(check.questions_correct || 0);
+  const pct = Math.round((100 * correct) / total);
+  const questions = Array.isArray(check.questions) ? check.questions : [];
+  const tabSwitches = Number(check.tab_switches_during_check || 0);
+
+  return (
+    <div className="sc5-crit" data-testid="understanding-check-evidence">
+      <div className="sc5-crit-row">
+        <span className="sc5-crit-name">Understanding check</span>
+        {check.status === 'expired' ? (
+          <span className="taali-badge font-mono text-[0.625rem] uppercase">
+            window expired
+          </span>
+        ) : null}
+        <span className="sc5-crit-score">{correct} / {total} correct</span>
+      </div>
+      <p className="sc5-crit-why">
+        Multiple-choice questions generated from this candidate&apos;s own submitted
+        diff and answered after their work was frozen, with the agent no longer
+        available. {pct}% correct.
+        {tabSwitches > 0
+          ? ` They switched away from the tab ${tabSwitches} time${tabSwitches === 1 ? '' : 's'} during the check.`
+          : ''}
+      </p>
+      {questions.length > 0 ? (
+        <div className="sc5-crit-cites">
+          {questions.map((question) => (
+            <code key={question.id}>
+              {question.is_correct ? '✓' : (question.timed_out ? '⏱' : '✗')} {question.probe}
+              {question.evidence ? ` · ${question.evidence}` : ''}
+            </code>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 // THE 5 Ds as the spine of the Assessment tab. Each axis row expands into the
 // graded rubric criteria that produced its score (grouped via the same
 // lens→axis mapping the backend uses), so the scorecard and its evidence are
@@ -218,6 +267,9 @@ export const AssessmentScorecard = ({ assessment = null }) => {
             </button>
             {isOpen ? (
               <div className="sc5-body">
+                {axis.key === 'discernment' ? (
+                  <UnderstandingCheckEvidence check={assessment?.understanding_check} />
+                ) : null}
                 {criteria.length > 0 ? criteria.map((item) => (
                   <div key={item.id} className="sc5-crit">
                     <div className="sc5-crit-row">

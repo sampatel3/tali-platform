@@ -83,6 +83,7 @@ def _retry_due(assessment: Any, *, now: datetime) -> bool:
 )
 def retry_incomplete_rubric_scoring(assessment_id: int) -> dict[str, Any]:
     """Claim and re-run scoring for one incomplete completed assessment."""
+    from ..components.assessments import understanding_check
     from ..components.assessments.repository import append_assessment_timeline_event
     from ..components.assessments.service import (
         resume_code_for_assessment,
@@ -115,6 +116,45 @@ def retry_incomplete_rubric_scoring(assessment_id: int) -> dict[str, Any]:
             return {"status": "skipped", "reason": "already_complete", "assessment_id": int(assessment_id)}
 
         now = _utcnow()
+        # The candidate is still inside the post-submit understanding-check
+        # window. Grading reads their answers as a rubric dimension, so running
+        # now would grade an empty check and freeze that as the result. Defer
+        # WITHOUT claiming the lease or burning an attempt — otherwise the
+        # exponential backoff below would push real grading out by hours purely
+        # because the candidate was still answering. The every-minute sweep
+        # re-offers this row, and the window is bounded by
+        # ``understanding_check.WINDOW_MINUTES``, so this cannot wait forever.
+        if understanding_check.is_window_open(assessment, now=now):
+            return {
+                "status": "deferred",
+                "reason": "awaiting_understanding_check",
+                "assessment_id": int(assessment_id),
+            }
+        # Window closed with the candidate still mid-check (they closed the
+        # tab, or never started). Settle it to `expired` here rather than in a
+        # sweep of its own: this is the one place that must observe the closed
+        # window before grading reads the answers, so a separate sweep could
+        # only ever race it.
+        if (
+            getattr(assessment, "understanding_check_status", None)
+            in understanding_check.OPEN_STATUSES
+        ):
+            understanding_check.close_window(
+                assessment,
+                status=understanding_check.STATUS_EXPIRED,
+                now=now,
+            )
+            append_assessment_timeline_event(
+                assessment,
+                "understanding_check_expired",
+                {
+                    "questions_total": len(assessment.understanding_check_questions or []),
+                    "questions_answered": len(assessment.understanding_check_answers or []),
+                    "score": assessment.understanding_check_score,
+                },
+            )
+            db.commit()
+
         _, rubric = _rubric_payload(assessment)
         retry = rubric.get("retry") if isinstance(rubric.get("retry"), dict) else {}
         if str(retry.get("status") or "") == "running" and not _retry_due(assessment, now=now):

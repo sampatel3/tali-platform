@@ -54,7 +54,7 @@
         "poor": "Accepts the agent's metric and gate because the tests go green; no evidence of running either against the failure it exists to detect."
       },
       "lens": "discernment",
-      "weight": 0.15
+      "weight": 0.08
     },
     "verification_before_done": {
       "criteria": {
@@ -88,6 +88,11 @@
         "good": "Harness works with a gap.",
         "poor": "Not implemented / broken / nothing shipped."
       }
+    },
+    "submission_comprehension": {
+      "grader": "comprehension_outcome",
+      "part": "applied",
+      "weight": 0.07
     }
   },
   "expected_candidate_journey": {
@@ -204,6 +209,11 @@
         "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
         "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
         "rubric_dimension": "ai_native_practice"
+      },
+      {
+        "job_requirement": "Can maintain, debug and extend the evaluation harness they shipped, not just land a green suite",
+        "task_artifact": "Answers to comprehension questions generated from their own frozen diff after submit",
+        "rubric_dimension": "submission_comprehension"
       }
     ]
   },

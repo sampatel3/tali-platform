@@ -60,7 +60,7 @@
         "poor": "Accepts the agent's recovery code at face value; no evidence of checking what it does to the gap window, the duplicates, or the bookmark."
       },
       "lens": "discernment",
-      "weight": 0.15
+      "weight": 0.08
     },
     "verification_before_done": {
       "criteria": {
@@ -94,6 +94,11 @@
         "good": "Works with a gap.",
         "poor": "Not implemented / broken / nothing shipped."
       }
+    },
+    "submission_comprehension": {
+      "grader": "comprehension_outcome",
+      "part": "applied",
+      "weight": 0.07
     }
   },
   "expected_candidate_journey": {
@@ -217,6 +222,11 @@
         "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
         "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
         "rubric_dimension": "ai_native_practice"
+      },
+      {
+        "job_requirement": "Can debug and extend the Glue pipeline code they shipped once it is running in production",
+        "task_artifact": "Answers to comprehension questions generated from their own frozen diff after submit",
+        "rubric_dimension": "submission_comprehension"
       }
     ]
   },

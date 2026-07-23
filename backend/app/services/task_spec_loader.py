@@ -103,7 +103,9 @@ class TaskSpecValidationMode(str, Enum):
     LEGACY = "legacy"
 
 
-_SUPPORTED_GRADERS = frozenset({"interrogation_outcome", "practice_outcome"})
+_SUPPORTED_GRADERS = frozenset(
+    {"interrogation_outcome", "practice_outcome", "comprehension_outcome"}
+)
 _SUPPORTED_DELIVERABLE_KINDS = frozenset({"code", "doc"})
 _DEFAULT_DELIVERABLE_KIND = "code"
 # Rubric-dimension lens (selects the grader frame): "decision" punishes lazy
@@ -120,7 +122,9 @@ _CANDIDATE_QA_GRADERS = frozenset({"interrogation_outcome"})
 # - discernment: review of agent output against workspace evidence
 # - practice/practice_outcome: repo, tool and process trace
 _WORK_EVIDENCE_LENSES = frozenset({"deliverable", "diligence", "discernment", "practice"})
-_WORK_EVIDENCE_GRADERS = frozenset({"practice_outcome"})
+# comprehension_outcome grades answers to questions generated FROM the frozen
+# workspace artifact, so it is grounded in workspace evidence like the rest.
+_WORK_EVIDENCE_GRADERS = frozenset({"practice_outcome", "comprehension_outcome"})
 _VERIFIER_CONFIG_FILES = frozenset({
     ".coveragerc",
     "pytest.ini",
@@ -820,16 +824,19 @@ def validate_task_spec(
         rubric_dimensions: set[str] = set()
     else:
         rubric_dimensions = set(evaluation_rubric.keys())
-        # 4-9 dimensions. The lens model drives the natural count per task.
+        # 4-10 dimensions. The lens model drives the natural count per task.
         # The floor of 4 predates full axis coverage; the ceiling was 7 until
         # every task had to grade all five fluency axes (see
-        # validate_fluency_coverage). A task that already carried two decision
-        # dims and two deliverable dims needs three more to reach coverage, so
-        # 9 is the real ceiling now. It is a ceiling, not a target — each
-        # criteria-graded dimension costs one Anthropic call per submission.
-        if not (4 <= len(rubric_dimensions) <= 9):
+        # validate_fluency_coverage), then 9. It moved to 10 when
+        # submission_comprehension joined the required spine — the ceiling
+        # tracks the spine, so a task with two decision dims and two
+        # deliverable dims still has room for the axis-coverage dims it is
+        # obliged to carry. It is a ceiling, not a target, and the marginal
+        # cost is low here: the two newest spine dims are graded
+        # deterministically and cost no Anthropic call at all.
+        if not (4 <= len(rubric_dimensions) <= 10):
             errors.append(
-                f"evaluation_rubric must define 4-9 dimensions; got {len(rubric_dimensions)}"
+                f"evaluation_rubric must define 4-10 dimensions; got {len(rubric_dimensions)}"
             )
 
     errors.extend(validate_rubric_weights(evaluation_rubric))

@@ -107,7 +107,7 @@
         "poor": "Ships the agent's draft substantially as written; no evidence of checking its claims against the stakeholder briefs, the incident log, or the cohort data."
       },
       "lens": "discernment",
-      "weight": 0.15
+      "weight": 0.08
     },
     "verification_before_done": {
       "criteria": {
@@ -159,6 +159,11 @@
         "good": "Cadence present but mixed; some status language.",
         "poor": "Cadence is a date, CEO bullets are status updates, or the memo is bloated."
       }
+    },
+    "submission_comprehension": {
+      "grader": "comprehension_outcome",
+      "part": "applied",
+      "weight": 0.07
     }
   },
   "expected_candidate_journey": {
@@ -281,6 +286,11 @@
         "job_requirement": "Works AI-natively — sets up context, plans, and verifies as part of normal delivery",
         "task_artifact": "Context file / plan artifacts in the final repo + verification in the process trace",
         "rubric_dimension": "ai_native_practice"
+      },
+      {
+        "job_requirement": "Can defend and adapt the position they shipped when an exec pushes back on the detail",
+        "task_artifact": "Answers to comprehension questions generated from their own submitted material after submit",
+        "rubric_dimension": "submission_comprehension"
       }
     ]
   },

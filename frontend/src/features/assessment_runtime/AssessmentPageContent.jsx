@@ -5,6 +5,7 @@ import { motionSafeScrollBehavior } from '../../shared/motion';
 import { AssessmentContextWindow } from './AssessmentContextWindow';
 import { AssessmentRuntimeAlerts } from './AssessmentRuntimeAlerts';
 import { AssessmentStatusScreen } from './AssessmentStatusScreen';
+import { UnderstandingCheck } from './UnderstandingCheck';
 import { AssessmentTopBar } from './AssessmentTopBar';
 import { AssessmentWorkspace } from './AssessmentWorkspace';
 import { AssessmentStagePanel } from './AssessmentStagePanel';
@@ -276,6 +277,9 @@ export default function AssessmentPage({
   const [timeMilestoneNotice, setTimeMilestoneNotice] = useState(null);
   const [submittedAtIso, setSubmittedAtIso] = useState(null);
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+  // Set from the submit receipt. When true the candidate gets the post-submit
+  // understanding check before the confirmation screen.
+  const [understandingCheckPending, setUnderstandingCheckPending] = useState(false);
   const [claudeBudget, setClaudeBudget] = useState(null);
   const [repoFilesState, setRepoFilesState] = useState([]);
   const [selectedRepoFile, setSelectedRepoFile] = useState(null);
@@ -385,6 +389,7 @@ export default function AssessmentPage({
     setTimeMilestoneNotice(null);
     setSubmittedAtIso(null);
     setSubmitConfirmOpen(false);
+    setUnderstandingCheckPending(false);
     setOutput('');
     setRepoFilesState([]);
     setSelectedRepoFile(null);
@@ -1573,7 +1578,7 @@ export default function AssessmentPage({
           setSubmitError(syncResult.errorMessage || "Couldn't sync your latest changes. Try submitting again.");
           return;
         }
-        await assessments.submit(
+        const submitResponse = await assessments.submit(
           id,
           {
             final_code: codeRef.current,
@@ -1586,9 +1591,17 @@ export default function AssessmentPage({
           candidateSessionKey,
         );
         // Success — now (and only now) flip to the submitted screen.
-        clearCandidateSessionKey(assessmentTokenForApi);
+        const checkPending = Boolean(submitResponse?.data?.understanding_check_pending);
+        setUnderstandingCheckPending(checkPending);
+        // The understanding-check routes authenticate with the same token and
+        // live session as the workspace did, so the session key and proof
+        // binding have to outlive submit when a check is waiting. They are
+        // cleared in handleUnderstandingCheckFinished instead.
+        if (!checkPending) {
+          clearCandidateSessionKey(assessmentTokenForApi);
+          void clearCandidateProofBinding(assessmentTokenForApi);
+        }
         clearCandidateRuntimeRecovery(assessmentTokenForApi);
-        void clearCandidateProofBinding(assessmentTokenForApi);
         setSubmissionReceiptReconciled(Boolean(syncResult.receiptReconciliationRequired));
         setSubmittedAtIso(new Date().toISOString());
         setSubmitted(true);
@@ -1630,6 +1643,15 @@ export default function AssessmentPage({
       syncUnsyncedRepoFilesToWorkspace,
     ],
   );
+
+  // The check is over (answered out, expired, or it failed to load). Release
+  // the runtime credentials we deliberately held past submit, then fall
+  // through to the confirmation screen.
+  const handleUnderstandingCheckFinished = useCallback(() => {
+    setUnderstandingCheckPending(false);
+    clearCandidateSessionKey(assessmentTokenForApi);
+    void clearCandidateProofBinding(assessmentTokenForApi);
+  }, [assessmentTokenForApi]);
 
   // Mirror the latest handleSubmit into the ref consumed by the timer
   // interval so the timer never invokes a stale closure.
@@ -1773,6 +1795,22 @@ export default function AssessmentPage({
           </div>
         </div>
       </div>
+    );
+  }
+
+  // The work is frozen either way at this point. The check sits between the
+  // freeze and the confirmation screen so the candidate answers about code
+  // they can no longer change — and can no longer ask Claude about, since the
+  // workspace is gone.
+  if (submitted && understandingCheckPending) {
+    return (
+      <UnderstandingCheck
+        assessmentId={assessment?.id || assessmentId}
+        assessmentToken={assessmentTokenForApi}
+        candidateSessionKey={candidateSessionKey}
+        lightMode={assessmentLightMode}
+        onFinished={handleUnderstandingCheckFinished}
+      />
     );
   }
 
