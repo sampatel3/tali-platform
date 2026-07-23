@@ -292,7 +292,7 @@ export const LoginPage = ({ onNavigate }) => {
         <button
           type="button"
           className="taali-text-btn"
-          onClick={() => onNavigate('register')}
+          onClick={() => onNavigate('demo-lead')}
         >
           Request access
         </button>

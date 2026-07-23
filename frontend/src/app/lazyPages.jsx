@@ -8,9 +8,6 @@ export const LandingPage = lazy(() =>
 export const LoginPage = lazy(() =>
   import('../features/auth/LoginPage').then((m) => ({ default: m.LoginPage }))
 );
-export const RegisterPage = lazy(() =>
-  import('../features/auth/RegisterPage').then((m) => ({ default: m.RegisterPage }))
-);
 export const ForgotPasswordPage = lazy(() =>
   import('../features/auth/ForgotPasswordPage').then((m) => ({ default: m.ForgotPasswordPage }))
 );
