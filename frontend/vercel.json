@@ -4,14 +4,33 @@
     {
       "src": "/assets/(.*)-[A-Za-z0-9_-]{8}\\.[A-Za-z0-9]+",
       "caseSensitive": true,
-      "headers": { "Cache-Control": "public, max-age=31536000, immutable" },
+      "headers": {
+        "Cache-Control": "public, max-age=31536000, immutable"
+      },
       "continue": true
     },
-    { "handle": "filesystem" },
+    {
+      "handle": "filesystem"
+    },
+    {
+      "src": "/deck/links",
+      "caseSensitive": true,
+      "dest": "/index.html",
+      "headers": {
+        "Cache-Control": "no-store, max-age=0"
+      }
+    },
+    {
+      "src": "/deck/(.+)",
+      "caseSensitive": true,
+      "dest": "https://api.taali.ai/deck/$1"
+    },
     {
       "src": "/assets(?:/(.*))?",
       "caseSensitive": true,
-      "headers": { "Cache-Control": "private, no-store, max-age=0" },
+      "headers": {
+        "Cache-Control": "private, no-store, max-age=0"
+      },
       "status": 404
     },
     {
@@ -48,16 +67,60 @@
         "X-Permitted-Cross-Domain-Policies": "none"
       }
     },
-    { "src": "/agentic-hiring", "caseSensitive": true, "dest": "/agentic-hiring.html" },
-    { "src": "/ai-native-hiring", "caseSensitive": true, "dest": "/ai-native-hiring.html" },
-    { "src": "/ai-native-assessments", "caseSensitive": true, "dest": "/ai-native-assessments.html" },
-    { "src": "/report-preview", "caseSensitive": true, "dest": "/report-preview.html" },
-    { "src": "/home-preview", "caseSensitive": true, "dest": "/home-preview.html" },
-    { "src": "/jobs-preview", "caseSensitive": true, "dest": "/jobs-preview.html" },
-    { "src": "/pipeline-preview", "caseSensitive": true, "dest": "/pipeline-preview.html" },
-    { "src": "/search-preview", "caseSensitive": true, "dest": "/search-preview.html" },
-    { "src": "/analytics-preview", "caseSensitive": true, "dest": "/analytics-preview.html" },
-    { "src": "/settings-preview", "caseSensitive": true, "dest": "/settings-preview.html" },
-    { "src": "/(.*)", "caseSensitive": true, "dest": "/index.html" }
+    {
+      "src": "/agentic-hiring",
+      "caseSensitive": true,
+      "dest": "/agentic-hiring.html"
+    },
+    {
+      "src": "/ai-native-hiring",
+      "caseSensitive": true,
+      "dest": "/ai-native-hiring.html"
+    },
+    {
+      "src": "/ai-native-assessments",
+      "caseSensitive": true,
+      "dest": "/ai-native-assessments.html"
+    },
+    {
+      "src": "/report-preview",
+      "caseSensitive": true,
+      "dest": "/report-preview.html"
+    },
+    {
+      "src": "/home-preview",
+      "caseSensitive": true,
+      "dest": "/home-preview.html"
+    },
+    {
+      "src": "/jobs-preview",
+      "caseSensitive": true,
+      "dest": "/jobs-preview.html"
+    },
+    {
+      "src": "/pipeline-preview",
+      "caseSensitive": true,
+      "dest": "/pipeline-preview.html"
+    },
+    {
+      "src": "/search-preview",
+      "caseSensitive": true,
+      "dest": "/search-preview.html"
+    },
+    {
+      "src": "/analytics-preview",
+      "caseSensitive": true,
+      "dest": "/analytics-preview.html"
+    },
+    {
+      "src": "/settings-preview",
+      "caseSensitive": true,
+      "dest": "/settings-preview.html"
+    },
+    {
+      "src": "/(.*)",
+      "caseSensitive": true,
+      "dest": "/index.html"
+    }
   ]
 }

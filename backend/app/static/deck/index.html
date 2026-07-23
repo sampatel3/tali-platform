@@ -1,0 +1,1720 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
+<title>Taali · Partnership · 2026</title>
+<!-- Served only via GET /deck/{token} after a live-link check; the old
+     client-side token fence is gone with the CDN copy. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="investor-deck/tokens.css">
+<link rel="stylesheet" href="investor-deck/deck.css">
+
+<!-- ───────────────────────────────────────────────────────────────────────
+     Partner-pitch additions. Scoped here so the shared deck.css stays the
+     reusable base; these classes only exist for this partnership deck.
+     Product previews use the production UI components with representative
+     fixture data. They are labelled as previews; live customer proof is
+     reserved for the audited production slide.
+     ──────────────────────────────────────────────────────────────────── -->
+<style id="partner-additions">
+  /* Hub71 opening sequence — reused here without pulling the retired
+     Hub71 deck's full stylesheet into the partnership deck. */
+  .h71-head { margin-bottom: 28px; position: relative; z-index: 2; }
+  .h71-title { max-width: 1720px; font-size: 64px; }
+  .h71-deck {
+    margin: 14px 0 0; max-width: 1500px; font-size: 19px;
+    line-height: 1.42; color: var(--ink-2);
+  }
+  .h71-kicker {
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.3;
+    letter-spacing: .14em; color: var(--purple); text-transform: uppercase;
+    font-weight: 700;
+  }
+  .dark .h71-kicker { color: var(--purple-lav); }
+
+  /* Hub71 02 · Problem */
+  .h71-problem-two {
+    flex: 1; min-height: 0; display: grid;
+    grid-template-columns: 1fr 1fr; gap: 24px;
+  }
+  .h71-problem-half {
+    min-height: 0; padding: 42px 48px; border: 1px solid var(--line);
+    border-radius: 24px; background: var(--bg-2); display: flex;
+    flex-direction: column; justify-content: space-between;
+  }
+  .h71-problem-half.dark {
+    background: var(--ink); border-color: var(--ink); color: #fff;
+  }
+  .h71-word {
+    font-family: var(--font-display); font-size: 78px; font-weight: 600;
+    line-height: .96; letter-spacing: -.045em; color: var(--ink);
+  }
+  .h71-problem-half.dark .h71-word { color: #fff; }
+  .h71-problem-half p {
+    margin: 0; max-width: 650px; font-size: 22px; line-height: 1.45;
+    color: var(--ink-2);
+  }
+  .h71-problem-half.dark p { color: rgba(255,255,255,.78); }
+  .h71-takeaway {
+    min-height: 84px; margin-top: 18px; padding: 0 28px; border-radius: 16px;
+    background: var(--purple-soft); display: grid;
+    grid-template-columns: 440px 1fr; gap: 26px; align-items: center;
+  }
+  .h71-takeaway b { font-family: var(--font-display); font-size: 22px; }
+  .h71-takeaway span { font-size: 19px; color: var(--ink-2); }
+
+  /* Hub71 03 · Product */
+  .h71-two-engine {
+    flex: 1; min-height: 0; display: grid;
+    grid-template-columns: 1fr 1fr; gap: 24px;
+  }
+  .h71-engine-simple {
+    min-height: 0; padding: 42px 46px; border: 1px solid var(--line);
+    border-radius: 24px; background: var(--bg-2); display: flex;
+    flex-direction: column;
+  }
+  .h71-engine-simple.dark {
+    background: var(--ink); border-color: var(--ink); color: #fff;
+  }
+  .h71-engine-simple h3 {
+    margin: 34px 0 0; font-family: var(--font-display); font-size: 54px;
+    line-height: 1; letter-spacing: -.035em;
+  }
+  .h71-engine-simple p {
+    margin: auto 0; padding: 26px 0; max-width: 690px; font-size: 21px;
+    line-height: 1.5; color: var(--ink-2);
+  }
+  .h71-engine-simple.dark p { color: rgba(255,255,255,.76); }
+  .h71-engine-path {
+    margin-top: auto; padding-top: 25px; border-top: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: var(--font-mono); font-size: 14px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--purple);
+  }
+  .h71-engine-simple.dark .h71-engine-path {
+    border-color: rgba(255,255,255,.15); color: var(--purple-lav);
+  }
+  .h71-engine-path b { font-size: 18px; }
+  .h71-control-line {
+    min-height: 76px; margin-top: 18px; padding: 0 26px;
+    border: 1px solid color-mix(in oklab, var(--purple) 30%, var(--line));
+    border-radius: 15px; background: var(--purple-soft); display: grid;
+    grid-template-columns: 230px 1fr; align-items: center;
+  }
+  .h71-control-line span {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em;
+    color: var(--purple); text-transform: uppercase;
+  }
+  .h71-control-line b { font-size: 19px; }
+
+  /* Dark takeaway band under a slide's cards */
+  .takeaway-band {
+    margin-top: 24px; padding: 22px 30px; background: var(--ink); color: #fff;
+    border-radius: 16px; display: flex; align-items: center; gap: 18px;
+    font-size: 21px; line-height: 1.4;
+  }
+  .takeaway-band .lbl {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em;
+    color: var(--purple-lav); text-transform: uppercase; white-space: nowrap;
+  }
+  .takeaway-band em { color: var(--purple-lav); font-style: normal; font-weight: 600; }
+
+  /* Offering panels — one model, two uses */
+  .ways { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .way {
+    background: var(--bg-2); border: 1px solid var(--line); border-radius: 20px;
+    padding: 28px 30px; display: flex; flex-direction: column;
+  }
+  .way.hero { background: var(--ink); border-color: var(--ink); }
+  .way-tag {
+    font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700; margin-bottom: 12px;
+  }
+  .way.hero .way-tag { color: var(--purple-lav); }
+  .way-h {
+    font-family: var(--font-display); font-size: 34px; font-weight: 600;
+    letter-spacing: -0.025em; line-height: 1.08; color: var(--ink); margin-bottom: 18px;
+  }
+  .way.hero .way-h { color: #fff; }
+  .way-list { display: flex; flex-direction: column; gap: 13px; flex: 1; }
+  .way-li {
+    display: grid; grid-template-columns: 22px 1fr; gap: 11px;
+    font-size: 16.5px; line-height: 1.42; color: var(--ink-2);
+  }
+  .way.hero .way-li { color: rgba(255,255,255,0.9); }
+  .way-li .ic { color: var(--purple); font-weight: 700; font-family: var(--font-mono); }
+  .way.hero .way-li .ic { color: var(--purple-lav); }
+  .way-li b { color: var(--ink); font-weight: 600; }
+  .way.hero .way-li b { color: #fff; }
+
+  /* Offering footer: credits + pilot */
+  .offer-foot { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .offer-cell {
+    padding: 20px 26px; border-radius: 16px; display: flex; flex-direction: column; gap: 6px;
+  }
+  .offer-cell.credits { background: var(--bg-2); border: 1px solid var(--line); }
+  .offer-cell.pilot { background: var(--ink); color: #fff; }
+  .offer-cell .oc-tag {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--purple); font-weight: 700;
+  }
+  .offer-cell.pilot .oc-tag { color: var(--purple-lav); }
+  .offer-cell .oc-body { font-size: 16px; line-height: 1.45; color: var(--ink-2); }
+  .offer-cell.pilot .oc-body { color: rgba(255,255,255,0.92); }
+  .offer-cell .oc-body b { color: var(--ink); font-weight: 600; }
+  .offer-cell.pilot .oc-body b { color: #fff; }
+  .offer-cell.pilot a { color: var(--purple-lav); text-decoration: none; font-weight: 600; }
+
+  /* ---- Assessment workspace (chat-centred, agentic) ---- */
+  .ide.agentic .ide-body { grid-template-columns: 206px 1.04fr 1fr; }
+  .ide.agentic .ide-claude { border-right: 1px solid var(--line); }
+  .claude-glyph {
+    width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #7f39fb, #c44ad0); color: #fff; font-weight: 700; font-size: 13px; font-family: var(--font-display);
+  }
+  .claude-sub { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+  .term-ready {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+    font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--green);
+    border: 1px solid color-mix(in oklab, var(--green) 30%, var(--line)); border-radius: 999px; padding: 3px 9px;
+  }
+  .term-ready .d { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
+  .tk-tracker {
+    align-self: flex-start; margin: 0 14px 8px; font-family: var(--font-mono); font-size: 11px;
+    color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 4px 11px;
+  }
+  .ide-dock { border-top: 1px solid #241a33; background: #15101f; color: #e6e0ee; display: flex; flex-direction: column; }
+  .ide-dock .dock-tabs { display: flex; border-bottom: 1px solid rgba(255,255,255,0.08); font-family: var(--font-mono); font-size: 12px; }
+  .ide-dock .dock-tab { padding: 8px 16px; color: rgba(255,255,255,0.45); letter-spacing: 0.04em; }
+  .ide-dock .dock-tab.on { color: #fff; box-shadow: inset 0 -2px 0 var(--purple-lav); }
+  .ide-dock .dock-body { padding: 12px 18px; font-family: var(--font-mono); font-size: 13px; line-height: 1.65; color: #cfc7da; }
+  .ide-dock .cli .pr { color: var(--purple-lav); }
+  .ide-dock .cli .ok { color: #4ade80; }
+  .ide-dock .cli .mut { color: #7d738f; }
+
+  /* ---- Product pane shell (home hub + search) ---- */
+  .prod-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .prod-pane { background: var(--bg-2); border: 1px solid var(--line); border-radius: 20px; padding: 24px 26px; display: flex; flex-direction: column; gap: 14px; overflow: hidden; }
+  .pp-head { display: flex; align-items: baseline; gap: 12px; }
+  .pp-kicker { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .pp-title { font-family: var(--font-display); font-size: 27px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; }
+  .pp-sub { font-size: 14.5px; line-height: 1.45; color: var(--ink-2); margin-top: -4px; }
+
+  /* decision (HITL) cards */
+  .dec-card { border: 1px solid var(--line); border-radius: 14px; padding: 15px 17px; display: flex; flex-direction: column; gap: 9px; background: #fff; }
+  .dec-card.sel { background: var(--purple-soft); border-color: color-mix(in oklab, var(--purple) 32%, var(--line)); }
+  .dec-meta { display: flex; align-items: center; gap: 9px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); }
+  .dec-type { color: var(--ink-2); font-weight: 600; }
+  .dec-type.adv { color: var(--green); }
+  .dec-type.rej { color: #c0392b; }
+  .dec-score { background: var(--purple-soft); color: var(--purple); padding: 2px 9px; border-radius: 999px; font-weight: 700; }
+  .dec-needs { margin-left: auto; background: var(--purple); color: #fff; padding: 3px 10px; border-radius: 999px; font-weight: 700; letter-spacing: 0.08em; }
+  .dec-name { font-family: var(--font-display); font-size: 18px; font-weight: 600; color: var(--ink); letter-spacing: -0.01em; }
+  .dec-name .role { font-family: var(--font-sans); font-size: 13px; font-weight: 400; color: var(--ink-2); margin-left: 8px; }
+  .dec-reason { font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+  .dec-reason b { color: var(--ink); font-weight: 600; }
+  .dec-actions { display: flex; gap: 8px; }
+  .dec-btn { padding: 7px 15px; border-radius: 10px; font-size: 12.5px; font-weight: 600; border: 1px solid var(--line); background: #fff; color: var(--ink-2); }
+  .dec-btn.approve { background: var(--green); color: #fff; border-color: var(--green); }
+  .dec-btn.override { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 50%, var(--line)); }
+  .dec-btn.reject { color: #c0392b; border-color: color-mix(in oklab, #c0392b 35%, var(--line)); }
+
+  /* grounded search */
+  .sr-query { display: flex; align-items: center; gap: 10px; padding: 13px 15px; border: 1px solid color-mix(in oklab, var(--purple) 25%, var(--line)); border-radius: 12px; font-size: 14.5px; color: var(--ink); background: var(--bg); }
+  .sr-query .q { width: 7px; height: 16px; background: var(--purple); border-radius: 2px; }
+  .sr-result { border: 1px solid var(--line); border-radius: 14px; padding: 15px 17px; display: flex; flex-direction: column; gap: 11px; background: #fff; }
+  .sr-cand { display: flex; align-items: center; gap: 11px; }
+  .sr-av { width: 34px; height: 34px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); display: flex; align-items: center; justify-content: center; font-weight: 700; font-family: var(--font-display); font-size: 14px; }
+  .sr-cand .nm { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--ink); }
+  .sr-cand .sc { margin-left: auto; background: var(--green); color: #fff; font-family: var(--font-mono); font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .sr-crit { display: flex; align-items: center; gap: 9px; font-size: 13.5px; color: var(--ink-2); }
+  .sr-pill { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; font-weight: 700; }
+  .sr-pill.met { background: color-mix(in oklab, var(--green) 14%, #fff); color: var(--green); }
+  .sr-pill.partial { background: color-mix(in oklab, var(--amber) 16%, #fff); color: var(--amber); }
+  .sr-quote { border-left: 3px solid var(--purple); padding: 7px 13px; background: var(--bg); border-radius: 0 8px 8px 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
+  .sr-cite { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); margin-top: 5px; }
+
+  /* ---- slide 6: real product screenshots ---- */
+  .shot { margin: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 24px 60px -30px rgba(91,44,168,0.4); }
+  .shot-bar { display: flex; align-items: center; gap: 10px; padding: 9px 15px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .shot-bar .dots { display: flex; gap: 6px; }
+  .shot-bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: #d88a1c; display: block; }
+  .shot-bar .dots i:nth-child(1) { background: #f06; }
+  .shot-bar .dots i:nth-child(3) { background: #15a36a; }
+  .shot-url { font-family: var(--font-mono); font-size: 12px; color: var(--mute); letter-spacing: 0.04em; }
+  .shot-img { flex: 1; min-height: 0; background-size: cover; background-position: top center; background-repeat: no-repeat; }
+  .shot-cap { padding: 14px 18px 16px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; }
+  .shot-cap .t { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+  .shot-cap .t em { font-style: normal; color: var(--purple); }
+  .shot-cap .d { font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
+
+  /* ---- slide 9: role chips + filled stat grid ---- */
+  .role-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+  .role-chips span { font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.02em; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 5px 11px; }
+  .proof-right { display: flex; flex-direction: column; gap: 14px; }
+  .proof-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; flex: 1; grid-auto-rows: 1fr; }
+  .proof-stats .s { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 18px 22px; display: flex; flex-direction: column; justify-content: center; }
+  .proof-stats .n { font-family: var(--font-display); font-size: 42px; font-weight: 600; letter-spacing: -0.03em; color: var(--ink); line-height: 1; }
+  .proof-stats .s.accent .n { color: var(--purple); }
+  .proof-stats .l { margin-top: 8px; font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
+  .outcome-band { padding: 18px 24px; background: var(--ink); color: #fff; border-radius: 14px; font-size: 17px; line-height: 1.5; }
+  .outcome-band b { color: var(--purple-lav); }
+
+  /* ---- slide 10: bigger, bolder two options ---- */
+  .ways { flex: 1; }
+  .way { padding: 30px 36px 28px; }
+  .way-num { font-family: var(--font-display); font-size: 30px; font-weight: 600; color: color-mix(in oklab, var(--purple) 45%, var(--mute)); letter-spacing: -0.02em; line-height: 1; margin-bottom: 10px; }
+  .way.hero .way-num { color: var(--purple-lav); }
+  .way-h { font-size: 46px; line-height: 1.02; margin-bottom: 10px; }
+  .way-list { gap: 14px; }
+  .way-li { font-size: 19px; gap: 14px; }
+  .way-foot { margin-top: 20px; padding-top: 16px; border-top: 1px dashed var(--line); font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--purple); }
+  .way.hero .way-foot { border-color: rgba(255,255,255,0.2); color: var(--purple-lav); }
+
+  /* ---- slide 5: commentary chips (demo-style annotation) ---- */
+  .commentary { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+  .commentary span { display: inline-flex; align-items: center; gap: 8px; padding: 8px 15px; background: var(--bg-2); border: 1px solid var(--line); border-radius: 999px; font-size: 15px; color: var(--ink-2); }
+  .commentary b { color: var(--purple); font-weight: 700; font-family: var(--font-mono); }
+
+  /* ---- slide 6: two annotated halves (agentic+HITL / bespoke search) ---- */
+  .s5-grid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 26px; min-height: 0; }
+  .s5-col { display: flex; flex-direction: column; gap: 13px; min-height: 0; }
+  .s5-head { display: flex; align-items: flex-start; gap: 12px; }
+  .s5-badge { flex: none; width: 32px; height: 32px; border-radius: 9px; background: var(--purple); color: #fff; font-family: var(--font-display); font-weight: 700; font-size: 17px; display: flex; align-items: center; justify-content: center; }
+  .s5-badge.b { background: var(--ink); }
+  .s5-htext .t { font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); line-height: 1.1; }
+  .s5-htext .t em { font-style: normal; color: var(--purple); }
+  .s5-htext .d { font-size: 14px; line-height: 1.4; color: var(--ink-2); margin-top: 3px; }
+  .s5-col .shot { flex: 1; min-height: 0; }
+  .s5-notes { display: flex; flex-direction: column; gap: 8px; }
+  .s5-note { display: grid; grid-template-columns: 20px 1fr; gap: 10px; font-size: 14.5px; line-height: 1.42; color: var(--ink-2); }
+  .s5-note .k { color: var(--purple); font-weight: 700; font-family: var(--font-mono); }
+  .s5-note b { color: var(--ink); font-weight: 600; }
+  .s5-note.graph .k { color: var(--mute); }
+  .s5-note.graph { color: var(--mute); }
+  /* slide 6 shot frames — fixed aspect, full content (no crop) */
+  .s5-col .shot { flex: none; }
+  .s5-col .shot-img { aspect-ratio: 1.6; background-size: cover; background-position: top center; background-color: var(--bg-2); }
+
+  /* ---- slide 5: captured & scored → report strip ---- */
+  .s4-strip { display: grid; grid-template-columns: 0.95fr 1.3fr 0.95fr; gap: 14px; margin-top: 14px; }
+  .s4-cell { background: var(--bg-2); border: 1px solid var(--line); border-radius: 14px; padding: 13px 16px; display: flex; flex-direction: column; gap: 9px; }
+  .s4-tag { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .s4-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .s4-chips span { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 4px 9px; }
+  .s4-scorewrap { display: flex; gap: 16px; align-items: center; }
+  .s4-score { display: flex; flex-direction: column; align-items: center; flex: none; }
+  .s4-score .big { font-family: var(--font-display); font-size: 46px; font-weight: 600; letter-spacing: -0.03em; color: var(--purple); line-height: 0.9; }
+  .s4-score .lbl { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); text-align: center; margin-top: 5px; }
+  .s4-bars { flex: 1; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .s4-bars span { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); padding: 4px 9px; border-radius: 5px; border: 1px solid var(--line); background: linear-gradient(to right, color-mix(in oklab, var(--purple) 20%, #fff) var(--w,0%), var(--bg) var(--w,0%)); }
+  .s4-rep { font-size: 14px; line-height: 1.5; color: var(--ink-2); }
+  .s4-rep b { color: var(--ink); font-weight: 600; }
+
+  /* ---- slide 6 v6: built product panels (faithful, legible — not screenshots) ---- */
+  .prod-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg-2); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 20px 50px -30px rgba(91,44,168,0.4); }
+  .pp-bar { display: flex; align-items: center; gap: 10px; padding: 9px 15px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .pp-bar .dots { display: flex; gap: 6px; }
+  .pp-bar .dots i { width: 10px; height: 10px; border-radius: 50%; background: #d88a1c; display: block; }
+  .pp-bar .dots i:nth-child(1) { background: #f06; }
+  .pp-bar .dots i:nth-child(3) { background: #15a36a; }
+  .pp-url { font-family: var(--font-mono); font-size: 12px; color: var(--mute); letter-spacing: 0.04em; }
+  .pp-right { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 3px 11px; font-weight: 700; }
+  .pp-body { flex: 1; min-height: 0; padding: 18px 20px; display: flex; flex-direction: column; gap: 13px; overflow: hidden; }
+
+  /* HITL: decision queue */
+  .dq { display: flex; flex-direction: column; gap: 8px; }
+  .dq-row { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+  .dq-row.sel { border-color: color-mix(in oklab, var(--purple) 40%, var(--line)); background: var(--purple-soft); box-shadow: inset 3px 0 0 var(--purple); }
+  .dq-av { width: 26px; height: 26px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); font-family: var(--font-display); font-weight: 700; font-size: 11px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .dq-nm { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--ink); }
+  .dq-badge { font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; padding: 2px 8px; border-radius: 999px; }
+  .dq-badge.adv { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .dq-badge.rej { color: #c0392b; background: color-mix(in oklab, #c0392b 12%, #fff); }
+  .dq-needs { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.06em; color: #fff; background: var(--purple); border-radius: 999px; padding: 2px 7px; }
+  .dq-sc { margin-left: auto; font-family: var(--font-mono); font-weight: 700; font-size: 13px; color: var(--ink); }
+  .dq-row:not(.sel) .dq-needs { display: none; }
+  .dq-row:not(.sel) .dq-sc { margin-left: auto; }
+
+  /* HITL: decision detail */
+  .dd { flex: 1; border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line)); border-radius: 14px; background: #fff; padding: 15px 18px; display: flex; flex-direction: column; gap: 11px; }
+  .dd-top { display: flex; align-items: center; gap: 10px; font-family: var(--font-mono); font-size: 11px; }
+  .dd-badge.adv { color: var(--green); font-weight: 700; letter-spacing: 0.06em; }
+  .dd-needs { color: #fff; background: var(--purple); border-radius: 999px; padding: 2px 9px; font-weight: 700; }
+  .dd-conf { color: var(--mute); margin-left: auto; }
+  .dd-id { display: flex; align-items: center; justify-content: space-between; }
+  .dd-name { font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+  .dd-role { font-size: 13px; color: var(--ink-2); }
+  .dd-score { font-family: var(--font-display); font-size: 36px; font-weight: 600; color: var(--purple); line-height: 0.9; display: flex; flex-direction: column; align-items: center; }
+  .dd-score span { font-family: var(--font-mono); font-size: 9px; color: var(--mute); letter-spacing: 0.1em; margin-top: 3px; }
+  .dd-reason { font-size: 13.5px; line-height: 1.5; color: var(--ink-2); }
+  .dd-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .dd-stats div { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; }
+  .dd-stats .k { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--mute); }
+  .dd-stats .v { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--ink); }
+  .dd-actions { display: flex; gap: 8px; margin-top: auto; }
+
+  /* Search: query + ranked top-N */
+  .sq { font-size: 15px; line-height: 1.4; color: var(--ink); background: var(--bg); border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line)); border-radius: 12px; padding: 11px 15px; }
+  .sq-meta { font-family: var(--font-mono); font-size: 11px; color: var(--mute); letter-spacing: 0.03em; }
+  .rank { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; }
+  .rk-row { display: flex; align-items: center; gap: 11px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+  .rk-row:first-child { border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); background: var(--purple-soft); }
+  .rk-n { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--mute); width: 14px; text-align: center; flex: none; }
+  .rk-av { width: 28px; height: 28px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); font-family: var(--font-display); font-weight: 700; font-size: 11px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .rk-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+  .rk-nm { font-family: var(--font-display); font-size: 15px; font-weight: 600; color: var(--ink); }
+  .rk-role { font-size: 12px; color: var(--ink-2); }
+  .rk-pre { font-family: var(--font-mono); font-size: 11px; color: var(--mute); flex: none; }
+  .rk-sc { font-family: var(--font-mono); font-weight: 700; font-size: 13px; padding: 3px 10px; border-radius: 999px; flex: none; color: var(--purple); background: var(--purple-soft); }
+  .rk-note { font-family: var(--font-mono); font-size: 11px; color: var(--mute); }
+
+  /* ---- slide 6 v7: faithful home decision detail (A) ---- */
+  .hb-funnel { display: flex; gap: 7px; flex-wrap: wrap; }
+  .hb-funnel span { font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px 9px; }
+  .hb-funnel b { color: var(--ink); font-weight: 700; }
+  .hb-await { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; }
+  .hb-await .kk { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mute); }
+  .hb-await .c { font-family: var(--font-mono); font-size: 11px; font-weight: 700; border-radius: 999px; padding: 3px 9px; }
+  .hb-await .c.sa { color: var(--purple); background: var(--purple-soft); }
+  .hb-await .c.ad { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .hb-await .c.rj { color: #c0392b; background: color-mix(in oklab, #c0392b 12%, #fff); }
+  .hb-await .c.pr { color: var(--amber); background: color-mix(in oklab, var(--amber) 16%, #fff); }
+  .dd2 { flex: 1; border: 1px solid color-mix(in oklab, var(--purple) 20%, var(--line)); border-radius: 14px; background: #fff; padding: 15px 18px; display: flex; flex-direction: column; gap: 11px; }
+  .dd2-top { display: flex; align-items: center; gap: 9px; font-family: var(--font-mono); font-size: 11px; flex-wrap: wrap; }
+  .dd2-type { color: var(--purple); font-weight: 700; letter-spacing: 0.05em; }
+  .dd2-id { color: var(--mute); }
+  .dd2-needs { color: #fff; background: var(--purple); border-radius: 999px; padding: 2px 9px; font-weight: 700; }
+  .dd2-conf { color: var(--green); margin-left: auto; }
+  .dd2-id-row { display: flex; align-items: center; gap: 12px; }
+  .dd2-av { width: 40px; height: 40px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); font-family: var(--font-display); font-weight: 700; font-size: 15px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .dd2-who { flex: 1; min-width: 0; }
+  .dd2-name { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
+  .dd2-mail { font-family: var(--font-mono); font-size: 11.5px; color: var(--mute); }
+  .dd2-score { font-family: var(--font-display); font-size: 34px; font-weight: 600; color: var(--purple); line-height: 0.9; display: flex; flex-direction: column; align-items: center; flex: none; }
+  .dd2-score span { font-family: var(--font-mono); font-size: 9px; color: var(--mute); letter-spacing: 0.1em; margin-top: 3px; }
+  .dd2-reason { font-size: 13px; line-height: 1.5; color: var(--ink-2); flex: 1; }
+  .dd2-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+  .ab { font-family: var(--font-sans); font-size: 12.5px; font-weight: 600; border-radius: 9px; padding: 7px 13px; border: 1px solid var(--line); background: #fff; }
+  .ab.green { color: var(--green); border-color: color-mix(in oklab, var(--green) 45%, var(--line)); background: color-mix(in oklab, var(--green) 8%, #fff); }
+  .ab.amber { color: #c0392b; border-color: color-mix(in oklab, #c0392b 35%, var(--line)); }
+  .ab.amber-o { color: var(--amber); border-color: color-mix(in oklab, var(--amber) 45%, var(--line)); }
+  .ab.purple { color: #fff; background: var(--purple); border-color: var(--purple); }
+
+  /* ---- slide 6 v7: faithful candidate evidence card (B) ---- */
+  .ev-head { display: flex; flex-direction: column; gap: 5px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+  .ev-title { font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+  .ev-title b { color: var(--ink); font-family: var(--font-display); }
+  .ev-sub { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.03em; color: var(--mute); }
+  .ev-cand { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .ev-rank { font-family: var(--font-mono); font-size: 12px; font-weight: 700; color: var(--mute); }
+  .ev-nm { font-family: var(--font-display); font-size: 17px; font-weight: 600; color: var(--ink); }
+  .ev-taali { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 2px 9px; }
+  .ev-role { font-size: 12px; color: var(--ink-2); }
+  .ev-crits { display: flex; flex-direction: column; gap: 6px; }
+  .ev-crit { font-size: 12.5px; color: var(--ink); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ev-pill { font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: 0.05em; padding: 2px 7px; border-radius: 999px; flex: none; }
+  .ev-pill.met { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .ev-pill.partial { color: var(--amber); background: color-mix(in oklab, var(--amber) 16%, #fff); }
+  .ev-src { font-family: var(--font-mono); font-size: 10.5px; color: var(--mute); }
+  .ev-quote { font-size: 12px; line-height: 1.45; color: var(--ink-2); border-left: 2px solid color-mix(in oklab, var(--amber) 50%, var(--line)); padding: 3px 0 3px 10px; margin-left: 4px; }
+  .ev-cand-mini { display: flex; align-items: center; gap: 9px; padding-top: 9px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .ev-cand-mini .ev-nm { font-size: 14.5px; }
+
+  /* ---- slide 5 v9: assessment (2/3) + client report (1/3) ---- */
+  .s4-split { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; margin-top: 12px; align-items: stretch; }
+  .s4-split .ide { margin-top: 0; }
+  .asm-img { flex: 1; min-height: 0; background-size: cover; background-position: top center; background-color: var(--bg-2); }
+  .s4-cap { margin-top: 12px; font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.01em; color: var(--ink-2); background: var(--bg-2); border: 1px solid var(--line); border-radius: 12px; padding: 11px 16px; }
+  .s4-cap b { color: var(--purple); }
+  .cr-body { flex: 1; min-height: 0; padding: 15px 17px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+  .cr-banner { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.04em; color: var(--purple); background: var(--purple-soft); border-radius: 8px; padding: 6px 10px; }
+  .cr-id { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+  .cr-name { font-family: var(--font-display); font-size: 21px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); line-height: 1.05; }
+  .cr-role { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
+  .cr-verdict { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: #fff; background: var(--purple); border-radius: 999px; padding: 3px 10px; white-space: nowrap; flex: none; }
+  .cr-scores { display: flex; gap: 7px; }
+  .cr-sc { flex: 1; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 8px 6px; text-align: center; }
+  .cr-sc .n { font-family: var(--font-display); font-size: 22px; font-weight: 600; color: var(--ink); line-height: 1; }
+  .cr-sc .k { font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); margin-top: 4px; }
+  .cr-sc.lead { background: var(--purple-soft); border-color: color-mix(in oklab, var(--purple) 28%, var(--line)); }
+  .cr-sc.lead .n { color: var(--purple); font-size: 26px; }
+  .cr-tag { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--purple); font-weight: 700; margin-bottom: 6px; }
+  .cr-why { margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+  .cr-why li { list-style: none; font-size: 11.5px; line-height: 1.4; color: var(--ink-2); padding-left: 13px; position: relative; }
+  .cr-why li::before { content: "•"; position: absolute; left: 2px; color: var(--purple); }
+  .cr-dims { display: flex; flex-direction: column; gap: 5px; }
+  .cr-dim { display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); }
+  .cr-dim .dl { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cr-dim .db { width: 52px; height: 5px; border-radius: 3px; background: var(--bg-3); flex: none; overflow: hidden; }
+  .cr-dim .db i { display: block; height: 100%; background: var(--purple); }
+  .cr-dim .dn { width: 18px; text-align: right; color: var(--ink); font-weight: 700; flex: none; }
+  .cr-prov { font-family: var(--font-mono); font-size: 10px; color: var(--mute); }
+  .cr-foot { margin-top: auto; font-family: var(--font-mono); font-size: 10px; color: var(--mute); border-top: 1px solid var(--line); padding-top: 8px; }
+  .cr-rec { font-family: var(--font-display); font-size: 19px; font-weight: 600; letter-spacing: -0.02em; color: var(--purple); }
+  .cr-summary { font-size: 11.5px; line-height: 1.45; color: var(--ink-2); margin-top: 3px; }
+  .cr-cov { height: 7px; border-radius: 4px; overflow: hidden; display: flex; }
+  .cr-cov i { display: block; height: 100%; }
+  .cr-cov .m { background: var(--purple); }
+  .cr-cov .p { background: color-mix(in oklab, var(--purple) 32%, #fff); }
+  .cr-reqs { display: flex; flex-direction: column; gap: 5px; }
+  .cr-req { display: flex; align-items: flex-start; gap: 7px; font-size: 11px; line-height: 1.3; color: var(--ink-2); }
+  .cr-req .rp { font-family: var(--font-mono); font-size: 8px; font-weight: 700; letter-spacing: 0.04em; padding: 2px 6px; border-radius: 999px; flex: none; margin-top: 1px; }
+  .cr-req .rp.met { color: var(--green); background: color-mix(in oklab, var(--green) 14%, #fff); }
+  .cr-req .rp.part { color: var(--amber); background: color-mix(in oklab, var(--amber) 16%, #fff); }
+
+  /* agent-on treatment (the bold dark-purple ON pill, as on the live home) */
+  .agent-on { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: #fff; background: linear-gradient(135deg, #3a1d6e, #241147); border-radius: 999px; padding: 4px 11px; display: inline-flex; align-items: center; gap: 7px; }
+  .agent-on::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--purple-lav); box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 30%, transparent); }
+
+  /* ---- slide 5: governed role-agent operating loop ---- */
+  .agent-loop-layout {
+    flex: 1; min-height: 0; display: grid;
+    grid-template-columns: 1fr 54px 1.22fr 54px 1fr;
+    gap: 14px; align-items: stretch; margin-top: 8px;
+  }
+  .agent-loop-card {
+    min-height: 0; padding: 30px 32px; border: 1px solid var(--line);
+    border-radius: 22px; background: var(--bg-2); display: flex;
+    flex-direction: column;
+  }
+  .agent-loop-card.agent {
+    background: var(--ink); border-color: var(--ink); color: #fff;
+  }
+  .agent-loop-kicker {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .agent-loop-card.agent .agent-loop-kicker { color: var(--purple-lav); }
+  .agent-loop-title {
+    margin-top: 22px; font-family: var(--font-display); font-size: 35px;
+    line-height: 1.05; letter-spacing: -.03em; font-weight: 600;
+  }
+  .agent-loop-items { margin-top: auto; display: flex; flex-direction: column; gap: 10px; }
+  .agent-loop-item {
+    min-height: 52px; display: flex; align-items: center; gap: 12px;
+    padding: 10px 13px; border: 1px solid var(--line); border-radius: 12px;
+    background: #fff; color: var(--ink-2); font-size: 15px; line-height: 1.35;
+  }
+  .agent-loop-card.agent .agent-loop-item {
+    color: rgba(255,255,255,.84); border-color: rgba(255,255,255,.14);
+    background: rgba(255,255,255,.06);
+  }
+  .agent-loop-item b { color: var(--ink); font-weight: 600; }
+  .agent-loop-card.agent .agent-loop-item b { color: #fff; }
+  .agent-loop-item .n {
+    flex: none; font-family: var(--font-mono); font-size: 10px; color: var(--purple);
+    background: var(--purple-soft); border-radius: 999px; padding: 4px 8px;
+  }
+  .agent-loop-card.agent .agent-loop-item .n { color: var(--purple-lav); background: rgba(180,80,255,.16); }
+  .agent-loop-arrow { display: flex; align-items: center; justify-content: center; color: var(--purple); font-size: 34px; }
+  .agent-loop-bottom {
+    margin-top: 18px; padding: 17px 24px; border-radius: 15px;
+    border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line));
+    background: var(--purple-soft); display: flex; align-items: center;
+    justify-content: space-between; gap: 24px;
+  }
+  .agent-loop-bottom span:first-child {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .agent-loop-bottom b { font-size: 18px; color: var(--ink); }
+
+  /* ---- slide 10: two operating modes into one simple workflow ---- */
+  .ats-entry { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 4px; }
+  .ats-entry-card {
+    display: grid; grid-template-columns: 58px 1fr; gap: 18px; align-items: center;
+    padding: 20px 24px; border: 1px solid var(--line); border-radius: 18px;
+    background: var(--bg-2);
+  }
+  .ats-entry-card.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .ats-entry-icon {
+    width: 58px; height: 58px; border-radius: 16px; display: flex;
+    align-items: center; justify-content: center; font-family: var(--font-display);
+    font-size: 25px; font-weight: 700; color: var(--purple);
+    background: var(--purple-soft);
+  }
+  .ats-entry-card.primary .ats-entry-icon { color: var(--purple-lav); background: rgba(180,80,255,.16); }
+  .ats-entry-label {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .ats-entry-card.primary .ats-entry-label { color: var(--purple-lav); }
+  .ats-entry-title { margin-top: 4px; font-family: var(--font-display); font-size: 25px; font-weight: 600; letter-spacing: -.02em; }
+  .ats-entry-copy { margin-top: 5px; font-size: 14.5px; line-height: 1.4; color: var(--ink-2); }
+  .ats-entry-card.primary .ats-entry-copy { color: rgba(255,255,255,.76); }
+  .ats-merge {
+    margin: 13px auto 11px; width: max-content; padding: 6px 16px;
+    border-radius: 999px; background: var(--purple-soft); color: var(--purple);
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: .1em;
+    text-transform: uppercase; font-weight: 700;
+  }
+  .ats-flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 38px; }
+  .ats-step {
+    position: relative; min-height: 180px; padding: 22px 22px 20px;
+    border: 1px solid var(--line); border-radius: 18px; background: #fff;
+    box-shadow: 0 15px 40px -34px rgba(91,44,168,.5);
+  }
+  .ats-step:not(:last-child)::after {
+    content: "→"; position: absolute; right: -28px; top: 50%; transform: translateY(-50%);
+    color: var(--purple); font-size: 25px; font-weight: 700;
+  }
+  .ats-step-num { font-family: var(--font-mono); font-size: 11px; color: var(--purple); letter-spacing: .12em; font-weight: 700; }
+  .ats-step-title { margin-top: 18px; font-family: var(--font-display); font-size: 25px; font-weight: 600; letter-spacing: -.025em; color: var(--ink); }
+  .ats-step-copy { margin-top: 10px; font-size: 14.5px; line-height: 1.44; color: var(--ink-2); }
+  .ats-status { display: grid; grid-template-columns: 1.08fr .92fr; gap: 16px; margin-top: 16px; }
+  .ats-status-card { padding: 15px 19px; border-radius: 14px; background: var(--bg-2); border: 1px solid var(--line); }
+  .ats-status-card.gaps { background: transparent; border-style: dashed; }
+  .ats-status-tag { font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .ats-status-copy { margin-top: 5px; font-size: 13.5px; line-height: 1.38; color: var(--ink-2); }
+  .ats-status-copy b { color: var(--ink); }
+
+  /* ---- real demo-page frames (show the actual product, focused) ---- */
+  .pg-frame { flex: 1; min-height: 0; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 18px 44px -28px rgba(91,44,168,0.4); background: #fff; display: flex; }
+  .pg-img { flex: 1; min-height: 0; background-size: contain; background-position: center top; background-repeat: no-repeat; background-color: #fff; }
+  .rep-frame { align-self: center; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; box-shadow: 0 18px 44px -28px rgba(91,44,168,0.4); background: #fff; }
+  .rep-shot { width: 100%; background-size: cover; background-position: top center; background-repeat: no-repeat; }
+  .rep-shot + .rep-shot { border-top: 1px solid var(--line); }
+
+  /* ============================================================
+     PRODUCT-BRANDED SURFACE MOCKS (clean, built — actual product
+     branding: #b450ff purple family, Geist, agent-ON gradient)
+     ============================================================ */
+  .pcard { flex: 1; min-height: 0; background: #fff; border: 1px solid #e8e2ee; border-radius: 16px; box-shadow: 0 24px 54px -34px rgba(91,44,168,0.45); display: flex; flex-direction: column; overflow: hidden; color: #15121a; }
+  .pcard-bar { display: flex; align-items: center; gap: 9px; padding: 11px 16px; border-bottom: 1px solid #f1edf5; font-family: var(--font-mono); font-size: 12px; color: #8b8595; letter-spacing: 0.02em; }
+  .pcard-bar .glyph { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, #b450ff, #7a2fd6); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; font-family: var(--font-display); flex: none; }
+  .pcard-bar .ttl { color: #15121a; font-weight: 600; font-family: var(--font-display); letter-spacing: -0.01em; font-size: 13px; }
+  .pcard-bar .live { color: #15a36a; display: inline-flex; align-items: center; gap: 5px; }
+  .pcard-bar .live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #15a36a; }
+  .pcard-bar .r { margin-left: auto; color: #8b8595; }
+  .pbody { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  /* agent-on (product treatment) */
+  .ao { font-family: var(--font-mono); font-size: 10px; font-weight: 700; letter-spacing: 0.09em; color: #fff; background: linear-gradient(135deg, #3a1d6e, #241147); border-radius: 999px; padding: 4px 11px; display: inline-flex; align-items: center; gap: 7px; }
+  .ao::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #c98bff; box-shadow: 0 0 0 3px rgba(180,80,255,0.28); }
+
+  /* --- 5A · decision (HITL) --- */
+  .dc-top { display: flex; align-items: center; gap: 10px; padding: 14px 20px 0; }
+  .dc-top .role { font-family: var(--font-display); font-size: 14px; font-weight: 600; color: #3a3343; }
+  .dc-needs { margin-left: auto; font-family: var(--font-mono); font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; color: #fff; background: #b450ff; border-radius: 999px; padding: 3px 10px; }
+  .dc-mid { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; flex: 1; }
+  .dc-verdict { display: flex; align-items: center; gap: 12px; }
+  .dc-adv { font-family: var(--font-display); font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: #15a36a; }
+  .dc-conf { font-family: var(--font-mono); font-size: 11.5px; color: #8b8595; }
+  .dc-cand { display: flex; align-items: center; gap: 13px; }
+  .dc-av { width: 44px; height: 44px; border-radius: 50%; background: #f4e8ff; color: #b450ff; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: 16px; flex: none; }
+  .dc-name { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.02em; color: #15121a; }
+  .dc-csub { font-size: 13px; color: #3a3343; }
+  .dc-score { margin-left: auto; font-family: var(--font-display); font-size: 36px; font-weight: 600; color: #b450ff; line-height: 0.9; display: flex; flex-direction: column; align-items: center; flex: none; }
+  .dc-score span { font-family: var(--font-mono); font-size: 9px; color: #8b8595; letter-spacing: 0.1em; margin-top: 4px; }
+  .dc-reason { font-size: 14px; line-height: 1.5; color: #3a3343; }
+  .dc-ev { display: flex; gap: 8px; flex-wrap: wrap; }
+  .dc-ev span { font-family: var(--font-mono); font-size: 11px; color: #3a3343; background: #f7f4fb; border: 1px solid #e8e2ee; border-radius: 8px; padding: 6px 11px; }
+  .dc-ev b { color: #15121a; font-weight: 700; }
+  .dc-trace { margin-top: auto; border-top: 1px solid #f1edf5; padding-top: 13px; display: flex; flex-direction: column; gap: 8px; }
+  .dc-tracetag { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: #8b8595; }
+  .dc-step { display: flex; align-items: center; gap: 9px; font-size: 12.5px; color: #3a3343; }
+  .dc-step .d { width: 7px; height: 7px; border-radius: 50%; background: #b450ff; flex: none; }
+  .dc-act { display: flex; gap: 9px; padding: 0 20px 18px; }
+  .btn-primary { flex: 1; text-align: center; font-family: var(--font-display); font-size: 14px; font-weight: 600; color: #fff; background: #b450ff; border-radius: 11px; padding: 11px; }
+  .btn-ghost { font-family: var(--font-display); font-size: 14px; font-weight: 600; color: #3a3343; background: #fff; border: 1px solid #e8e2ee; border-radius: 11px; padding: 11px 18px; }
+
+  /* --- 5B · search --- */
+  .sr2 { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; }
+  .sr2-q { display: flex; align-items: center; gap: 10px; font-size: 15px; color: #15121a; background: #f7f4fb; border: 1px solid color-mix(in oklab, #b450ff 22%, #e8e2ee); border-radius: 12px; padding: 12px 15px; }
+  .sr2-q .qi { width: 7px; height: 17px; background: #b450ff; border-radius: 2px; flex: none; }
+  .sr2-meta { font-family: var(--font-mono); font-size: 11px; color: #8b8595; letter-spacing: 0.02em; }
+  .sr2-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid #e8e2ee; border-radius: 12px; }
+  .sr2-row.top { background: #f4e8ff; border-color: color-mix(in oklab, #b450ff 28%, #e8e2ee); }
+  .sr2-rank { font-family: var(--font-mono); font-size: 13px; font-weight: 700; color: #8b8595; width: 14px; text-align: center; flex: none; }
+  .sr2-av { width: 32px; height: 32px; border-radius: 50%; background: #efe8f7; color: #b450ff; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: 12px; flex: none; }
+  .sr2-mid { flex: 1; min-width: 0; }
+  .sr2-name { font-family: var(--font-display); font-size: 16px; font-weight: 600; color: #15121a; }
+  .sr2-sub { font-size: 12.5px; color: #3a3343; }
+  .sr2-sc { font-family: var(--font-mono); font-size: 14px; font-weight: 700; color: #b450ff; background: #fff; border: 1px solid color-mix(in oklab, #b450ff 30%, #e8e2ee); border-radius: 999px; padding: 4px 12px; flex: none; }
+  .sr2-ev { display: flex; align-items: flex-start; gap: 8px; font-size: 12.5px; line-height: 1.45; color: #3a3343; padding: 2px 4px 2px 26px; }
+  .sr2-ev .m { font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: #15a36a; background: color-mix(in oklab, #15a36a 14%, #fff); border-radius: 999px; padding: 2px 7px; flex: none; }
+  .sr2-ev i { font-style: italic; color: #15121a; }
+
+  /* --- 4A · assessment (work sample) --- */
+  .wp-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 168px 1fr; }
+  .wp-repo { border-right: 1px solid #f1edf5; background: #faf8fd; padding: 14px 14px; display: flex; flex-direction: column; gap: 7px; font-family: var(--font-mono); font-size: 12.5px; }
+  .wp-rh { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #8b8595; margin-bottom: 3px; }
+  .wp-f { color: #3a3343; padding: 3px 8px; border-radius: 6px; }
+  .wp-f.act { background: #f4e8ff; color: #b450ff; font-weight: 600; }
+  .wp-f.act::after { content: " ●"; color: #ef4444; }
+  .wp-fail { margin-top: auto; color: #c0392b; font-size: 11.5px; }
+  .wp-chat { padding: 16px 18px; display: flex; flex-direction: column; gap: 11px; min-height: 0; }
+  .wp-ch { font-family: var(--font-mono); font-size: 11px; color: #8b8595; display: flex; align-items: center; gap: 7px; }
+  .wp-ch .cg { width: 22px; height: 22px; border-radius: 7px; background: linear-gradient(135deg, #b450ff, #c44ad0); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 12px; font-family: var(--font-display); }
+  .wp-ch b { color: #15121a; font-family: var(--font-display); font-size: 13px; }
+  .wp-msg { font-size: 14px; line-height: 1.5; border-radius: 13px; padding: 12px 15px; max-width: 88%; }
+  .wp-msg.cand { background: #f4e8ff; color: #15121a; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .wp-msg.ai { background: #f7f4fb; border: 1px solid #e8e2ee; color: #3a3343; align-self: flex-start; border-bottom-left-radius: 4px; }
+  .wp-msg code { font-family: var(--font-mono); font-size: 12.5px; background: rgba(180,80,255,0.10); color: #7a2fd6; padding: 1px 5px; border-radius: 5px; }
+
+  /* --- 4B · report --- */
+  .rp2 { flex: 1; min-height: 0; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px; }
+  .rp2-rec { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #b450ff; font-weight: 700; }
+  .rp2-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+  .rp2-verdict { font-family: var(--font-display); font-size: 30px; font-weight: 600; letter-spacing: -0.03em; color: #b450ff; line-height: 1; }
+  .rp2-rings { display: grid; grid-template-columns: repeat(4, auto); gap: 14px; }
+  .rp2-ring { display: flex; flex-direction: column; align-items: center; }
+  .rp2-ring .n { font-family: var(--font-display); font-size: 22px; font-weight: 600; color: #15121a; line-height: 1; width: 46px; height: 46px; border-radius: 50%; border: 3px solid #b450ff; display: flex; align-items: center; justify-content: center; }
+  .rp2-ring .l { font-family: var(--font-mono); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: #8b8595; margin-top: 5px; }
+  .rp2-sum { font-size: 13.5px; line-height: 1.5; color: #3a3343; }
+  .rp2-cvh { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: #b450ff; font-weight: 700; border-top: 1px solid #f1edf5; padding-top: 12px; }
+  .rp2-crit { display: flex; align-items: flex-start; gap: 9px; font-size: 13px; line-height: 1.4; color: #3a3343; }
+  .rp2-crit .p { font-family: var(--font-mono); font-size: 8.5px; font-weight: 700; letter-spacing: 0.04em; padding: 2px 7px; border-radius: 999px; flex: none; margin-top: 1px; }
+  .rp2-crit .p.met { color: #15a36a; background: color-mix(in oklab, #15a36a 14%, #fff); }
+  .rp2-crit .p.part { color: #f59e0b; background: color-mix(in oklab, #f59e0b 16%, #fff); }
+  .rp2-foot { margin-top: auto; font-family: var(--font-mono); font-size: 10px; color: #8b8595; }
+
+  /* ── Product previews — production UI with representative fixture data ── */
+  deck-stage > section[data-slide^="surf-"],
+  deck-stage > section.product-preview { display: flex; flex-direction: column; padding: 46px 88px 48px; }
+  .slide-head.surf-head { margin-bottom: 10px; flex: none; }
+  .surf-title { margin: 6px 0 0; font-family: var(--font-display); font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.1; color: var(--ink); max-width: 1500px; }
+  .surf-title em { color: var(--purple); font-style: normal; }
+  .surf { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+  .surf-frame { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: var(--bg-2); box-shadow: var(--shadow-lg); }
+  .surf-chrome { flex: none; display: flex; align-items: center; gap: 11px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .surf-chrome .dots { display: flex; gap: 6px; }
+  .surf-chrome .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--amber); }
+  .surf-chrome .dots i:nth-child(1) { background: #f0606b; }
+  .surf-chrome .dots i:nth-child(3) { background: var(--green); }
+  .surf-url { font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0.01em; color: var(--ink-2); }
+  .surf-url .lock { color: var(--green); margin-right: 6px; font-size: 9px; vertical-align: 1px; }
+  .surf-badge { margin-left: auto; font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 3px 12px; }
+  .surf-frame iframe { flex: 1; width: 100%; min-height: 0; border: 0; display: block; background: var(--bg-2); }
+  .surf-out { flex: none; display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .surf-out span { display: block; position: relative; padding-left: 18px; font-size: 12.5px; line-height: 1.4; color: var(--ink-2); }
+  .surf-out span::before { content: "→"; position: absolute; left: 0; top: 0; color: var(--purple); font-weight: 700; }
+  .surf-out b { color: var(--ink); font-weight: 600; }
+  /* Iframes can't render in a PDF/print export, so each preview also carries
+     a captured fallback — hidden on screen and swapped in for print. The
+     assessment demo is a deliberate exception: it shows the static capture on
+     screen too (read-only showcase — the live workspace is not meant to be
+     poked at from the deck). */
+  .surf-shot { display: none; }
+  /* A4 shows the whole candidate workspace — brief, guidance, timer, chat and
+     editor — so the still is portrait-ish and sits beside a labelled column
+     rather than filling the full width. */
+  [data-slide="surf-assess"] .surf-shot { display: block; flex: 1; width: 100%; min-height: 0; object-fit: contain; object-position: top center; background: var(--bg-2); }
+  .assess-two { flex: 1; min-height: 0; display: grid; grid-template-columns: 1268px 1fr; gap: 22px; }
+  .assess-two .surf-frame { min-height: 0; }
+  .assess-notes { min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+  .assess-note { flex: 1; min-height: 0; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); display: flex; flex-direction: column; justify-content: center; }
+  .assess-note.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .assess-note b { display: block; font: 600 17px/1.2 var(--font-display); letter-spacing: -.01em; color: var(--ink); }
+  .assess-note.dark b { color: #fff; }
+  .assess-note span { display: block; margin-top: 6px; font-size: 13px; line-height: 1.4; color: var(--ink-2); }
+  .assess-note.dark span { color: rgba(255,255,255,.76); }
+  @media print {
+    /* Force the deck's dark slabs + colour accents to print even when the
+       browser's "Background graphics" toggle is off — they're essential. */
+    *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    .surf-frame iframe { display: none; }
+    .surf-shot { display: block; flex: 1; width: 100%; min-height: 0; object-fit: cover; object-position: top center; }
+  }
+
+  /* ---- concise main-deck story ---- */
+  .tight-head { margin-bottom: 18px; }
+  .tight-head .slide-title { max-width: 1680px; }
+  .tight-head .slide-sub { max-width: 1320px; margin-top: 12px; }
+
+  .governed-grid {
+    flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 20px; align-items: stretch;
+  }
+  .governed-card {
+    min-height: 0; padding: 30px 32px; border: 1px solid var(--line);
+    border-radius: 20px; background: var(--bg-2); display: flex; flex-direction: column;
+  }
+  .governed-card.agent { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .governed-kicker {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .governed-card.agent .governed-kicker { color: var(--purple-lav); }
+  .governed-title {
+    margin-top: 18px; font-family: var(--font-display); font-size: 38px;
+    line-height: 1.02; letter-spacing: -.03em; font-weight: 600;
+  }
+  .governed-list { margin-top: 26px; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+  .governed-item {
+    min-height: 76px; padding: 14px 16px; border: 1px solid var(--line);
+    border-radius: 12px; background: #fff; display: grid; grid-template-columns: 28px 1fr;
+    gap: 11px; align-items: center; font-size: 16px; line-height: 1.35; color: var(--ink-2);
+  }
+  .governed-card.agent .governed-item {
+    color: rgba(255,255,255,.84); border-color: rgba(255,255,255,.14);
+    background: rgba(255,255,255,.06);
+  }
+  .governed-item .n {
+    font-family: var(--font-mono); font-size: 10px; color: var(--purple);
+    background: var(--purple-soft); border-radius: 999px; padding: 4px 0; text-align: center;
+  }
+  .governed-card.agent .governed-item .n { color: var(--purple-lav); background: rgba(180,80,255,.16); }
+  .governed-item b { color: var(--ink); font-weight: 600; }
+  .governed-card.agent .governed-item b { color: #fff; }
+  .governed-rule {
+    margin-top: 18px; padding: 17px 24px; border-radius: 14px; background: var(--purple-soft);
+    border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line));
+    display: grid; grid-template-columns: 290px 1fr; gap: 22px; align-items: center;
+  }
+  .governed-rule span { font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .governed-rule b { font-size: 17px; line-height: 1.4; color: var(--ink); }
+
+  .hub-frame .surf-shot { object-position: top center; }
+  .hub-out { grid-template-columns: repeat(4, 1fr); }
+
+  .ats-flow.six { flex: 1; min-height: 0; grid-template-columns: repeat(6, 1fr); gap: 25px; }
+  .ats-flow.six .ats-step { min-height: 0; padding: 18px 17px 17px; display: flex; flex-direction: column; justify-content: center; }
+  .ats-flow.six .ats-step:not(:last-child)::after { right: -20px; }
+  .ats-flow.six .ats-step-num { font-size: 28px; line-height: 1; letter-spacing: -.02em; }
+  .ats-flow.six .ats-step-title { margin-top: 14px; font-size: 21px; }
+  .ats-flow.six .ats-step-copy { margin-top: 8px; font-size: 13px; line-height: 1.4; }
+  .ats-one-line {
+    margin-top: 15px; padding: 15px 20px; background: var(--purple-soft);
+    border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line));
+    border-radius: 14px; display: flex; justify-content: center; align-items: center;
+    font-size: 17px; color: var(--ink); font-weight: 600;
+  }
+
+  .compliance-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .compliance-card {
+    padding: 30px 32px; border: 1px solid var(--line); border-radius: 20px;
+    background: var(--bg-2); display: flex; flex-direction: column;
+  }
+  .compliance-card.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .compliance-label { font-family: var(--font-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .compliance-card.dark .compliance-label { color: var(--purple-lav); }
+  .compliance-card h3 { margin: 18px 0 20px; font-family: var(--font-display); font-size: 34px; line-height: 1.04; letter-spacing: -.03em; }
+  .compliance-list { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 13px; }
+  .compliance-item {
+    display: grid; grid-template-columns: 22px 1fr; gap: 11px; padding: 14px 15px;
+    border: 1px solid var(--line); border-radius: 12px; background: #fff;
+    font-size: 15.5px; line-height: 1.4; color: var(--ink-2);
+  }
+  .compliance-card.dark .compliance-item { color: rgba(255,255,255,.84); }
+  .compliance-card.dark .compliance-item { border-color: rgba(255,255,255,.14); background: rgba(255,255,255,.06); }
+  .compliance-item .ic { color: var(--purple); font-family: var(--font-mono); font-weight: 700; }
+  .compliance-card.dark .compliance-item .ic { color: var(--purple-lav); }
+  .compliance-item a { color: var(--purple); text-decoration: none; font-weight: 600; }
+  .legal-line {
+    margin-top: 17px; display: grid; grid-template-columns: 1fr auto; gap: 24px;
+    align-items: center; padding: 14px 20px; border-radius: 14px; background: var(--purple-soft);
+    font-size: 13.5px; line-height: 1.4; color: var(--ink-2);
+  }
+  .legal-line b { color: var(--ink); }
+  .legal-line a { color: var(--purple); text-decoration: none; font-family: var(--font-mono); font-size: 11px; }
+
+  .why-cards { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+  .why-card { padding: 34px 34px 30px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg-2); display: flex; flex-direction: column; }
+  .why-card.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .why-num { font-family: var(--font-mono); font-size: 12px; letter-spacing: .14em; color: var(--purple); font-weight: 700; }
+  .why-card.dark .why-num { color: var(--purple-lav); }
+  .why-card h3 { margin: 30px 0 16px; font-family: var(--font-display); font-size: 39px; line-height: 1.02; letter-spacing: -.035em; }
+  .why-card p { margin: 0; font-size: 17px; line-height: 1.48; color: var(--ink-2); }
+  .why-card.dark p { color: rgba(255,255,255,.78); }
+  .why-card .why-proof { margin-top: auto; padding-top: 22px; border-top: 1px solid var(--line); font-family: var(--font-mono); font-size: 12px; line-height: 1.45; color: var(--purple); }
+  .why-card.dark .why-proof { border-color: rgba(255,255,255,.16); color: var(--purple-lav); }
+
+  .pilot-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .pilot-card { padding: 34px 36px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg-2); display: flex; flex-direction: column; }
+  .pilot-card.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .pilot-region { font-family: var(--font-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .pilot-card.dark .pilot-region { color: var(--purple-lav); }
+  .pilot-card h3 { margin: 24px 0 12px; font-family: var(--font-display); font-size: 43px; line-height: 1.02; letter-spacing: -.035em; }
+  .pilot-card p { margin: 0; max-width: 660px; font-size: 17px; line-height: 1.46; color: var(--ink-2); }
+  .pilot-card.dark p { color: rgba(255,255,255,.78); }
+  .pilot-focus { margin-top: 26px; flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
+  .pilot-focus-row {
+    display: grid; grid-template-columns: 150px 1fr; gap: 16px; align-items: center;
+    padding: 15px 16px; border: 1px solid var(--line); border-radius: 12px;
+    background: #fff; font-size: 14.5px; line-height: 1.38; color: var(--ink-2);
+  }
+  .pilot-card.dark .pilot-focus-row { border-color: rgba(255,255,255,.14); background: rgba(255,255,255,.06); color: rgba(255,255,255,.82); }
+  .pilot-focus-row b { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--purple); }
+  .pilot-card.dark .pilot-focus-row b { color: var(--purple-lav); }
+  .pilot-scope { margin-top: auto; display: flex; flex-wrap: wrap; gap: 8px; }
+  .pilot-scope span { font-family: var(--font-mono); font-size: 11px; color: var(--purple); background: var(--purple-soft); border-radius: 999px; padding: 6px 10px; }
+  .pilot-card.dark .pilot-scope span { color: var(--purple-lav); background: rgba(180,80,255,.16); }
+  .pilot-measure { margin-top: 18px; padding: 16px 22px; border-radius: 14px; border: 1px solid color-mix(in oklab, var(--purple) 25%, var(--line)); background: var(--purple-soft); display: grid; grid-template-columns: 210px 1fr; gap: 18px; align-items: center; }
+  .pilot-measure span { font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .pilot-measure b { font-size: 15.5px; line-height: 1.4; color: var(--ink); }
+
+  .pipe-card .badge.integrated {
+    color: #2563eb; background: color-mix(in oklab, #2563eb 11%, #fff);
+    border: 1px solid color-mix(in oklab, #2563eb 32%, var(--line));
+  }
+  .pipe-legend .sw.integrated { background: color-mix(in oklab, #2563eb 16%, #fff); border: 1px solid #2563eb; }
+
+  /* Keep the two audience cards dense without adding more copy. */
+  .way-list { justify-content: center; gap: 16px; }
+  .way-li {
+    padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px;
+    background: #fff;
+  }
+  .way.hero .way-li { border-color: rgba(255,255,255,.14); background: rgba(255,255,255,.06); }
+
+  /* ---- revised main story ---- */
+  .governed-summary .governed-card { justify-content: center; padding: 42px 38px; }
+  .governed-summary .governed-title { margin-top: 26px; font-size: 42px; }
+  .governed-summary .governed-copy {
+    margin-top: 28px; padding-top: 0; font-size: 19px; line-height: 1.48; color: var(--ink-2);
+  }
+  .governed-summary .governed-card.agent .governed-copy { color: rgba(255,255,255,.8); }
+
+  .proof-layer-grid {
+    flex: 1; min-height: 0; display: grid; grid-template-columns: 1.08fr .92fr; gap: 22px;
+  }
+  .proof-layer-card {
+    min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line);
+    border-radius: 20px; overflow: hidden; background: var(--bg-2);
+  }
+  .proof-layer-card.dark { background: var(--ink); border-color: var(--ink); }
+  .proof-layer-top {
+    display: flex; justify-content: space-between; align-items: center; gap: 18px;
+    padding: 17px 21px; border-bottom: 1px solid var(--line); background: #fff;
+  }
+  .proof-layer-card.dark .proof-layer-top {
+    border-color: rgba(255,255,255,.14); background: rgba(255,255,255,.06);
+  }
+  .proof-layer-tag {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .proof-layer-card.dark .proof-layer-tag { color: var(--purple-lav); }
+  .proof-layer-name { font-size: 14px; color: var(--ink-2); text-align: right; }
+  .proof-layer-card.dark .proof-layer-name { color: rgba(255,255,255,.72); }
+  .proof-layer-image { flex: 1; min-height: 0; background-repeat: no-repeat; background-color: #f7f3fb; }
+  .proof-layer-image.assessment {
+    background-image: url('img/surf-assess.png'); background-size: 150%; background-position: center 76%;
+  }
+  .proof-layer-image.report {
+    background-image: url('img/surf-report.png'); background-size: cover; background-position: top center;
+  }
+  .proof-layer-copy {
+    min-height: 88px; padding: 15px 20px 17px; font-size: 15px; line-height: 1.42;
+    color: var(--ink-2); background: #fff; border-top: 1px solid var(--line);
+  }
+  .proof-layer-card.dark .proof-layer-copy {
+    color: rgba(255,255,255,.8); background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.14);
+  }
+  .proof-layer-copy b { color: var(--ink); }
+  .proof-layer-card.dark .proof-layer-copy b { color: #fff; }
+  .proof-layer-strip {
+    margin-top: 17px; padding: 16px 22px; border-radius: 14px; background: var(--purple-soft);
+    border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line));
+    display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center;
+    font-size: 15px; line-height: 1.4; color: var(--ink-2);
+  }
+  .proof-layer-strip b { color: var(--ink); }
+  .proof-layer-strip span:last-child { font-family: var(--font-mono); font-size: 11px; color: var(--purple); }
+
+  .value-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .value-card {
+    padding: 38px 40px; border: 1px solid var(--line); border-radius: 22px; background: var(--bg-2);
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .value-card.dark { color: #fff; background: var(--ink); border-color: var(--ink); }
+  .value-label {
+    font-family: var(--font-mono); font-size: 12px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .value-card.dark .value-label { color: var(--purple-lav); }
+  .value-card h3 {
+    margin: 32px 0 18px; font-family: var(--font-display); font-size: 45px;
+    line-height: 1.02; letter-spacing: -.035em;
+  }
+  .value-card p { margin: 0; font-size: 19px; line-height: 1.5; color: var(--ink-2); }
+  .value-card.dark p { color: rgba(255,255,255,.78); }
+  .value-proof {
+    margin-top: 30px; padding-top: 18px; border-top: 1px dashed var(--line);
+    font-family: var(--font-mono); font-size: 12px; line-height: 1.5; color: var(--purple);
+  }
+  .value-card.dark .value-proof { color: var(--purple-lav); border-color: rgba(255,255,255,.18); }
+
+  .pilot-expansion {
+    display: grid; gap: 9px; padding: 18px 20px; border: 1px solid var(--line);
+    border-radius: 18px; background: var(--bg-2);
+  }
+  .pilot-expansion .lbl {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .pilot-expansion-row {
+    display: grid; grid-template-columns: 165px 1fr; gap: 13px; align-items: start;
+    padding-top: 9px; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.4; color: var(--ink-2);
+  }
+  .pilot-expansion-row b { color: var(--ink); }
+  .founder-fit {
+    padding: 18px 20px; border: 1px solid var(--line); border-radius: 18px; background: var(--bg-2);
+    font-size: 14px; line-height: 1.48; color: var(--ink-2);
+  }
+  .founder-fit .lbl {
+    display: block; margin-bottom: 9px; font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: .12em; text-transform: uppercase; color: var(--purple); font-weight: 700;
+  }
+  .founder-fit b { color: var(--ink); }
+  .founder-fit em { color: var(--purple); font-style: normal; font-weight: 700; }
+
+  .pipe-card .badge.available {
+    color: #7c3aed; background: color-mix(in oklab, #7c3aed 11%, #fff);
+    border: 1px solid color-mix(in oklab, #7c3aed 32%, var(--line));
+  }
+  .pipe-legend .sw.available { background: color-mix(in oklab, #7c3aed 16%, #fff); border: 1px solid #7c3aed; }
+
+  /* ---- eight-slide main story + product-demo appendix ---- */
+  .how-slide .slide-head { margin-bottom: 20px; }
+  .how-slide .slide-title {
+    max-width: 1744px; font-size: 58px !important; line-height: 1.01; white-space: nowrap;
+  }
+  .solution-outcomes {
+    flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+  }
+  .solution-outcome {
+    min-height: 0; padding: 34px 38px; border: 1px solid var(--line); border-radius: 24px;
+    background: var(--bg-2); display: flex; flex-direction: column;
+  }
+  .solution-outcome.dark { color: #fff; background: var(--ink); border-color: var(--ink); }
+  .solution-problem {
+    font: 700 12px/1.3 var(--font-mono); letter-spacing: .14em;
+    text-transform: uppercase; color: var(--purple);
+  }
+  .solution-outcome.dark .solution-problem { color: var(--purple-lav); }
+  .solution-outcome h3 {
+    margin: 28px 0 0; font: 600 42px/1.03 var(--font-display); letter-spacing: -.035em;
+  }
+  .solution-outcome p {
+    margin: 28px 0 0; max-width: 470px; font-size: 20px; line-height: 1.48; color: var(--ink-2);
+  }
+  .solution-outcome.dark p { color: rgba(255,255,255,.78); }
+  .solution-result {
+    margin-top: auto; padding-top: 22px; border-top: 1px solid var(--line);
+    font: 600 22px/1.25 var(--font-display); color: var(--purple);
+  }
+  .solution-outcome.dark .solution-result {
+    border-color: rgba(255,255,255,.16); color: var(--purple-lav);
+  }
+  .solution-control {
+    min-height: 108px; margin-top: 18px; padding: 0 26px;
+    border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line));
+    border-radius: 18px; background: var(--purple-soft); display: grid;
+    grid-template-columns: 220px 1fr 360px; gap: 26px; align-items: center;
+  }
+  .solution-control-label {
+    font: 700 12px/1.35 var(--font-mono); letter-spacing: .13em;
+    text-transform: uppercase; color: var(--purple);
+  }
+  .solution-control-copy { font-size: 17px; line-height: 1.42; color: var(--ink-2); }
+  .solution-control-copy b { color: var(--ink); font-weight: 600; }
+  .solution-control-eu {
+    padding-left: 26px; border-left: 1px solid color-mix(in oklab, var(--purple) 24%, var(--line));
+    font-size: 16px; line-height: 1.38; color: var(--ink-2);
+  }
+  .solution-control-eu b { color: var(--ink); }
+
+  .roadmap-v3 .slide-head { margin-bottom: 12px; }
+  .roadmap-v3 .slide-title { font-size: 52px !important; max-width: 1744px; white-space: nowrap; }
+  .roadmap-v3 .slide-sub { margin-top: 10px; font-size: 19px; }
+  .capability-board {
+    flex: 1; min-height: 0; display: grid;
+    grid-template-rows: 58px minmax(0,1fr) 154px; gap: 13px;
+  }
+  .live-mode-bar {
+    display: grid; grid-template-columns: 145px 1.3fr 1fr 1fr 210px; gap: 11px;
+  }
+  .live-label, .mode-card, .loop-card {
+    display: flex; align-items: center; padding: 0 16px; border-radius: 13px;
+  }
+  .live-label {
+    background: var(--purple); color: #fff; font: 700 11px var(--font-mono);
+    letter-spacing: .12em; text-transform: uppercase;
+  }
+  .mode-card { border: 1px solid var(--line); background: #fff; font: 600 16px var(--font-display); }
+  .mode-card.primary { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .loop-card {
+    justify-content: center; background: var(--purple-soft); color: var(--purple);
+    font: 700 10.5px var(--font-mono); letter-spacing: .07em; text-align: center;
+  }
+  .stage-grid {
+    min-height: 0; display: grid; grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(2, minmax(0, 1fr)); gap: 13px;
+  }
+  .stage-card {
+    min-height: 0; padding: 14px 18px; border: 1px solid var(--line); border-radius: 17px;
+    background: var(--bg-2); display: flex; flex-direction: column;
+  }
+  .stage-head { display: flex; align-items: center; gap: 11px; }
+  .stage-num { font: 700 10.5px var(--font-mono); letter-spacing: .12em; color: var(--purple); }
+  .stage-card h3 { margin: 0; font: 600 21px/1.05 var(--font-display); letter-spacing: -.02em; }
+  .stage-features {
+    flex: 1; min-height: 0; margin-top: 8px; display: grid; grid-template-rows: repeat(3, 1fr);
+  }
+  .feature-statement {
+    display: grid; grid-template-columns: 142px 1fr; gap: 12px; align-items: center;
+    padding: 7px 0; border-top: 1px solid var(--line);
+  }
+  .feature-statement strong { font: 600 14.5px/1.2 var(--font-display); color: var(--ink); }
+  .feature-statement span { font-size: 13.2px; line-height: 1.3; color: var(--ink-2); }
+  .feature-statement.integrity, .feature-statement.graph {
+    margin: 0 -7px; padding-left: 7px; padding-right: 7px; border-radius: 9px;
+    background: color-mix(in oklab, var(--purple-soft) 72%, #fff);
+  }
+  .core-roadmap { min-height: 0; display: grid; grid-template-columns: 175px repeat(4, 1fr); gap: 13px; }
+  .core-roadmap-intro {
+    padding: 17px; border-radius: 16px; background: var(--purple-soft);
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  .core-roadmap-intro b { font: 700 11px var(--font-mono); letter-spacing: .12em; color: var(--purple); }
+  .core-roadmap-intro span { margin-top: 9px; font-size: 13.5px; line-height: 1.35; color: var(--ink-2); }
+  .core-roadmap-card {
+    padding: 17px 19px; border: 1px dashed color-mix(in oklab,var(--purple) 35%,var(--line));
+    border-radius: 16px; background: #fff; display: flex; flex-direction: column; justify-content: center;
+  }
+  .core-roadmap-card h4 { margin: 0 0 9px; font: 600 20px/1.08 var(--font-display); letter-spacing: -.02em; }
+  .core-roadmap-card p { margin: 0; font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
+
+  .product-preview .surf-head { min-height: 72px; }
+  .product-preview .surf-title { margin-top: 7px; font-size: 34px; line-height: 1.08; max-width: 1620px; }
+  .product-preview .hub-out { grid-template-columns: repeat(3, 1fr); }
+
+  /* ---- 2026-07-23 revision: footer clearance, stats problem slide, condensed
+     pipeline, pilot strip + CTA band, five Ds + data-protection appendix ---- */
+  deck-stage > section[data-slide] { padding-bottom: 96px; }
+  deck-stage > section[data-slide^="surf-"],
+  deck-stage > section.product-preview { padding-bottom: 84px; }
+
+  .h71-stats3 { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .h71-stat { min-height: 0; padding: 40px 42px 30px; border: 1px solid var(--line); border-radius: 24px; background: var(--bg-2); display: flex; flex-direction: column; }
+  .h71-stat.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .h71-stat .big { margin-top: auto; padding-top: 26px; font-family: var(--font-display); font-size: 96px; font-weight: 600; letter-spacing: -.04em; line-height: .95; color: var(--ink); }
+  .h71-stat.dark .big { color: #fff; }
+  .h71-stat .big em { color: var(--purple); font-style: normal; }
+  .h71-stat.dark .big em { color: var(--purple-lav); }
+  .h71-stat h3 { margin: 20px 0 0; font: 600 26px/1.18 var(--font-display); letter-spacing: -.02em; }
+  .h71-stat p { margin: 18px 0 0; font-size: 17.5px; line-height: 1.52; color: var(--ink-2); }
+  .h71-stat.dark p { color: rgba(255,255,255,.78); }
+  .h71-stat .src { margin-top: auto; padding-top: 14px; border-top: 1px dashed var(--line); font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--mute); }
+  .h71-stat.dark .src { border-color: rgba(255,255,255,.18); color: rgba(255,255,255,.52); }
+
+  .pipe-grid { min-height: 0; display: grid; grid-template-columns: repeat(6, 1fr); gap: 13px; }
+  .pipe-stage { min-height: 0; padding: 22px 22px 18px; border: 1px solid var(--line); border-radius: 17px; background: var(--bg-2); display: flex; flex-direction: column; }
+  .pipe-stage h3 { margin: 12px 0 0; font: 600 27px/1.08 var(--font-display); letter-spacing: -.02em; }
+  .pipe-stage p { margin: 13px 0 0; font-size: 16px; line-height: 1.52; color: var(--ink-2); }
+  .pipe-feats span { display: block; }
+  .pipe-feats { gap: 8px; font-size: 11.5px; }
+  .pipe-stage p { margin-top: auto; margin-bottom: auto; padding: 13px 0; }
+  .pipe-feats { margin-top: 0; padding-top: 14px; border-top: 1px dashed var(--line); display: flex; flex-direction: column; gap: 7px; font-family: var(--font-mono); font-size: 11px; letter-spacing: .03em; line-height: 1.35; color: var(--mute); }
+  .pipe-live { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); display: inline-flex; align-items: center; gap: 7px; font: 700 10.5px var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--green); }
+  .pipe-live .blip { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+
+  .solution-result { margin-top: 16px; padding-top: 0; border-top: 0; }
+  .solution-outcome p { margin-top: 26px; padding-top: 24px; border-top: 1px solid var(--line); max-width: none; font-size: 18.5px; }
+  .solution-outcome.dark p { border-color: rgba(255,255,255,.16); }
+
+  .feat-legend { margin-left: 10px; font: 500 10.5px var(--font-mono); letter-spacing: .04em; text-transform: none; color: var(--mute); }
+
+  .proof-caveat { margin-top: 10px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--mute); }
+  [data-slide="proof"] .traction { display: flex; flex-direction: column; }
+  [data-slide="proof"] .traction > .pilot { flex: 1; align-content: space-between; }
+  [data-slide="proof"] .pilot .ds { font-size: 15px; line-height: 1.5; }
+  .proof-right .th { font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
+
+  .pilot-strip { margin-top: 16px; display: grid; grid-template-columns: 150px repeat(5, 1fr); gap: 12px; align-items: stretch; }
+  .pilot-strip .ps-label { display: flex; align-items: center; padding: 0 14px; border-radius: 14px; background: var(--purple-soft); font: 700 11px/1.4 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--purple); }
+  .ps-step { padding: 13px 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); font-size: 12.5px; line-height: 1.38; color: var(--ink-2); }
+  .ps-step b { display: block; margin-bottom: 5px; font: 600 14.5px/1.2 var(--font-display); color: var(--ink); }
+
+  .cta-band { margin-top: 14px; padding: 20px 28px; border-radius: 16px; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: space-between; gap: 28px; }
+  .cta-band .big { font: 600 27px/1.12 var(--font-display); letter-spacing: -.02em; }
+  .cta-band .big em { color: var(--purple-lav); font-style: normal; }
+  .cta-band .sub { margin-top: 5px; font-size: 14px; line-height: 1.4; color: rgba(255,255,255,.75); }
+  .cta-band .sub a { color: var(--purple-lav); text-decoration: none; font-weight: 600; }
+  .cta-band .mail { flex: none; font: 600 19px var(--font-display); color: #fff; background: var(--purple); padding: 14px 24px; border-radius: 12px; text-decoration: none; white-space: nowrap; }
+
+  .fived-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; }
+  .fived-card { min-height: 500px; padding: 26px 24px 22px; border: 1px solid var(--line); border-radius: 20px; background: var(--bg-2); display: flex; flex-direction: column; }
+  .fived-card.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .fived-num { font: 700 11px var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--purple); }
+  .fived-card.dark .fived-num { color: var(--purple-lav); }
+  .fived-card h3 { margin: 16px 0 0; font: 600 29px/1.05 var(--font-display); letter-spacing: -.025em; }
+  .fived-q { margin: 14px 0 0; font-size: 15.5px; line-height: 1.45; color: var(--ink); font-weight: 600; }
+  .fived-card.dark .fived-q { color: #fff; }
+  .fived-card p { margin: 12px 0 0; font-size: 14px; line-height: 1.45; color: var(--ink-2); }
+  .fived-card.dark p { color: rgba(255,255,255,.75); }
+  .fived-evidence { margin-top: auto; padding-top: 14px; border-top: 1px dashed var(--line); font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--purple); }
+  .fived-card.dark .fived-evidence { border-color: rgba(255,255,255,.18); color: var(--purple-lav); }
+  .fived-flow { margin-top: 18px; min-height: 74px; padding: 0 28px; border-radius: 16px; background: var(--purple-soft); border: 1px solid color-mix(in oklab, var(--purple) 28%, var(--line)); display: flex; align-items: center; justify-content: center; gap: 16px; font: 600 16.5px var(--font-display); color: var(--ink); }
+  .fived-flow b { color: var(--purple); }
+
+  .compliance-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .compliance-card { min-height: 520px; padding: 30px 32px; border: 1px solid var(--line); border-radius: 20px; background: var(--bg-2); display: flex; flex-direction: column; }
+  .compliance-card.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .compliance-card.dark .compliance-label { color: var(--purple-lav); }
+  .compliance-card h3 { margin: 18px 0 20px; font-family: var(--font-display); font-size: 34px; line-height: 1.04; letter-spacing: -.03em; }
+  .compliance-label { font-family: var(--font-mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--purple); font-weight: 700; }
+  .compliance-list { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 13px; }
+  .compliance-item { display: grid; grid-template-columns: 22px 1fr; gap: 11px; padding: 14px 15px; border: 1px solid var(--line); border-radius: 12px; background: #fff; font-size: 15.5px; line-height: 1.4; color: var(--ink-2); }
+  .compliance-item .ic { color: var(--purple); font-family: var(--font-mono); font-weight: 700; }
+  .compliance-card.dark .compliance-item { color: rgba(255,255,255,.84); border-color: rgba(255,255,255,.14); background: rgba(255,255,255,.06); }
+  .compliance-card.dark .compliance-item .ic { color: var(--purple-lav); }
+  .legal-line { margin-top: 17px; display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center; padding: 14px 20px; border-radius: 14px; background: var(--purple-soft); font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
+  .legal-line b { color: var(--ink); }
+  .legal-line a { color: var(--purple); text-decoration: none; font-family: var(--font-mono); font-size: 11px; }
+
+  /* ---- round 2: merged solution slide, work-shift slide, uniform titles ---- */
+  .trust-band { margin-top: 18px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .trust-cell { padding: 18px 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); font-size: 15px; line-height: 1.45; color: var(--ink-2); }
+  .trust-cell b { display: block; margin-bottom: 7px; color: var(--ink); font: 600 18px var(--font-display); letter-spacing: -.01em; }
+
+  .shift-grid { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .shift-panel { padding: 28px 32px 22px; border: 1px solid var(--line); border-radius: 20px; background: var(--bg-2); }
+  .shift-kicker { font: 700 11.5px var(--font-mono); letter-spacing: .13em; text-transform: uppercase; color: var(--purple); }
+  .shift-cap { margin-top: 10px; font: 600 22px/1.2 var(--font-display); letter-spacing: -.015em; color: var(--ink); }
+  .shift-bars { margin-top: 20px; display: flex; align-items: flex-end; gap: 18px; height: 265px; }
+  .shift-bar { flex: 1; display: flex; flex-direction: column; height: 100%; }
+  .shift-bar .sp { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; position: relative; }
+  .shift-bar i { display: block; background: color-mix(in oklab, var(--purple) 16%, #fff); border: 1px solid color-mix(in oklab, var(--purple) 26%, var(--line)); border-radius: 8px 8px 4px 4px; height: var(--h); }
+  .shift-bar.hi i { background: var(--purple); border-color: var(--purple); }
+  .shift-bar b { margin-top: 9px; min-height: 28px; font: 500 12px/1.25 var(--font-mono); color: var(--mute); text-align: center; }
+  .par-chip { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--h) + 8px); white-space: nowrap; font: 700 9px var(--font-mono); letter-spacing: .08em; background: var(--ink); color: #fff; border-radius: 999px; padding: 3px 9px; }
+  .shift-note { margin-top: 8px; font: 500 10.5px var(--font-mono); letter-spacing: .05em; text-transform: uppercase; color: var(--mute); text-align: right; }
+  .shift-bridge { min-height: 86px; margin-top: 16px; padding: 0 30px; border-radius: 16px; background: var(--purple-soft); display: grid; grid-template-columns: 400px 1fr; gap: 26px; align-items: center; }
+  .shift-bridge b { font-family: var(--font-display); font-size: 22px; }
+  .shift-bridge span { font-size: 18px; color: var(--ink-2); }
+  .fived-strip-label { margin: 20px 0 12px; font: 700 12px var(--font-mono); letter-spacing: .13em; text-transform: uppercase; color: var(--purple); }
+  .fived-strip { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .fived-mini { min-height: 0; padding: 20px 20px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); display: flex; flex-direction: column; }
+  .fived-mini.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .fived-mini .n { font: 700 10.5px var(--font-mono); letter-spacing: .1em; color: var(--purple); }
+  .fived-mini.dark .n { color: var(--purple-lav); }
+  .fived-mini b { display: block; margin-top: 8px; font: 600 21px var(--font-display); letter-spacing: -.015em; }
+  .fived-mini span { display: block; margin-top: 8px; font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
+  .fived-mini.dark span { color: rgba(255,255,255,.75); }
+  .fived-mini .fe { margin-top: auto; padding-top: 12px; border-top: 1px dashed var(--line); font: 700 10px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--purple); }
+  .fived-mini.dark .fe { border-color: rgba(255,255,255,.18); color: var(--purple-lav); }
+
+  /* Uniform one-line titles on all story slides (product demos keep surf-title) */
+  deck-stage > section[data-slide] .slide-title { font-size: 52px !important; line-height: 1.05; max-width: none; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<deck-stage>
+
+  <!-- 01 · COVER -->
+  <section data-slide="cover" data-screen-label="01 Cover">
+    <div class="cover-grid"></div>
+    <div class="cover-top">
+      <div class="cover-wordmark">taali<span class="p">.</span></div>
+      <div class="cover-meta"><span><b>Partnership proposal</b></span><span>2026</span></div>
+    </div>
+    <div class="cover-body">
+      <div class="cover-eyebrow">// 01 · For recruitment, staffing &amp; in-house teams</div>
+      <div class="cover-headline">Hire with <em>proof</em>, not just CV claims<span class="p">.</span></div>
+      <div class="cover-sub">Taali is an agentic ATS and AI-native assessment platform. It runs the repetitive hiring workflow, searches the candidate pool you already own, and turns real work into evidence that recruiters, hiring managers and clients can inspect.</div>
+      <div class="cover-pillars">
+        <span class="cover-pillar"><b>01</b> Run the funnel with one governed agent per role</span>
+        <span class="cover-pillar"><b>02</b> Assess how candidates actually work with AI</span>
+        <span class="cover-pillar"><b>03</b> Share an evidence-backed decision, not a black box</span>
+      </div>
+    </div>
+    <div class="cover-foot">
+      <span>Sam Patel · Founder, Taali</span>
+      <span><a href="https://www.taali.ai/demo">taali.ai/demo</a> · <a href="mailto:hello@taali.ai">hello@taali.ai</a></span>
+    </div>
+  </section>
+
+  <!-- 02 · PROBLEM -->
+  <section data-slide="trust-problem" data-screen-label="02 The problem">
+    <div class="tally-grid tg-tr"></div>
+    <div class="slide-head h71-head">
+      <div class="eyebrow"><span class="num">02</span><span class="dot">·</span><span>The problem</span></div>
+      <h2 class="slide-title h71-title">AI has multiplied applications — <em>and weakened the signal.</em></h2>
+      <p class="h71-deck">More volume on every role. Less proof behind every CV. The people making hiring decisions are the last to get help.</p>
+    </div>
+    <div class="h71-stats3">
+      <div class="h71-stat">
+        <div class="h71-kicker">01 · More volume</div>
+        <div class="big">11,000<em>/min</em></div>
+        <h3>Job applications submitted on LinkedIn every minute — up 45% in a year.</h3>
+        <p>AI-assisted applying has broken the top of the funnel while recruiting teams have shrunk. Strong candidates disappear inside manual triage.</p>
+        <div class="src">LinkedIn · The New York Times, 2025</div>
+      </div>
+      <div class="h71-stat dark">
+        <div class="h71-kicker">02 · Less signal</div>
+        <div class="big">1 in 3</div>
+        <h3>Hiring managers have interviewed a candidate using a fake identity.</h3>
+        <p>35% have had someone other than the applicant join a virtual interview — and Gartner predicts 1 in 4 candidate profiles worldwide will be fake by 2028.</p>
+        <div class="src">Checkr, 3,000 US managers, 2025 · Gartner, 2025</div>
+      </div>
+      <div class="h71-stat">
+        <div class="h71-kicker">03 · Broken tests</div>
+        <div class="big">2% <em>→</em> 10%</div>
+        <h3>Flagged cheating in technical interviews — up five-fold in two years.</h3>
+        <p>Legacy tests ban the AI tools people use at work every day, so they catch neither the cheating nor the capability.</p>
+        <div class="src">Karat · Business Insider, 2025</div>
+      </div>
+    </div>
+    <div class="h71-takeaway"><b>Modern hiring needs both.</b><span>Automation to run the funnel — and evidence you can trust to make the decision.</span></div>
+    <div class="slide-foot"><span>02 / 08 · The problem</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 03 · SOLUTION · WHAT TAALI IS -->
+  <section data-slide="product" data-screen-label="03 Solution · what Taali is">
+    <div class="slide-head h71-head">
+      <div class="eyebrow"><span class="num">03</span><span class="dot">·</span><span>The solution · What Taali is</span></div>
+      <h2 class="slide-title h71-title">Taali runs the hiring workflow — <em>and proves who can do the work.</em></h2>
+      <p class="h71-deck">Two connected products close the loop from role brief to evidence-backed interview decision.</p>
+    </div>
+    <div class="h71-two-engine">
+      <div class="h71-engine-simple dark">
+        <div class="h71-kicker">01 · Agentic ATS</div>
+        <h3>Create the role.<br/>Receive the shortlist.</h3>
+        <p>One agent per role takes in applicants, removes duplicates and searches the pool you already own. It checks must-haves, scores and ranks, sends assessments, and returns the strongest evidence for your review.</p>
+        <div class="h71-engine-path"><span>Role</span><b>→</b><span>Search</span><b>→</b><span>Screen</span><b>→</b><span>Shortlist</span></div>
+      </div>
+      <div class="h71-engine-simple">
+        <div class="h71-kicker">02 · AI-native assessment</div>
+        <h3>Observe the work.<br/>Not only the claims.</h3>
+        <p>Candidates complete role-specific coding or knowledge work with AI. Taali captures prompts, responses, edits, validation runs and the final deliverable, then links every score back to evidence.</p>
+        <div class="h71-engine-path"><span>Task</span><b>→</b><span>Work trace</span><b>→</b><span>Evidence</span><b>→</b><span>Verdict</span></div>
+      </div>
+    </div>
+    <div class="trust-band">
+      <div class="trust-cell"><b>Evidence, word for word</b>Every match cites the CV verbatim, and every score opens to the exact work behind it. Less administration, faster shortlists.</div>
+      <div class="trust-cell"><b>Your rules, at your autonomy</b>Verdicts follow written rules you set, at the autonomy you choose — held and consequential cases wait for your sign-off.</div>
+      <div class="trust-cell"><b>Accountable and compliant</b>Every action is logged and attributable — role-based access, revocable sharing, data-access and erasure. UK/EU detail in the appendix.</div>
+    </div>
+    <div class="h71-control-line"><span>The recruiter stays accountable</span><b>Set rules and budget · approve consequential actions · inspect or override every recommendation</b></div>
+    <div class="slide-foot"><span>03 / 08 · The solution · what Taali is</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 04 · THE SHIFT · WHAT WE MEASURE -->
+  <section data-slide="work-shift" data-screen-label="04 The shift · the five Ds">
+    <div class="slide-head tight-head">
+      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The shift · what we measure</span></div>
+      <h2 class="slide-title">Work now runs through AI — <em>we score how well people direct it.</em></h2>
+    </div>
+    <div class="shift-grid">
+      <div class="shift-panel">
+        <div class="shift-kicker">Traditional</div>
+        <div class="shift-cap">Most of the time went on producing the work.</div>
+        <div class="shift-bars">
+          <div class="shift-bar"><span class="sp"><i style="--h:34%"></i></span><b>Brief</b></div>
+          <div class="shift-bar"><span class="sp"><i style="--h:42%"></i></span><b>Plan</b></div>
+          <div class="shift-bar hi"><span class="sp"><i style="--h:100%"></i></span><b>Produce</b></div>
+          <div class="shift-bar"><span class="sp"><i style="--h:38%"></i></span><b>Check</b></div>
+          <div class="shift-bar"><span class="sp"><i style="--h:30%"></i></span><b>Deliver</b></div>
+        </div>
+      </div>
+      <div class="shift-panel">
+        <div class="shift-kicker">Working with AI</div>
+        <div class="shift-cap">Time shifts to framing the problem and verifying the result.</div>
+        <div class="shift-bars">
+          <div class="shift-bar hi"><span class="sp"><i style="--h:96%"></i></span><b>Frame the problem</b></div>
+          <div class="shift-bar"><span class="sp" style="--h:26%"><span class="par-chip">AI · in parallel</span><i></i></span><b>Draft · iterate</b></div>
+          <div class="shift-bar hi"><span class="sp"><i style="--h:100%"></i></span><b>Verify the work</b></div>
+          <div class="shift-bar"><span class="sp"><i style="--h:26%"></i></span><b>Deliver</b></div>
+        </div>
+      </div>
+    </div>
+    <div class="shift-note">Illustrative proportions — the pattern, not measured hours.</div>
+    <div class="shift-bridge"><b>Software teams felt it first.</b><span>The same shift is reaching every knowledge role — and a CV cannot show who is good at this way of working.</span></div>
+    <div class="fived-strip-label">// The five Ds — how Taali scores the new way of working · every score links to the recorded session</div>
+    <div class="fived-strip">
+      <div class="fived-mini"><span class="n">01</span><b>Delegation</b><span>What do they own — and what do they hand to AI?</span><span class="fe">Evidence · task split + prompts</span></div>
+      <div class="fived-mini"><span class="n">02</span><b>Description</b><span>Do they give AI clear goals, context and constraints?</span><span class="fe">Evidence · prompt quality</span></div>
+      <div class="fived-mini dark"><span class="n">03</span><b>Discernment</b><span>Do they challenge and correct what AI produces?</span><span class="fe">Evidence · edits + corrections</span></div>
+      <div class="fived-mini"><span class="n">04</span><b>Diligence</b><span>Do they test and verify before trusting it?</span><span class="fe">Evidence · tests + verification</span></div>
+      <div class="fived-mini"><span class="n">05</span><b>Deliverable</b><span>Is the final result genuinely good?</span><span class="fe">Evidence · final deliverable</span></div>
+    </div>
+    <div class="slide-foot"><span>04 / 08 · The shift · the five Ds</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 05 · CASE STUDY -->
+  <section data-slide="proof" data-screen-label="05 Case study">
+    <div class="tally-grid tg-tr"></div>
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>Case study · live proof &amp; pilot expansion</span></div>
+      <h2 class="slide-title">Not a demo — Taali runs a <em>real hiring operation</em> every day.</h2>
+    </div>
+    <div class="market-grid" style="grid-template-columns:0.92fr 1.18fr;">
+      <div class="traction" style="gap:12px;">
+        <div class="th">// Live · production · design-partner workspace</div>
+        <div class="pilot" style="grid-template-columns:1fr;gap:12px;">
+          <span class="nm">Live design partner · data &amp; AI consultancy</span>
+          <span class="ds">A UAE-based <b style="color:#1a1228;">data &amp; AI consultancy</b> operating across the UAE, UK and US — putting AI into production for banks, insurers and capital-markets firms — runs its live technical hiring on Taali.</span>
+          <div>
+            <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin-bottom:8px;">// Role types run on Taali</div>
+            <div class="role-chips"><span>Data Engineer</span><span>AI Engineer</span><span>GenAI Engineer</span><span>AI/ML Architect</span><span>AWS Architect</span><span>AI Product Owner</span><span>Platform Engineer</span><span>AI Governance</span></div>
+          </div>
+          <span class="live"><span class="blip"></span>Live · production</span>
+        </div>
+        <div class="pilot-expansion">
+          <div class="lbl">// Pilot expansion</div>
+          <div class="pilot-expansion-row"><b>Europe · staffing &amp; consultancy</b><span>Second live pilot — native + connected ATS delivery with human review and data-protection diligence.</span></div>
+        </div>
+        <div class="founder-fit"><span class="lbl">// Founder–market fit</span>Built by <b>Sam Patel</b> — a data scientist who spent a decade hiring and growing data teams. He built Taali from the ground up and proves it daily on the design partner's live hiring. <em>A product proven on a live operation.</em></div>
+      </div>
+      <div class="proof-right">
+        <div class="th">// On Taali at the design partner · as of July 2026</div>
+        <div class="proof-stats">
+          <div class="s"><div class="n">120+</div><div class="l">Roles run on Taali</div></div>
+          <div class="s"><div class="n">63k+</div><div class="l">Applications screened · 45k+ candidates</div></div>
+          <div class="s"><div class="n">23k+</div><div class="l">Agent decisions recorded</div></div>
+          <div class="s"><div class="n">65+</div><div class="l">AI-native assessments created</div></div>
+          <div class="s accent"><div class="n">24</div><div class="l">Offers extended from Taali shortlists</div></div>
+          <div class="s accent"><div class="n">18</div><div class="l">Hires made</div></div>
+        </div>
+        <div class="outcome-band">The <b>63,000-application workflow</b> was screened down to evidence-backed shortlists, with <b>reasons, evidence and the deciding actor recorded on every advance and reject</b>.</div>
+        <div class="proof-caveat">Operating figures from the live workspace — not a claim that Taali alone caused each outcome.</div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>05 / 08 · Case study · live proof</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 06 · PRODUCT TODAY + ROADMAP -->
+  <section class="roadmap-v3" data-slide="capability-map" data-screen-label="06 Product today + roadmap">
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>Product today + roadmap</span></div>
+      <h2 class="slide-title">From role brief to client-ready report — <em>live in Taali today.</em></h2>
+      <p class="slide-sub">Use Taali as the ATS, or connect Workable or Bullhorn — your ATS stays the system of record, and Taali writes decisions back. Every stage is work a recruiter would otherwise do by hand, run consistently and with evidence.</p>
+    </div>
+    <div class="capability-board">
+      <div class="live-mode-bar">
+        <div class="live-label">Live now</div>
+        <div class="mode-card primary">Taali · native agentic ATS</div>
+        <div class="mode-card">Workable · connected</div>
+        <div class="mode-card">Bullhorn · connected</div>
+        <div class="loop-card">One governed hiring loop →</div>
+      </div>
+      <div class="pipe-grid">
+        <article class="pipe-stage">
+          <div class="stage-head"><span class="stage-num">01</span></div>
+          <h3>Brief &amp; apply</h3>
+          <p>Chat the brief; the agent drafts the spec, publishes the job page and keeps every applicant deduplicated.</p>
+          <div class="pipe-feats"><span>Role brief → spec</span><span>Publish &amp; apply</span><span>One deduplicated record</span></div>
+          <div class="pipe-live"><span class="blip"></span>Live</div>
+        </article>
+        <article class="pipe-stage">
+          <div class="stage-head"><span class="stage-num">02</span></div>
+          <h3>Pre-screen &amp; integrity</h3>
+          <p>Triage plus the fraud checks no recruiter has time to run by hand — before any paid scoring.</p>
+          <div class="pipe-feats"><span>Job-spec copy-paste flags</span><span>Hidden prompt-injection detection</span><span>Timeline &amp; claim checks</span><span>Cross-candidate similarity signals</span></div>
+          <div class="pipe-live"><span class="blip"></span>Live</div>
+        </article>
+        <article class="pipe-stage">
+          <div class="stage-head"><span class="stage-num">03</span></div>
+          <h3>Score &amp; search</h3>
+          <p>Every role requirement graded with exact CV quotes, plus plain-English search across the pool you own.</p>
+          <div class="pipe-feats"><span>Plain-English search</span><span>Cited shortlist</span><span>GitHub + peer corroboration</span><span>Candidate rediscovery</span></div>
+          <div class="pipe-live"><span class="blip"></span>Live</div>
+        </article>
+        <article class="pipe-stage">
+          <div class="stage-head"><span class="stage-num">04</span></div>
+          <h3>Assess real work</h3>
+          <p>Role-specific work with AI, the full session recorded, scored on the five Ds and the role's own scorecard.</p>
+          <div class="pipe-feats"><span>Role-specific workspace</span><span>Complete work trace</span><span>Five-D scorecard</span></div>
+          <div class="pipe-live"><span class="blip"></span>Live</div>
+        </article>
+        <article class="pipe-stage">
+          <div class="stage-head"><span class="stage-num">05</span></div>
+          <h3>Decide with control</h3>
+          <p>Verdicts follow rules you set, at the autonomy you choose — held and consequential cases wait for your sign-off.</p>
+          <div class="pipe-feats"><span>Decision Hub</span><span>Guardrails &amp; approvals</span><span>Human override</span></div>
+          <div class="pipe-live"><span class="blip"></span>Live</div>
+        </article>
+        <article class="pipe-stage">
+          <div class="stage-head"><span class="stage-num">06</span></div>
+          <h3>Share &amp; operate</h3>
+          <p>Client-safe reports, secure revocable links, tailored interview questions, budgets and cost analytics.</p>
+          <div class="pipe-feats"><span>Client-safe reports</span><span>Secure handoff</span><span>Cost analytics &amp; API</span></div>
+          <div class="pipe-live"><span class="blip"></span>Live</div>
+        </article>
+      </div>
+      <div class="core-roadmap">
+        <div class="core-roadmap-intro"><b>NEXT 3–6 MONTHS</b><span>Four upgrades that complete the funnel and expand reach.</span></div>
+        <article class="core-roadmap-card">
+          <h4>Run offers in Taali.</h4>
+          <p>Extend, track and close offers natively — completing the funnel end to end. Next 3 months.</p>
+        </article>
+        <article class="core-roadmap-card">
+          <h4>Find talent beyond your database.</h4>
+          <p>Search approved external sources and add prospects with their source carried into Taali.</p>
+        </article>
+        <article class="core-roadmap-card">
+          <h4>Post to more job boards.</h4>
+          <p>Publish, update and close roles across selected boards, each application traced to its source.</p>
+        </article>
+        <article class="core-roadmap-card">
+          <h4>Build a reusable talent network.</h4>
+          <p>Create talent pools, re-engage past candidates and capture replies in the same workflow.</p>
+        </article>
+      </div>
+    </div>
+    <div class="slide-foot"><span>06 / 08 · Product today + roadmap</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 06 · COMPETITOR ANALYSIS -->
+  <section data-slide="wedge" data-screen-label="07 Competitor analysis">
+    <div class="slide-head tight-head">
+      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>Competitor analysis</span></div>
+      <h2 class="slide-title">Taali unifies what ATSs and assessment tools <em>split apart.</em></h2>
+      <p class="slide-sub">Category-level positioning; capabilities vary by provider and configuration.</p>
+    </div>
+    <div class="wedge-grid">
+      <div class="quad">
+        <div class="yax"><span class="arr">↑ AI-native work evidence</span><span>Workflow records only ↓</span></div>
+        <div class="canvas">
+          <div class="qcell tl"><span class="lbl">Assessment tools · work-sample focus</span><span class="nm">Coding tests<br/>Interview platforms</span></div>
+          <div class="qcell tr taali"><span class="lbl">Agentic ATS + AI-native assessment + governed review</span><span class="nm">TAALI</span></div>
+          <div class="qcell bl"><span class="lbl">Typical ATS / CRM · workflow focus</span><span class="nm">Applicant records<br/>Stages · integrations</span></div>
+          <div class="qcell br"><span class="lbl">Adjacent automation · coordination focus</span><span class="nm">Sourcing<br/>Scheduling · chat</span></div>
+        </div>
+        <div class="xax"><span>← Point solution</span><span class="arr">Governed hiring loop →</span></div>
+      </div>
+      <div class="feat-tbl">
+        <div class="th">
+          <span>Typical category pattern<span class="feat-legend">● full · ◐ partial · ○ not typical</span></span>
+          <span class="col"><b>Typical ATS/CRM</b></span>
+          <span class="col"><b>Assessment tools</b></span>
+          <span class="col taali"><b>TAALI</b></span>
+        </div>
+        <div class="row"><span>One role agent runs the hiring flow end to end</span><span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span></div>
+        <div class="row"><span>AI-native work sample with an inspectable trace</span><span class="cell no">○</span><span class="cell partial">◐</span><span class="cell yes">●</span></div>
+        <div class="row"><span>Pool search with exact CV quotes behind every match</span><span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span></div>
+        <div class="row"><span>Checks a candidate's public work where it exists — never penalises its absence</span><span class="cell no">○</span><span class="cell no">○</span><span class="cell partial">◐</span></div>
+        <div class="row"><span>Cases outside your rules — or where the agent is unsure — wait for a person</span><span class="cell partial">◐</span><span class="cell partial">◐</span><span class="cell yes">●</span></div>
+        <div class="row"><span>Evidence-linked internal and client-safe reports</span><span class="cell partial">◐</span><span class="cell partial">◐</span><span class="cell yes">●</span></div>
+        <div class="row"><span>Runs natively or connects through Workable + Bullhorn</span><span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span></div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>07 / 08 · Competitor analysis</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- 08 · HOW WE WORK WITH YOU -->
+  <section data-slide="offering" data-screen-label="08 How we work with you">
+    <div class="tally-grid tg-br"></div>
+    <div class="slide-head tight-head">
+      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>How we work with you</span></div>
+      <h2 class="slide-title">Start with a few live roles — <em>in-house, client mandates, or both.</em></h2>
+    </div>
+    <div class="ways">
+      <div class="way">
+        <div class="way-num">01</div>
+        <div class="way-tag">Recruitment, staffing &amp; consultancy firms</div>
+        <div class="way-h">Place faster, with proof.</div>
+        <div class="way-list">
+          <div class="way-li"><span class="ic">→</span><span><b>More mandates per consultant, no extra heads</b> — the agent runs screening and evidence collation on every role.</span></div>
+          <div class="way-li"><span class="ic">→</span><span><b>Evidence clients can inspect</b> — each submission carries a role-specific work sample and client-safe report.</span></div>
+          <div class="way-li"><span class="ic">→</span><span><b>Higher shortlist-to-placement, fewer fall-throughs</b> — your consultant owns the call; Taali supplies the decision trail.</span></div>
+        </div>
+        <div class="way-foot">More placements per consultant · fewer clawbacks</div>
+      </div>
+      <div class="way hero">
+        <div class="way-num">02</div>
+        <div class="way-tag">In-house hiring teams</div>
+        <div class="way-h">Build your teams, with control.</div>
+        <div class="way-list">
+          <div class="way-li"><span class="ic">→</span><span><b>More recruiter capacity without lowering the bar</b> — the agent runs the repetitive top-of-funnel on every active role.</span></div>
+          <div class="way-li"><span class="ic">→</span><span><b>One view for recruiters and hiring managers</b> — CV, assessment and interview evidence in one report.</span></div>
+          <div class="way-li"><span class="ic">→</span><span><b>Accountable automation</b> — role budgets, approval gates and overrides stay with your team.</span></div>
+        </div>
+        <div class="way-foot">More recruiter capacity · one inspectable hiring bar</div>
+      </div>
+    </div>
+    <div class="pilot-strip">
+      <div class="ps-label">// What a pilot looks like</div>
+      <div class="ps-step"><b>Day 1 · connect</b>Connect Workable or Bullhorn, or run roles natively in Taali.</div>
+      <div class="ps-step"><b>2–3 live roles</b>Your own team's, a client mandate's, or both.</div>
+      <div class="ps-step"><b>4–6 weeks</b>Long enough to see shortlists, assessments and decisions on real candidates.</div>
+      <div class="ps-step"><b>Success measures agreed upfront</b>Recruiter time per role, time to shortlist, acceptance of recommendations.</div>
+      <div class="ps-step"><b>Your data stays yours</b>Access-export and erasure on request; disconnect cleanly at exit.</div>
+    </div>
+    <div class="cta-band">
+      <div>
+        <div class="big">Start free — <em>a proof-of-value pilot on a few live roles.</em></div>
+        <div class="sub">After the pilot: credits, pay only for what you use, with a budget per role. Or walk the product first at <a href="https://www.taali.ai/demo">taali.ai/demo</a>.</div>
+      </div>
+      <a class="mail" href="mailto:hello@taali.ai">hello@taali.ai →</a>
+    </div>
+    <div class="slide-foot"><span>08 / 08 · How we work with you</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- A1 · PRODUCT DEMO · HOME HUB -->
+  <section class="product-preview" data-slide="home-hub" data-screen-label="A1 Product demo · Home Hub">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">A1</span><span class="dot">·</span><span>Appendix · product demo</span></div>
+      <h2 class="surf-title">Home Hub — <em>run every role from one operating view.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame hub-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/home · hiring command centre</span><span class="surf-badge">Product demo · representative data</span></div>
+        <iframe src="/showcase/home" title="Taali product demo — Home Hub" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-hub.png" alt="Taali Home Hub product demo — representative data" />
+      </div>
+      <div class="surf-out hub-out">
+        <span><b>Role-level control:</b> open any role to see its pipeline and its agent.</span>
+        <span><b>Pipeline + review queue:</b> see funnel health, inspect evidence and act on pending recommendations.</span>
+        <span><b>Agent chat:</b> steer that role's agent; its conversation and activity stay tied to the role.</span>
+      </div>
+    </div>
+    <div class="slide-foot"><span>A1 / A6 · Product demo · Home Hub</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- A2 · PRODUCT DEMO · JOBS & ROLE AGENTS -->
+  <section class="product-preview" data-slide="surf-triage" data-screen-label="A2 Product demo · Jobs &amp; role agents">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">A2</span><span class="dot">·</span><span>Appendix · product demo</span></div>
+      <h2 class="surf-title">Jobs &amp; role agents — <em>one governed agent per role.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/jobs · agent on duty</span><span class="surf-badge">Product demo · representative data</span></div>
+        <iframe src="/jobs?demo=1&amp;showcase=1" title="Taali product demo — Jobs and role agents" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-triage.png" alt="Taali Jobs and role agents product demo — representative data" />
+      </div>
+      <div class="surf-out">
+        <span><b>One role, one agent:</b> requirements, budget, autonomy and activity stay together.</span>
+        <span><b>Visible work:</b> every advance, hold and rejection shows who — or what — made the call, and why.</span>
+        <span><b>Operational view:</b> open the role directly into the pipeline the team works each morning.</span>
+      </div>
+    </div>
+    <div class="slide-foot"><span>A2 / A6 · Product demo · Jobs &amp; role agents</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- A3 · PRODUCT DEMO · CANDIDATE SEARCH -->
+  <section class="product-preview" data-slide="surf-chat" data-screen-label="A3 Product demo · Candidate search">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">A3</span><span class="dot">·</span><span>Appendix · product demo</span></div>
+      <h2 class="surf-title">Candidate search — <em>search your authorised pool in plain English.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/chat · search + role agents</span><span class="surf-badge">Product demo · representative data</span></div>
+        <iframe src="/showcase/chat" title="Taali product demo — candidate search" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-chat.png" alt="Taali candidate search product demo — representative data" />
+      </div>
+      <div class="surf-out">
+        <span><b>Ask in plain English:</b> “Top 3 who've owned a GenAI launch, run Postgres in production and led a backend team.”</span>
+        <span><b>Grounded results:</b> every match carries a verbatim CV citation — across your applied, uploaded and ATS-synced candidates.</span>
+        <span><b>Per-role agents:</b> reason over the same pool within that role's budget and rules.</span>
+      </div>
+    </div>
+    <div class="slide-foot"><span>A3 / A6 · Product demo · Candidate search</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- A4 · PRODUCT DEMO · AI-NATIVE ASSESSMENT -->
+  <section class="product-preview" data-slide="surf-assess" data-screen-label="A4 Product demo · AI-native assessment">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">A4</span><span class="dot">·</span><span>Appendix · product demo</span></div>
+      <h2 class="surf-title">AI-native assessment — <em>observe how candidates work with AI.</em></h2>
+    </div>
+    <div class="assess-two">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/assess · candidate workspace</span><span class="surf-badge">Product demo · representative data</span></div>
+        <img class="surf-shot" src="img/surf-assess.png" alt="Taali AI-native assessment — the full candidate workspace: task header and timer, three-step guidance, assessment brief, repo files, Claude chat and the code editor" />
+      </div>
+      <div class="assess-notes">
+        <div class="assess-note"><b>Brief &amp; guidance</b><span>The task brief, a suggested path — get oriented, decide &amp; direct, verify &amp; submit — and the time remaining. Guidance, not a lock.</span></div>
+        <div class="assess-note dark"><b>Claude, in the workflow</b><span>A live repo assistant. Candidates prompt it, challenge it and iterate — the way they would actually work.</span></div>
+        <div class="assess-note"><b>Real repo, real editor</b><span>The task's own files, a working editor and a safe test environment. Save and run, as on any working day.</span></div>
+        <div class="assess-note"><b>Everything is recorded</b><span>Prompts, responses, edits, saves, validation runs and the final deliverable — the evidence behind every score.</span></div>
+        <div class="assess-note"><b>No proctoring theatre</b><span>No webcam, no screen or microphone recording, no lockdown browser. Light workspace controls keep the work inside the session — the evidence is the work itself.</span></div>
+      </div>
+    </div>
+    <div class="slide-foot"><span>A4 / A6 · Product demo · AI-native assessment</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+  <!-- A5 · PRODUCT DEMO · CANDIDATE REPORT -->
+  <section class="product-preview" data-slide="surf-report" data-screen-label="A5 Product demo · Candidate report">
+    <div class="slide-head surf-head">
+      <div class="eyebrow"><span class="num">A5</span><span class="dot">·</span><span>Appendix · product demo</span></div>
+      <h2 class="surf-title">Candidate report — <em>open every score to the evidence behind it.</em></h2>
+    </div>
+    <div class="surf">
+      <div class="surf-frame">
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/candidate/:id · internal recruiter report</span><span class="surf-badge">Product demo · representative data</span></div>
+        <iframe src="/c/demo?view=internal&amp;showcase=1&amp;tab=assessment" title="Taali product demo — internal candidate report" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
+        <img class="surf-shot" src="img/surf-report.png" alt="Taali internal candidate report product demo — representative data" />
+      </div>
+      <div class="surf-out">
+        <span><b>Assessment tab:</b> appears when completed assessment evidence is linked to the candidate.</span>
+        <span><b>Drill into evidence:</b> the five Ds — Delegation, Description, Discernment, Diligence, Deliverable — plus the role's scorecard, work trace and final deliverable.</span>
+        <span><b>Separate audience views:</b> client-safe links omit internal notes and detailed evaluation material.</span>
+      </div>
+    </div>
+    <div class="slide-foot"><span>A5 / A6 · Product demo · Candidate report</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+
+  <!-- A6 · UK & EU DATA PROTECTION -->
+  <section data-slide="data-protection" data-screen-label="A6 UK &amp; EU data protection">
+    <div class="slide-head tight-head">
+      <div class="eyebrow"><span class="num">A6</span><span class="dot">·</span><span>Appendix · data protection &amp; accountable automation</span></div>
+      <h2 class="slide-title">Compliant hiring — <em>human oversight and traceable decisions.</em></h2>
+      <p class="slide-sub">Taali is operated in line with UK and EU data-protection requirements, under each customer's instructions — practical product controls, paired with a documented compliance pack for every customer.</p>
+    </div>
+    <div class="compliance-grid">
+      <div class="compliance-card dark">
+        <div class="compliance-label">Product controls today</div>
+        <h3>Control who acts, what runs and what leaves the system.</h3>
+        <div class="compliance-list">
+          <div class="compliance-item"><span class="ic">01</span><span>Tenant-scoped access, with per-role permissions for edits, agent controls and team management.</span></div>
+          <div class="compliance-item"><span class="ic">02</span><span>Role-level autonomy and review holds for out-of-rules or low-confidence actions.</span></div>
+          <div class="compliance-item"><span class="ic">03</span><span>Exportable decision history: reasoning, evidence, versions and the human resolution.</span></div>
+          <div class="compliance-item"><span class="ic">04</span><span>Separate client-safe views with time-limited, revocable or single-view links — plus data-access and erasure workflows.</span></div>
+        </div>
+      </div>
+      <div class="compliance-card">
+        <div class="compliance-label">Documented with each customer</div>
+        <h3>The lawful process around the product.</h3>
+        <div class="compliance-list">
+          <div class="compliance-item"><span class="ic">01</span><span>Controller/processor roles, purpose, lawful basis and the candidate privacy notice.</span></div>
+          <div class="compliance-item"><span class="ic">02</span><span>DPIA, retention/deletion schedule and data-subject request map.</span></div>
+          <div class="compliance-item"><span class="ic">03</span><span>Candidate explanation, human-intervention and contest route.</span></div>
+          <div class="compliance-item"><span class="ic">04</span><span>DPA, transfer mechanisms and EU AI Act readiness plan — subprocessor list published at <a href="https://www.taali.ai/subprocessors">taali.ai/subprocessors</a>.</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="legal-line">
+      <span><b>Regulatory frame:</b> UK GDPR + DPA 2018 as amended by the Data (Use and Access) Act 2025. EU recruitment AI is a high-risk category; the current employment-system timetable is 2 December 2027.</span>
+      <span><a href="https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/employment/recruitment-and-selection/">ICO guidance ↗</a> · <a href="https://digital-strategy.ec.europa.eu/en/policies/guidelines-ai-high-risk-systems">EU AI Act timetable ↗</a></span>
+    </div>
+    <div class="slide-foot"><span>A6 / A6 · UK &amp; EU data protection</span><span class="brand">taali<span class="p">.</span></span></div>
+  </section>
+
+</deck-stage>
+
+<script src="investor-deck/deck-stage.js"></script>
+
+<script type="application/json" id="speaker-notes">
+[
+  "Taali is for recruitment and staffing firms as well as in-house hiring teams. The promise is deliberately simple: let a governed agent run repetitive workflow, assess real work with AI in the loop, and give decision-makers evidence they can inspect.",
+  "The problem, with numbers a buyer can check: LinkedIn reports around 11,000 applications a minute, up 45% year on year. Checkr found one in three hiring managers has interviewed a candidate using a fake identity, and Gartner projects one in four candidate profiles worldwide will be fake by 2028. Karat's interview data shows flagged cheating up five-fold in two years. Volume is up, signal is down — the response is automation to run the funnel plus evidence you can trust.",
+  "Taali combines an agentic ATS with an AI-native assessment. The ATS handles intake, pool search, screening, ranking and orchestration; the assessment captures the work trace and links scores to evidence. Why the output is trustworthy: every match cites the CV verbatim; every verdict follows written rules the team sets, at the autonomy they choose, with held and consequential cases waiting for sign-off; and every action is logged and attributable. The recruiter stays accountable throughout.",
+  "The shift slide: in traditional work most time went on producing the artifact. Working with AI, production runs in parallel with the model and human time moves to framing the problem and verifying the result. Software teams felt this first; the same pattern is reaching every knowledge role — and a CV cannot show who is good at it. That is exactly what the five Ds score: Delegation, Description, Discernment, Diligence, Deliverable, each linked back to the recorded session. Proportions on the chart are illustrative.",
+  "The case study comes before the product tour so the depth lands as proven, not promised. The design partner is a UAE-based data and AI consultancy operating across the UAE, UK and US — named on request. As of July 2026: 120+ roles, 63,000 applications, 23,000 agent decisions, 65+ assessments, 24 offers extended from Taali shortlists and 18 hires. These are operating figures, not a claim that Taali alone caused each outcome. A second pilot is live with a European staffing and consultancy firm.",
+  "The condensed pipeline view: six stages, all live. Emphasise the integrity work in stage two — the agent runs the fraud checks a recruiter never has time to do by hand: flagging job-spec text copied into CVs, detecting hidden prompt-injection aimed at gaming ATS screening, checking timelines and unsupported claims, and spotting suspicious similarity across candidates. Once candidates are scored and shortlisted, flagged claims are corroborated against the candidate's public GitHub work and peers from the same employer — corroboration adds questions, never auto-rejects. Taali runs natively as the ATS or connects to Workable and Bullhorn with decisions written back. The roadmap adds offer management in the next three months, then external discovery, wider job-board distribution and reusable talent pools.",
+  "Taali's difference is structural: the role agent, AI-native work sample and evidence-linked decision record operate in one loop. The comparison is category-level and individual providers vary, but most buyers currently assemble these capabilities across separate ATS, assessment and automation products.",
+  "The close: two audiences, one usage-based model. The pilot mechanics are on the slide — connect or run native on day one, two to three live roles, four to six weeks, success measures agreed upfront, and the customer's data stays theirs. Free proof-of-value pilot, then credits with a budget per role.",
+  "Product demo: the Home Hub starts at the all-roles view, leads with the pipeline and review queue, and opens a role-scoped agent chat when a mandate is selected. All data shown is representative.",
+  "Product demo: the Jobs board shows one governed agent per role, with requirements, budget, autonomy and activity together. The role opens directly into the pipeline the team works each morning.",
+  "Product demo: natural-language search works across the customer's own applied, uploaded and ATS-synced candidates, and qualitative matches carry verbatim CV citations. Automated external talent discovery is not represented as live.",
+  "Product demo — the whole candidate view rather than a crop: the task header and time remaining, the suggested path (get oriented, decide and direct, verify and submit), the assessment brief, the repo files, the Claude chat and the code editor. Candidates complete role-specific work with AI in a safe test environment. Taali records prompts, responses, edits, saves, validation runs and the final deliverable — without webcam or lockdown-browser proctoring.",
+  "Product demo: the internal candidate report includes an Assessment tab when completed assessment evidence is linked. Scores open into the five Ds, rubric criteria, the work trace and final deliverable, while client-safe sharing remains a separate audience view.",
+  "Data protection: the left card is what the product enforces today — tenant-scoped access, review holds, exportable decision history, revocable sharing, data-access and erasure. The right card is no longer aspiration — the compliance pack exists as artifacts: DPA template, DPIA support, candidate notice templates, a contest route, and a public subprocessor list with per-subprocessor transfer mechanisms at taali.ai/subprocessors, alongside the privacy notice at taali.ai/privacy. The wording is deliberate: Taali is operated in line with UK and EU requirements under each customer's instructions — the customer is the controller; Taali is the processor. Be straight if a DPO asks about automated decisions: advancing a candidate always waits for a person, and pre-screen rejection can be applied automatically when a candidate misses the screening rules or score threshold the recruiter set — on by default, switchable per role, every rejection logged with its reason and reversible. In the UK that is expressly permitted with the safeguards we run; for EU candidates we can set it to route rejections to human review instead. UK side: UK GDPR and DPA 2018 as amended by the Data (Use and Access) Act 2025. EU side: recruitment AI is high-risk; the June 2026 omnibus confirmed the employment-system obligations land 2 December 2027, and Taali's logging and human-oversight design are built to them today."
+]
+</script>
+
+</body>
+</html>

@@ -52,6 +52,7 @@ import {
   DashboardNav,
   DecisionPolicyPage,
   DeckIframe,
+  DeckLinksPage,
   DemoExperiencePage,
   DemoLeadPage,
   DemoShowcasePage,
@@ -136,6 +137,9 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/tasks',
     '/tasks/bespoke',
     '/candidate-detail',
+    // Minting deck links needs a real owner session, not just the dev token.
+    // Exact match only — '/deck' and '/deck/<prospect-token>' stay open.
+    '/deck/links',
     ].includes(pathname)
     || pathname.startsWith('/analytics/')
     || pathname.startsWith('/c/')
@@ -945,6 +949,19 @@ function AppContent() {
           <Suspense fallback={lazyFallback}>
             <TokenGate>
               <DeckIframe />
+            </TokenGate>
+          </Suspense>
+        )}
+      />
+
+      {/* Mint / audit / revoke per-prospect deck links. Owner-gated
+          server-side; TokenGate here is obscurity + noindex only. */}
+      <Route
+        path="/deck/links"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <TokenGate>
+              <DeckLinksPage />
             </TokenGate>
           </Suspense>
         )}
