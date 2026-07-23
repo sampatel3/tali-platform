@@ -342,9 +342,10 @@ describe('AssessmentPage live agentic runtime', () => {
     // The workspace-control layer emits copy_attempt/visibility_hidden/etc even
     // with proctoring off, so the footer must not claim transcript-only.
     const disclosure = await screen.findByTestId('assessment-recording-disclosure');
-    expect(disclosure).toHaveTextContent(/leaving the tab or exiting fullscreen/i);
+    expect(disclosure).toHaveTextContent(/keep the assessment fair/i);
+    expect(disclosure).toHaveTextContent(/when the tab loses focus/i);
     expect(disclosure).toHaveTextContent(/do not record your screen, camera, or microphone/i);
-    expect(screen.getByText('Transcript + workspace signals')).toBeInTheDocument();
+    expect(screen.getByText('Transcript + activity metrics')).toBeInTheDocument();
     expect(screen.queryByText('Session transcript only')).not.toBeInTheDocument();
   });
 

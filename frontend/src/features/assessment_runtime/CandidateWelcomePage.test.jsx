@@ -171,15 +171,12 @@ describe('CandidateWelcomePage', () => {
 
     const disclosure = await screen.findByTestId('welcome-recording-disclosure');
     expect(disclosure).toHaveTextContent(/We record your work in this session/i);
-    // The gap this disclosure closes: the workspace records these with
-    // proctoring off, so the consent screen has to name them.
-    expect(disclosure).toHaveTextContent(/leaving the tab or exiting fullscreen/i);
-    expect(disclosure).toHaveTextContent(/right-click, drag-and-drop, and printing/i);
+    // The gap this disclosure closes: the workspace logs these with proctoring
+    // off, so the consent screen has to say so — briefly, and with the reason.
+    expect(disclosure).toHaveTextContent(/keep the assessment fair/i);
+    expect(disclosure).toHaveTextContent(/when the tab loses focus/i);
+    expect(disclosure).toHaveTextContent(/not the content of what you type or copy/i);
     expect(disclosure).toHaveTextContent(/do not record your screen, camera, or microphone/i);
-    // The "what to expect" checklist must not contradict the rights block.
-    expect(screen.getByText(/transcript and the advisory workspace signals are reviewed/i))
-      .toBeInTheDocument();
-    expect(screen.queryByText(/^The session transcript is reviewed/i)).not.toBeInTheDocument();
   });
 
   it('drops the workspace-signal disclosure when the layer is accommodated off', async () => {
@@ -197,6 +194,6 @@ describe('CandidateWelcomePage', () => {
 
     const disclosure = await screen.findByTestId('welcome-recording-disclosure');
     expect(disclosure).toHaveTextContent(/We record your work in this session/i);
-    expect(disclosure).not.toHaveTextContent(/leaving the tab or exiting fullscreen/i);
+    expect(disclosure).not.toHaveTextContent(/when the tab loses focus/i);
   });
 });

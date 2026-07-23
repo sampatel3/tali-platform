@@ -33,11 +33,12 @@ export const WORK_RECORD_ITEMS = Object.freeze([
   'validation runs',
 ]);
 
-// Layer 2 — advisory workspace signals, grouped so the candidate-facing copy
-// stays readable. Every event type the workspace can emit must appear here.
+// Layer 2 — integrity metrics from the assessment tab, grouped so the
+// candidate-facing copy stays short. Every event type the workspace can emit
+// must appear here, so adding one forces a look at the disclosure.
 export const WORKSPACE_SIGNAL_GROUPS = Object.freeze([
   Object.freeze({
-    label: 'copy, cut, and paste',
+    label: 'clipboard use',
     events: Object.freeze([
       'copy_attempt',
       'cut_attempt',
@@ -46,7 +47,7 @@ export const WORKSPACE_SIGNAL_GROUPS = Object.freeze([
     ]),
   }),
   Object.freeze({
-    label: 'right-click, drag-and-drop, and printing',
+    label: 'blocked export attempts',
     events: Object.freeze([
       'context_menu_blocked',
       'drag_drop_blocked',
@@ -54,7 +55,7 @@ export const WORKSPACE_SIGNAL_GROUPS = Object.freeze([
     ]),
   }),
   Object.freeze({
-    label: 'leaving the tab or exiting fullscreen',
+    label: 'when the tab loses focus',
     events: Object.freeze(['visibility_hidden', 'fullscreen_exit']),
   }),
 ]);
@@ -63,20 +64,19 @@ export const WORKSPACE_SIGNAL_EVENTS = Object.freeze(
   WORKSPACE_SIGNAL_GROUPS.flatMap((group) => group.events),
 );
 
-// Groups carry internal commas, so separate them with semicolons.
 export const WORKSPACE_SIGNAL_SUMMARY = joinWithAnd(
   WORKSPACE_SIGNAL_GROUPS.map((group) => group.label),
-  '; ',
 );
 
 export const WORK_RECORD_SENTENCE = `We record your work in this session: ${joinWithAnd(WORK_RECORD_ITEMS)}.`;
 
-export const WORKSPACE_SIGNAL_SENTENCE = `The workspace also logs advisory signals — ${WORKSPACE_SIGNAL_SUMMARY} — which the hiring team sees alongside your work.`;
+// Says what it is and why, without enumerating nine event types at someone
+// who is about to sit an assessment.
+export const WORKSPACE_SIGNAL_SENTENCE = `To keep the assessment fair we also log activity metrics from this tab — ${WORKSPACE_SIGNAL_SUMMARY}.`;
 
-// The honest framing the workspace-control layer already uses internally
-// (AssessmentWorkspaceSecurity.jsx: "activity signals are advisory"), surfaced
-// to the candidate rather than left in the code.
-export const WORKSPACE_SIGNAL_CAVEAT = 'They are best-effort browser signals, not proof of anything on their own.';
+// Bounded to a surface name and a character count on the server
+// (candidate_integrity_routes.py); the copied text never leaves the browser.
+export const WORKSPACE_SIGNAL_CAVEAT = 'These are counts and timestamps — not the content of what you type or copy.';
 
 export const NO_AV_RECORDING_SENTENCE = 'We do not record your screen, camera, or microphone.';
 
@@ -84,7 +84,7 @@ export const NO_AV_RECORDING_SENTENCE = 'We do not record your screen, camera, o
 // configuration it describes: "Session transcript only" is only honest once the
 // workspace-control layer is off.
 export const SESSION_TRANSCRIPT_ONLY_FLAG = 'Session transcript only';
-export const WORKSPACE_SIGNALS_FLAG = 'Transcript + workspace signals';
+export const WORKSPACE_SIGNALS_FLAG = 'Transcript + activity metrics';
 export const PROCTORING_FLAG = 'Activity signals enabled';
 
 export const recordingFlagLabel = ({
@@ -95,12 +95,3 @@ export const recordingFlagLabel = ({
   if (workspaceProtectionEnabled) return WORKSPACE_SIGNALS_FLAG;
   return SESSION_TRANSCRIPT_ONLY_FLAG;
 };
-
-// Short form for the pre-start "what to expect" checklist. Same rule as the
-// flag: it may only claim transcript-only review once the workspace-control
-// layer is actually off.
-export const reviewedChecklistItem = ({ workspaceProtectionEnabled = false } = {}) => (
-  workspaceProtectionEnabled
-    ? 'Your session transcript and the advisory workspace signals are reviewed — never your screen, mic, or camera.'
-    : 'Your session transcript is reviewed — never your screen, mic, or camera.'
-);

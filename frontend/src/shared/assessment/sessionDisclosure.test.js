@@ -16,7 +16,6 @@ import {
   WORKSPACE_SIGNALS_FLAG,
   WORK_RECORD_SENTENCE,
   recordingFlagLabel,
-  reviewedChecklistItem,
 } from './sessionDisclosure';
 
 // Repo paths, resolved from this file (frontend/src/shared/assessment/).
@@ -72,18 +71,16 @@ describe('assessment session disclosure', () => {
     }
   });
 
-  it('names the tab-visibility and fullscreen signals candidates would not expect', () => {
-    // The specific gap this disclosure was written to close: with proctoring off
-    // the workspace still records leaving the tab and exiting fullscreen.
+  it('covers the tab-focus metrics candidates would not otherwise expect', () => {
+    // The specific gap this disclosure closes: with proctoring off the workspace
+    // still logs when the assessment tab loses focus — the signal that catches
+    // screenshot-and-ask-an-external-model, which a closed workspace cannot.
     expect(WORKSPACE_SIGNAL_EVENTS).toContain('visibility_hidden');
     expect(WORKSPACE_SIGNAL_EVENTS).toContain('fullscreen_exit');
-    expect(WORKSPACE_SIGNAL_SENTENCE).toMatch(/leaving the tab or exiting fullscreen/);
+    expect(WORKSPACE_SIGNAL_SENTENCE).toMatch(/when the tab loses focus/);
   });
 
-  it('carries the advisory framing the workspace layer uses internally', () => {
-    expect(WORKSPACE_SIGNAL_CAVEAT).toMatch(/not proof/);
-    // The framing already existed in the code; the point is that it now reaches
-    // the candidate rather than living only in a banner and a comment.
+  it('keeps the workspace banner framing these as advisory', () => {
     expect(workspaceSecuritySource).toContain('activity signals are advisory');
   });
 
@@ -116,29 +113,27 @@ describe('assessment session disclosure', () => {
     expect(WORK_RECORD_SENTENCE).toMatch(/prompts/);
   });
 
-  it('leaves no recording claim hardcoded on a candidate surface', () => {
-    // The first pass at this fix missed a second transcript-only claim in the
-    // welcome-page checklist, because it was phrased differently ("screen, mic,
-    // or camera"). Any claim about what is or is not recorded has to come from
-    // this module, so a reworded one cannot hide from the disclosure again.
-    const claim = /transcript is reviewed|not your screen|screen, mic|do not record your/i;
+  it('never claims recording is limited to the transcript on a candidate surface', () => {
+    // "The session transcript is reviewed — not your screen, mic, or camera" is
+    // true and stays: nothing scores or grades on the activity metrics. What is
+    // banned is a claim that the transcript is the ONLY thing recorded, which is
+    // what the old footer flag asserted while metrics were being logged.
+    const falseClaim = /transcript only|only the (session )?transcript|nothing else is (recorded|logged)/i;
     for (const rel of [
       'frontend/src/features/assessment_runtime/AssessmentPageContent.jsx',
       'frontend/src/features/assessment_runtime/CandidateWelcomePage.jsx',
     ]) {
-      const hardcoded = read(rel).match(claim);
-      expect(hardcoded, `${rel} hardcodes a recording claim: ${hardcoded?.[0]}`).toBeNull();
+      const hardcoded = read(rel).match(falseClaim);
+      expect(hardcoded, `${rel} hardcodes a transcript-only claim: ${hardcoded?.[0]}`).toBeNull();
     }
   });
 
-  it('only promises transcript-only review when the workspace layer is off', () => {
-    expect(reviewedChecklistItem({ workspaceProtectionEnabled: true }))
-      .toMatch(/transcript and the advisory workspace signals are reviewed/);
-    expect(reviewedChecklistItem({ workspaceProtectionEnabled: false }))
-      .toMatch(/^Your session transcript is reviewed/);
-    for (const enabled of [true, false]) {
-      expect(reviewedChecklistItem({ workspaceProtectionEnabled: enabled }))
-        .toMatch(/never your screen, mic, or camera/);
-    }
+  it('states what the metrics are for and that they carry no content', () => {
+    expect(WORKSPACE_SIGNAL_SENTENCE).toMatch(/keep the assessment fair/);
+    expect(WORKSPACE_SIGNAL_CAVEAT).toMatch(/not the content of what you type or copy/);
+    // The server stores a surface name and a bounded count, never the text.
+    expect(integrityRoutes).toContain('payload["source"] = data.source');
+    expect(integrityRoutes).toContain('payload["length"] = data.length');
+    expect(integrityRoutes).not.toMatch(/payload\["(text|content|clipboard)"\]/);
   });
 });

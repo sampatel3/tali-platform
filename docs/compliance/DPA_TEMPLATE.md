@@ -44,7 +44,7 @@ Full details are in **Annex I**. In summary:
   - Structured profile: social profiles, education history, work-experience history, skills, tags.
   - Application content: screening-question answers (free text), recruiter notes.
   - Assessment session telemetry: candidate prompts, Claude responses, file changes, validation runs (Taali does **not** record screen, microphone, or camera).
-  - Advisory workspace signals during an assessment: clipboard use, blocked right-click / drag-and-drop / printing, and tab-visibility or fullscreen changes. Best-effort browser signals, recorded on the session timeline, never treated as proof on their own.
+  - Assessment integrity metrics: clipboard use, blocked export attempts (right-click / drag-and-drop / printing), and tab-focus changes. Logged from the assessment browser tab to deter and detect cheating; event counts and timestamps only, never typed or copied content; not an input to scoring.
   - Interview transcripts and audio-derived text (only where the Customer connects Fireflies).
   - Scoring and decision records: scores, cited evidence, rule path, policy revision, verdict, human-override history.
   - Reports and shortlists: candidate reports and submittal snapshots.

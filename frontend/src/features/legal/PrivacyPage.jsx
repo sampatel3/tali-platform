@@ -58,11 +58,11 @@ export const PrivacyPage = () => (
         AI responses, file changes, and validation runs;
       </li>
       <li>
-        advisory workspace signals recorded during an assessment session &mdash;{' '}
-        {WORKSPACE_SIGNAL_SUMMARY}. These are best-effort browser signals rather than
-        proof of any behaviour, and they are recorded on every assessment session unless
-        the candidate has an approved clipboard accommodation. We do <strong>not</strong>{' '}
-        record screen, camera, or microphone;
+        assessment integrity metrics, logged from the assessment browser tab to deter
+        and detect cheating &mdash; {WORKSPACE_SIGNAL_SUMMARY}. These are event counts
+        and timestamps only, never the content of what a candidate types or copies, and
+        they are not an input to scoring. We do <strong>not</strong> record screen,
+        camera, or microphone;
       </li>
       <li>interview transcripts, where the customer connects a transcription integration;</li>
       <li>hiring decisions and the full decision history.</li>
