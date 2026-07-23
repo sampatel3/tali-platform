@@ -156,4 +156,45 @@ describe('CandidateWelcomePage', () => {
     expect(await screen.findByText(/approved clipboard accommodation is active/i)).toBeInTheDocument();
     expect(screen.queryByText(/contact support@taali\.ai/i)).not.toBeInTheDocument();
   });
+
+  it('discloses the advisory workspace signals before the candidate starts', async () => {
+    mockPreview.mockResolvedValueOnce({
+      data: {
+        assessment_id: 15,
+        duration_minutes: 30,
+        start_gate: { can_start: true },
+        task: { name: 'Live task', duration_minutes: 30 },
+      },
+    });
+
+    render(<CandidateWelcomePage token="candidate-token" onNavigate={vi.fn()} onStarted={vi.fn()} />);
+
+    const disclosure = await screen.findByTestId('welcome-recording-disclosure');
+    expect(disclosure).toHaveTextContent(/We record your work in this session/i);
+    // The gap this disclosure closes: the workspace logs these with proctoring
+    // off, so the consent screen has to say so — briefly, and with the reason.
+    expect(disclosure).toHaveTextContent(/keep the assessment fair/i);
+    expect(disclosure).toHaveTextContent(/when the tab loses focus/i);
+    expect(disclosure).toHaveTextContent(/the file you were in/i);
+    expect(disclosure).toHaveTextContent(/never the content of what you type or copy/i);
+    expect(disclosure).toHaveTextContent(/do not record your screen, camera, or microphone/i);
+  });
+
+  it('drops the workspace-signal disclosure when the layer is accommodated off', async () => {
+    mockPreview.mockResolvedValueOnce({
+      data: {
+        assessment_id: 16,
+        duration_minutes: 30,
+        allow_external_clipboard: true,
+        start_gate: { can_start: true },
+        task: { name: 'Accessible task', duration_minutes: 30 },
+      },
+    });
+
+    render(<CandidateWelcomePage token="candidate-token" onNavigate={vi.fn()} onStarted={vi.fn()} />);
+
+    const disclosure = await screen.findByTestId('welcome-recording-disclosure');
+    expect(disclosure).toHaveTextContent(/We record your work in this session/i);
+    expect(disclosure).not.toHaveTextContent(/when the tab loses focus/i);
+  });
 });

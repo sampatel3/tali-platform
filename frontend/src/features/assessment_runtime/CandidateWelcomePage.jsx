@@ -12,6 +12,12 @@ import {
 import { assessments as assessmentsApi } from '../../shared/api';
 import { CandidateMiniNav } from '../../shared/layout/TaaliLayout';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
+import {
+  NO_AV_RECORDING_SENTENCE,
+  WORKSPACE_SIGNAL_CAVEAT,
+  WORKSPACE_SIGNAL_SENTENCE,
+  WORK_RECORD_SENTENCE,
+} from '../../shared/assessment/sessionDisclosure';
 import { getOrCreateCandidateSessionKey } from './assessmentSessionBinding';
 import {
   CandidateProofUnavailableError,
@@ -349,8 +355,12 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
               <div className="mt-4 rounded-[14px] bg-[var(--bg-3)] p-4 text-[0.8125rem] leading-6 text-[var(--ink-2)]">
                 <div className="flex items-start gap-3">
                   <Shield size={18} className="mt-0.5 shrink-0 text-[var(--purple)]" />
-                  <div>
-                    We record your prompts, Claude responses, file changes, validation runs, and attempts blocked by the workspace controls. We do not record your screen, microphone, or camera.
+                  <div data-testid="welcome-recording-disclosure">
+                    <p>{WORK_RECORD_SENTENCE}</p>
+                    {previewData?.allow_external_clipboard ? null : (
+                      <p className="mt-2">{WORKSPACE_SIGNAL_SENTENCE} {WORKSPACE_SIGNAL_CAVEAT}</p>
+                    )}
+                    <p className="mt-2">{NO_AV_RECORDING_SENTENCE}</p>
                   </div>
                 </div>
               </div>
