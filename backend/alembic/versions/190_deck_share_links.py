@@ -4,15 +4,15 @@ Backs ``DeckShareLink`` / ``DeckShareView``. Purely additive: two new tables,
 no changes to existing ones, so this is safe to apply ahead of the code that
 uses it.
 
-Revision ID: 189_deck_share_links
-Revises: 188_enforce_active_decision_slot
+Revision ID: 190_deck_share_links
+Revises: 189_understanding_check
 """
 from alembic import op
 import sqlalchemy as sa
 
 
-revision = "189_deck_share_links"
-down_revision = "188_enforce_active_decision_slot"
+revision = "190_deck_share_links"
+down_revision = "189_understanding_check"
 branch_labels = None
 depends_on = None
 
