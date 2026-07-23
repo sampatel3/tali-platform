@@ -17,17 +17,23 @@ from app.agent_chat import constraints as cc
 from app.agent_chat import impact, service, tools
 from app.models.agent_conversation import AgentConversationMessage
 from app.models.agent_decision import AgentDecision
+from app.models.agent_run import AgentRun
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.role_criterion import RoleCriterion
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 
 
 # SQLite BigInteger PK workaround for the agent tables.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_decisions": 0, "agent_needs_input": 0}
+_BIG_PK_COUNTERS: dict[str, int] = {
+    "agent_decisions": 0,
+    "agent_needs_input": 0,
+    "agent_runs": 0,
+}
 
 
 def _assign_big_pk(mapper, connection, target):  # pragma: no cover
@@ -39,6 +45,7 @@ def _assign_big_pk(mapper, connection, target):  # pragma: no cover
 
 event.listen(AgentDecision, "before_insert", _assign_big_pk)
 event.listen(AgentNeedsInput, "before_insert", _assign_big_pk)
+event.listen(AgentRun, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +241,7 @@ def test_apply_threshold_retracts_stale_advance_and_cards_rejects(db):
     assert {r.application_id for r in rejects} == {app_mid.id, app_low.id}
 
 
-def test_apply_threshold_clear_to_none_sets_org_default(db):
+def test_apply_threshold_clear_to_none_removes_role_override(db):
     org = _org(db)
     role = _role(db, org, threshold=70, agentic=True)
     _scored_app(db, org, role, score=60, name="Mid")
@@ -243,6 +250,48 @@ def test_apply_threshold_clear_to_none_sets_org_default(db):
     out = impact.apply_threshold(db, role, None, organization_id=org.id)
     assert role.score_threshold is None
     assert out["before_threshold"] == 70
+
+
+def test_apply_threshold_related_role_uses_local_score_not_owner_score(db):
+    org = _org(db)
+    owner = _role(db, org, name="Owner", threshold=50, agentic=True)
+    related = _role(db, org, name="Related", threshold=70, agentic=True)
+    related.role_kind = ROLE_KIND_SISTER
+    related.source = "sister"
+    related.ats_owner_role_id = owner.id
+    app = _scored_app(db, org, owner, score=10, name="Divergent")
+    app.pipeline_stage = "advanced"
+    app.application_outcome = "rejected"
+    membership = SisterRoleEvaluation(
+        organization_id=org.id,
+        role_id=related.id,
+        candidate_id=app.candidate_id,
+        source_application_id=app.id,
+        ats_application_id=app.id,
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        spec_fingerprint="related-threshold",
+        role_fit_score=85.0,
+    )
+    db.add(membership)
+    db.commit()
+
+    out = impact.apply_threshold(db, related, 90, organization_id=org.id)
+
+    assert out["before_threshold"] == 70
+    assert out["after_threshold"] == 90
+    assert out["created_rejects"] == 1
+    assert out["above_after"] == 0
+    assert out["below_after"] == 1
+    decision = db.query(AgentDecision).filter(
+        AgentDecision.role_id == related.id,
+        AgentDecision.status == "pending",
+    ).one()
+    assert decision.decision_type == "reject"
+    assert decision.evidence["taali_score"] == 85.0
+    assert db.get(CandidateApplication, app.id).application_outcome == "rejected"
+    assert db.get(SisterRoleEvaluation, membership.id).application_outcome == "open"
 
 
 # ---------------------------------------------------------------------------
@@ -437,6 +486,116 @@ def test_list_agent_conversations_counts_attention(db):
     assert item["open_questions"] == 1
     assert item["unread_messages"] == 1
     assert item["attention"] == 3
+
+
+def test_list_agent_conversations_excludes_stale_candidate_questions_from_attention_order(
+    db,
+):
+    org = _org(db)
+    user = _user(db, org)
+    stale_role = _role(db, org, name="Stale candidate questions", agentic=True)
+    general_role = _role(db, org, name="General question", agentic=True)
+    stale_app = _scored_app(
+        db,
+        org,
+        stale_role,
+        score=40,
+        name="Removed",
+    )
+    stale_app.deleted_at = datetime.now(timezone.utc)
+    db.add_all(
+        [
+            AgentNeedsInput(
+                organization_id=org.id,
+                role_id=stale_role.id,
+                kind="candidate_tie_break",
+                subject_id=stale_app.id,
+                prompt="Private candidate tie-break",
+            ),
+            AgentNeedsInput(
+                organization_id=org.id,
+                role_id=stale_role.id,
+                kind="other",
+                subject_id=stale_app.id,
+                prompt="Private candidate follow-up",
+            ),
+            AgentNeedsInput(
+                organization_id=org.id,
+                role_id=general_role.id,
+                kind="monthly_budget_missing",
+                prompt="What monthly budget should this role use?",
+            ),
+        ]
+    )
+    db.commit()
+
+    items = service.list_agent_conversations(
+        db,
+        organization_id=org.id,
+        user=user,
+    )
+    by_role = {item["role_id"]: item for item in items}
+
+    assert by_role[stale_role.id]["open_questions"] == 0
+    assert by_role[stale_role.id]["attention"] == 0
+    assert by_role[general_role.id]["open_questions"] == 1
+    assert by_role[general_role.id]["attention"] == 1
+    assert items[0]["role_id"] == general_role.id
+
+
+def test_list_agent_conversations_excludes_stale_decisions_from_attention_order(
+    db,
+):
+    org = _org(db)
+    user = _user(db, org)
+    stale_role = _role(db, org, name="Stale decisions", agentic=True)
+    live_role = _role(db, org, name="Live decision", agentic=True)
+    for index in range(2):
+        stale_app = _scored_app(
+            db,
+            org,
+            stale_role,
+            score=40 + index,
+            name=f"Removed decision {index}",
+        )
+        _decision(
+            db,
+            org,
+            stale_role,
+            stale_app,
+            status="pending",
+            key=f"stale-sidebar-decision:{index}",
+        )
+        stale_app.deleted_at = datetime.now(timezone.utc)
+    live_app = _scored_app(
+        db,
+        org,
+        live_role,
+        score=80,
+        name="Live decision candidate",
+    )
+    _decision(
+        db,
+        org,
+        live_role,
+        live_app,
+        status="pending",
+        key="live-sidebar-decision",
+    )
+    db.commit()
+
+    items = service.list_agent_conversations(
+        db,
+        organization_id=org.id,
+        user=user,
+    )
+    by_role = {item["role_id"]: item for item in items}
+
+    assert by_role[stale_role.id]["pending_decisions"] == 0
+    assert by_role[stale_role.id]["attention"] == 0
+    assert by_role[live_role.id]["pending_decisions"] == 1
+    assert by_role[live_role.id]["attention"] == 1
+    assert items[0]["role_id"] == live_role.id
 
 
 # ---------------------------------------------------------------------------

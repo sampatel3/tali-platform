@@ -74,6 +74,23 @@ def _trigger_rescreen(
     reads the stale jobs (same guard ``mark_role_scores_stale`` uses for the
     tech-questions regen).
     """
+    is_related = bool(
+        str(getattr(role, "role_kind", "") or "") == "sister"
+        or getattr(role, "ats_owner_role_id", None) is not None
+    )
+    if is_related:
+        from ..services.related_role_rescreen_service import (
+            rescreen_related_role_candidates,
+        )
+
+        result = rescreen_related_role_candidates(
+            db,
+            role,
+            reason=reason,
+            application_ids=application_ids,
+        )
+        return int(result.queued_count + result.waiting_count)
+
     from ..services.cv_score_orchestrator import mark_role_scores_stale
 
     invalidated = mark_role_scores_stale(
@@ -141,7 +158,61 @@ def rescreen_role(
     """Run the re-screen the recruiter explicitly opted into (after a constraint
     change). Separated from the edit so the spend is never automatic.
     ``application_ids`` scopes it to the agent's reasoned subset."""
-    count = _trigger_rescreen(db, role, reason=reason, application_ids=application_ids)
+    is_related = bool(
+        str(getattr(role, "role_kind", "") or "") == "sister"
+        or getattr(role, "ats_owner_role_id", None) is not None
+    )
+    if is_related:
+        from ..services.related_role_rescreen_service import (
+            RelatedRoleRescreenUnavailableError,
+            rescreen_related_role_candidates,
+        )
+
+        try:
+            outcome = rescreen_related_role_candidates(
+                db,
+                role,
+                reason=reason,
+                application_ids=application_ids,
+            )
+        except RelatedRoleRescreenUnavailableError as exc:
+            db.rollback()
+            return {
+                "type": "rescreen_started",
+                "rescreening_count": 0,
+                "queued_count": 0,
+                "waiting_count": 0,
+                "unscorable_count": 0,
+                "scoped": application_ids is not None,
+                "message": str(exc),
+            }
+        return {
+            "type": "rescreen_started",
+            "rescreening_count": int(
+                outcome.queued_count + outcome.waiting_count
+            ),
+            "invalidated_count": int(outcome.reset_count),
+            "queued_count": int(outcome.queued_count),
+            "waiting_count": int(outcome.waiting_count),
+            "unscorable_count": int(outcome.unscorable_count),
+            "skipped_resolved_count": int(outcome.skipped_resolved_count),
+            "missing_membership_count": int(outcome.missing_membership_count),
+            "decisions_invalidated": int(outcome.decisions_invalidated),
+            "scoped": application_ids is not None,
+            "message": (
+                f"Reset {outcome.reset_count} role-local candidate evaluations; "
+                f"{outcome.queued_count} queued, {outcome.waiting_count} waiting "
+                f"for queue recovery, and {outcome.unscorable_count} cannot be "
+                "scored until their evidence is available."
+            ),
+        }
+
+    count = _trigger_rescreen(
+        db,
+        role,
+        reason=reason,
+        application_ids=application_ids,
+    )
     return {
         "type": "rescreen_started",
         "rescreening_count": int(count),

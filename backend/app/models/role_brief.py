@@ -56,9 +56,9 @@ class RoleBrief(Base):
     )
     # Null until the brief is materialized onto a role (recruiter publishes).
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=True)
-    # Set only for a related-role draft. The original ATS role remains the
-    # candidate/stage authority; ``role_id`` is filled with the new Taali
-    # scoring view once the recruiter confirms creation.
+    # Set only for a related-role draft. This is the logical role whose current
+    # explicit pool will be copied once at creation; it may itself be related.
+    # It is not an ATS authority or a future fan-out relationship.
     source_role_id = Column(
         Integer,
         ForeignKey("roles.id", ondelete="RESTRICT"),

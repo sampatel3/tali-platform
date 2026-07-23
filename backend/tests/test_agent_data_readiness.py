@@ -3,6 +3,7 @@ surfaces CV-less candidates, instead of spending Claude tokens on guesses.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +15,8 @@ from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 
 _BIG_PK = {"agent_runs": 0, "agent_needs_input": 0}
 
@@ -161,6 +163,82 @@ def test_file_less_open_applications_excludes_file_present(db):
     assert data_readiness.file_less_open_applications(db, role=role) == []
     unreadable = data_readiness.unreadable_cv_open_applications(db, role=role)
     assert [a.id for a in unreadable] == [app.id]
+
+
+def test_related_cv_readiness_and_reject_use_independent_membership(db):
+    from app.services.application_automation_service import reject_for_cv_gap
+
+    org, owner, app = _seed(db, cv=None)
+    candidate = db.get(Candidate, int(app.candidate_id))
+    related = Role(
+        organization_id=org.id,
+        name="Independent CV readiness",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        job_spec_text="Independent related role specification with enough hiring context.",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=0,
+    )
+    outsider_candidate = Candidate(
+        organization_id=org.id,
+        email="readiness-outsider@example.test",
+        full_name="Outsider",
+    )
+    db.add_all([related, outsider_candidate])
+    db.flush()
+    outsider = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=outsider_candidate.id,
+        role_id=owner.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    membership = SisterRoleEvaluation(
+        organization_id=org.id,
+        role_id=related.id,
+        candidate_id=candidate.id,
+        source_application_id=app.id,
+        ats_application_id=app.id,
+        status="unscorable",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="initial_snapshot",
+        spec_fingerprint="related-readiness-spec",
+    )
+    db.add_all([outsider, membership])
+    app.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    assert data_readiness.missing_cv_count(db, role=related) == 1
+    assert [
+        int(row.id)
+        for row in data_readiness.file_less_open_applications(db, role=related)
+    ] == [int(app.id)]
+
+    result = reject_for_cv_gap(
+        db=db,
+        org=org,
+        app=app,
+        role=related,
+        actor_type="recruiter",
+        actor_id=None,
+        reason="No CV on file",
+        trigger="test_related_cv_gap",
+    )
+    db.commit()
+
+    db.refresh(app)
+    db.refresh(membership)
+    assert result["performed"] is True
+    assert result["role_local"] is True
+    assert result["ats_owner_unchanged"] is True
+    assert app.application_outcome == "open"
+    assert membership.application_outcome == "rejected"
+    assert data_readiness.missing_cv_count(db, role=related) == 0
 
 
 # ---------------------------------------------------------------------------

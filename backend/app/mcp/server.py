@@ -16,15 +16,15 @@ handler; this module only adapts the public transport.
 # Context-injection convention, which only works when annotations are real
 # classes rather than stringified PEP 563 forward references.
 
-from typing import Any, Optional
+from datetime import datetime
+from typing import Any, Literal, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from ..models.api_key import SCOPE_APPLICATIONS_READ, SCOPE_ROLES_READ
 from ..models.candidate import Candidate
-from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..platform.database import SessionLocal
 from ..services.role_criteria_service import render_role_intent_block
@@ -34,7 +34,12 @@ from .catalog import (
     ApplicationOutcome,
     AssessmentAttention,
     AssessmentStatus,
+    AgentDecisionType,
+    CandidateAction,
+    CandidateActionActor,
+    CandidateActionStatus,
     ComparisonApplicationIds,
+    DecisionStatus,
     NonEmptyString,
     NonNegativeInt,
     PageLimit,
@@ -44,6 +49,7 @@ from .catalog import (
     ScoreType,
     SortBy,
     SortOrder,
+    TopCandidateLimit,
     get_tool_spec,
 )
 
@@ -62,13 +68,20 @@ filters accept 0-10 or 0-100 input; results include both the stored 0-10
 ``workable_score`` and normalized ``workable_score_100``. ``assessment`` and
 ``role_fit`` expose their corresponding cached 0-100 scores when present.
 
-For semantic queries ("AWS Glue engineer with 5+ years", "people who worked
-at YC companies"), use ``nl_search_candidates`` rather than
-``search_applications`` — it parses the query and runs the shared hybrid
-PostgreSQL/graph retrieval framework. ``graph_search_candidates`` is the
-graph-oriented, topology-returning view of that same scoped search. Exact
-colleague and multi-hop paths report unsupported coverage rather than
-falling back to an ungrounded substring match.
+For bounded qualitative queries ("who has hands-on Agentforce experience?"),
+use the paid ``find_top_candidates`` tool. It searches the complete active
+logical-role pool, verifies cited evidence, and distinguishes an exhaustive
+negative from incomplete evidence. For explicit all/every retrieval, use
+``nl_search_candidates`` rather than ``search_applications``. The latter only
+matches identity/state fields. ``graph_search_candidates`` is the graph-oriented,
+topology-returning view of the same authorized retrieval framework.
+
+``get_application``, ``compare_applications``, and
+``tali://application/{application_id}`` are legacy physical-record evidence
+reads and intentionally omit logical-role state. Use ``get_role_candidate``,
+``compare_role_applications``, or
+``tali://role/{role_id}/application/{application_id}`` whenever score, pipeline,
+outcome, membership, or a recommendation matters.
 
 Every result includes a ``frontend_url`` the user can click to open the
 matching page in the Tali web app.
@@ -219,10 +232,51 @@ def search_applications(
             "offset": offset,
         }
     )
-    with _open_session(
-        ctx, get_tool_spec("search_applications").required_scopes
-    ) as (db, user):
+    with _open_session(ctx, get_tool_spec("search_applications").required_scopes) as (
+        db,
+        user,
+    ):
         return handlers.search_applications(db, user, **args)
+
+
+@_catalog_tool("search_role_candidates")
+def search_role_candidates(
+    ctx: Context,
+    role_id: PositiveInt,
+    min_score: Optional[ScoreThreshold] = None,
+    score_type: ScoreType = "taali",
+    pipeline_stage: Optional[PipelineStage] = None,
+    application_outcome: Optional[ApplicationOutcome] = "open",
+    q: Optional[str] = None,
+    sort_by: SortBy = "taali_score",
+    sort_order: SortOrder = "desc",
+    limit: PageLimit = 25,
+    offset: NonNegativeInt = 0,
+    ats_stage: Optional[str] = None,
+    workable_stage: Optional[str] = None,
+    has_pending_decision: Optional[bool] = None,
+) -> dict[str, Any]:
+    args = get_tool_spec("search_role_candidates").validate(
+        {
+            "role_id": role_id,
+            "min_score": min_score,
+            "score_type": score_type,
+            "pipeline_stage": pipeline_stage,
+            "application_outcome": application_outcome,
+            "q": q,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
+            "limit": limit,
+            "offset": offset,
+            "ats_stage": ats_stage,
+            "workable_stage": workable_stage,
+            "has_pending_decision": has_pending_decision,
+        }
+    )
+    with _open_session(
+        ctx, get_tool_spec("search_role_candidates").required_scopes
+    ) as (db, user):
+        return handlers.search_role_candidates(db, user, **args)
 
 
 @_catalog_tool("get_application")
@@ -239,6 +293,27 @@ def get_application(
         user,
     ):
         return handlers.get_application(db, user, **args)
+
+
+@_catalog_tool("get_role_candidate")
+def get_role_candidate(
+    ctx: Context,
+    role_id: PositiveInt,
+    application_id: PositiveInt,
+    include_cv_text: bool = False,
+) -> dict[str, Any]:
+    args = get_tool_spec("get_role_candidate").validate(
+        {
+            "role_id": role_id,
+            "application_id": application_id,
+            "include_cv_text": include_cv_text,
+        }
+    )
+    with _open_session(ctx, get_tool_spec("get_role_candidate").required_scopes) as (
+        db,
+        user,
+    ):
+        return handlers.get_role_candidate(db, user, **args)
 
 
 @_catalog_tool("get_candidate")
@@ -259,10 +334,49 @@ def compare_applications(
     args = get_tool_spec("compare_applications").validate(
         {"application_ids": application_ids}
     )
-    with _open_session(
-        ctx, get_tool_spec("compare_applications").required_scopes
-    ) as (db, user):
+    with _open_session(ctx, get_tool_spec("compare_applications").required_scopes) as (
+        db,
+        user,
+    ):
         return handlers.compare_applications(db, user, **args)
+
+
+@_catalog_tool("compare_role_applications")
+def compare_role_applications(
+    ctx: Context,
+    application_ids: ComparisonApplicationIds,
+    role_id: PositiveInt,
+) -> dict[str, Any]:
+    args = get_tool_spec("compare_role_applications").validate(
+        {"role_id": role_id, "application_ids": application_ids}
+    )
+    with _open_session(
+        ctx, get_tool_spec("compare_role_applications").required_scopes
+    ) as (db, user):
+        return handlers.compare_role_applications(db, user, **args)
+
+
+@_catalog_tool("find_top_candidates")
+def find_top_candidates(
+    ctx: Context,
+    query: NonEmptyString,
+    limit: TopCandidateLimit = 10,
+    rank_by: ScoreType = "taali",
+    role_id: Optional[PositiveInt] = None,
+) -> dict[str, Any]:
+    args = get_tool_spec("find_top_candidates").validate(
+        {
+            "query": query,
+            "limit": limit,
+            "rank_by": rank_by,
+            "role_id": role_id,
+        }
+    )
+    with _open_session(ctx, get_tool_spec("find_top_candidates").required_scopes) as (
+        db,
+        user,
+    ):
+        return handlers.find_top_candidates(db, user, **args)
 
 
 @_catalog_tool("nl_search_candidates")
@@ -285,9 +399,10 @@ def nl_search_candidates(
             "offset": offset,
         }
     )
-    with _open_session(
-        ctx, get_tool_spec("nl_search_candidates").required_scopes
-    ) as (db, user):
+    with _open_session(ctx, get_tool_spec("nl_search_candidates").required_scopes) as (
+        db,
+        user,
+    ):
         return handlers.nl_search_candidates(db, user, **args)
 
 
@@ -309,9 +424,7 @@ def graph_search_candidates(
 
 @_catalog_tool("get_candidate_cv")
 def get_candidate_cv(ctx: Context, candidate_id: PositiveInt) -> dict[str, Any]:
-    args = get_tool_spec("get_candidate_cv").validate(
-        {"candidate_id": candidate_id}
-    )
+    args = get_tool_spec("get_candidate_cv").validate({"candidate_id": candidate_id})
     with _open_session(ctx, get_tool_spec("get_candidate_cv").required_scopes) as (
         db,
         user,
@@ -319,14 +432,88 @@ def get_candidate_cv(ctx: Context, candidate_id: PositiveInt) -> dict[str, Any]:
         return handlers.get_candidate_cv(db, user, **args)
 
 
+@_catalog_tool("list_recent_agent_decisions")
+def list_recent_agent_decisions(
+    ctx: Context,
+    role_id: Optional[PositiveInt] = None,
+    status: Optional[DecisionStatus] = None,
+    application_id: Optional[PositiveInt] = None,
+    candidate_id: Optional[PositiveInt] = None,
+    decision_type: Optional[AgentDecisionType] = None,
+    created_after: Optional[datetime] = None,
+    created_before: Optional[datetime] = None,
+    resolved_after: Optional[datetime] = None,
+    resolved_before: Optional[datetime] = None,
+    limit: PageLimit = 20,
+    offset: NonNegativeInt = 0,
+) -> dict[str, Any]:
+    args = get_tool_spec("list_recent_agent_decisions").validate(
+        {
+            "role_id": role_id,
+            "status": status,
+            "application_id": application_id,
+            "candidate_id": candidate_id,
+            "decision_type": decision_type,
+            "created_after": created_after,
+            "created_before": created_before,
+            "resolved_after": resolved_after,
+            "resolved_before": resolved_before,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+    with _open_session(
+        ctx, get_tool_spec("list_recent_agent_decisions").required_scopes
+    ) as (db, user):
+        return handlers.list_recent_agent_decisions(db, user, **args)
+
+
+@_catalog_tool("list_candidate_actions")
+def list_candidate_actions(
+    ctx: Context,
+    role_id: PositiveInt,
+    application_id: Optional[PositiveInt] = None,
+    candidate_id: Optional[PositiveInt] = None,
+    action: Optional[CandidateAction] = None,
+    target_stage: Optional[str] = None,
+    status: CandidateActionStatus = "confirmed",
+    actor_type: Optional[CandidateActionActor] = None,
+    actor_id: Optional[PositiveInt] = None,
+    occurred_after: Optional[datetime] = None,
+    occurred_before: Optional[datetime] = None,
+    result_view: Literal["events", "candidates"] = "events",
+    limit: PageLimit = 50,
+    offset: NonNegativeInt = 0,
+) -> dict[str, Any]:
+    args = get_tool_spec("list_candidate_actions").validate(
+        {
+            "role_id": role_id,
+            "application_id": application_id,
+            "candidate_id": candidate_id,
+            "action": action,
+            "target_stage": target_stage,
+            "status": status,
+            "actor_type": actor_type,
+            "actor_id": actor_id,
+            "occurred_after": occurred_after,
+            "occurred_before": occurred_before,
+            "result_view": result_view,
+            "limit": limit,
+            "offset": offset,
+        }
+    )
+    with _open_session(
+        ctx, get_tool_spec("list_candidate_actions").required_scopes
+    ) as (db, user):
+        return handlers.list_candidate_actions(db, user, **args)
+
+
 @_catalog_tool("get_recruiting_overview")
 def get_recruiting_overview(
     ctx: Context,
     role_id: Optional[PositiveInt] = None,
 ) -> dict[str, Any]:
-    args = get_tool_spec("get_recruiting_overview").validate(
-        {"role_id": role_id}
-    )
+    args = get_tool_spec("get_recruiting_overview").validate({"role_id": role_id})
     with _open_session(
         ctx, get_tool_spec("get_recruiting_overview").required_scopes
     ) as (db, user):
@@ -358,8 +545,6 @@ def list_assessments(
         return operations.list_assessments(db, user, **args)
 
 
-
-
 # ---------------------------------------------------------------------------
 # Resources (read-only, addressable URIs for @-mention context).
 # ---------------------------------------------------------------------------
@@ -380,36 +565,63 @@ def _markdown_role(role: Role) -> str:
     return "\n".join(parts).strip() + "\n"
 
 
-def _markdown_application(app: CandidateApplication) -> str:
-    candidate = app.candidate
-    role = app.role
-    name = candidate.full_name if candidate else "(unknown candidate)"
-    role_name = role.name if role else "(unknown role)"
-    cv = (app.cv_text or "")
-    if not cv and candidate:
-        cv = candidate.cv_text or ""
-    cv = cv.strip()
+def _markdown_physical_application(payload: dict[str, Any]) -> str:
+    name = str(payload.get("candidate_name") or "(unknown candidate)")
+    ats = payload.get("ats_evidence")
+    ats = ats if isinstance(ats, dict) else {}
+    context = ats.get("context")
+    context = context if isinstance(context, dict) else {}
+    cv = str(payload.get("cv_text") or "").strip()
+    parts = [
+        f"# {name} — physical application evidence",
+        f"Application `{payload.get('application_id')}`",
+        "",
+        f"> {payload.get('notice')}",
+        "",
+        "## Explicit ATS transport evidence",
+        f"- provider: {context.get('provider')}",
+        f"- raw stage: {context.get('raw_stage')}",
+        f"- normalized stage: {context.get('normalized_stage')}",
+        f"- Workable stage: {ats.get('workable_stage')}",
+        f"- Bullhorn status: {ats.get('bullhorn_status')}",
+        "",
+    ]
+    if cv:
+        parts.extend(["## CV", cv, ""])
+    return "\n".join(parts).strip() + "\n"
+
+
+def _markdown_role_application(payload: dict[str, Any]) -> str:
+    name = str(payload.get("candidate_name") or "(unknown candidate)")
+    role_name = str(payload.get("role_name") or "(unknown role)")
+    state = payload.get("current_state")
+    state = state if isinstance(state, dict) else {}
     parts = [
         f"# {name} — {role_name}",
         (
-            f"Application `{app.id}`  ·  Stage `{app.pipeline_stage}`  ·  "
-            f"Outcome `{app.application_outcome}`"
+            f"Logical role `{payload.get('role_id')}`  ·  Application "
+            f"`{payload.get('application_id')}`"
+        ),
+        (
+            f"Current stage `{state.get('pipeline_stage')}`  ·  Outcome "
+            f"`{state.get('application_outcome')}`"
         ),
         "",
-        "## Scores",
-        f"- taali: {app.taali_score_cache_100}",
-        f"- pre_screen: {app.pre_screen_score_100}",
-        f"- rank: {app.rank_score}",
-        f"- cv_match: {app.cv_match_score}",
-        f"- assessment: {app.assessment_score_cache_100}",
+        "## Role-local scores",
+        f"- taali: {payload.get('taali_score')}",
+        f"- pre_screen: {payload.get('pre_screen_score')}",
+        f"- rank: {payload.get('rank_score')}",
+        f"- cv_match: {payload.get('cv_match_score')}",
+        f"- assessment: {payload.get('assessment_score')}",
+        f"- role_fit: {payload.get('role_fit_score')}",
         "",
     ]
-    if app.pre_screen_recommendation:
-        parts.extend(["## Pre-screen recommendation", app.pre_screen_recommendation, ""])
-    if app.notes:
-        parts.extend(["## Notes", app.notes, ""])
+    recommendation = payload.get("pre_screen_recommendation")
+    if recommendation:
+        parts.extend(["## Role-local recommendation", str(recommendation), ""])
+    cv = str(payload.get("cv_text") or "").strip()
     if cv:
-        parts.extend(["## CV", cv, ""])
+        parts.extend(["## CV/source evidence", cv, ""])
     return "\n".join(parts).strip() + "\n"
 
 
@@ -439,28 +651,44 @@ def role_resource(role_id: str) -> str:
 @mcp_app.resource(
     "tali://application/{application_id}",
     name="application",
-    description="Application snapshot as markdown — scores, stage, CV.",
+    description=(
+        "Legacy physical application evidence as markdown. Logical-role scores, "
+        "pipeline, outcome, and judgments are intentionally omitted."
+    ),
     mime_type="text/markdown",
 )
 def application_resource(application_id: str) -> str:
     ctx = mcp_app.get_context()
     with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
-        app = (
-            db.query(CandidateApplication)
-            .options(
-                joinedload(CandidateApplication.candidate),
-                joinedload(CandidateApplication.role),
-            )
-            .filter(
-                CandidateApplication.id == int(application_id),
-                CandidateApplication.organization_id == user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-            )
-            .first()
+        payload = handlers.get_application(
+            db,
+            user,
+            application_id=int(application_id),
+            include_cv_text=True,
         )
-        if app is None:
-            raise ValueError(f"application {application_id} not found")
-        return _markdown_application(app)
+        return _markdown_physical_application(payload)
+
+
+@mcp_app.resource(
+    "tali://role/{role_id}/application/{application_id}",
+    name="role-application",
+    description=(
+        "Authoritative candidate snapshot for one logical role, including "
+        "role-local score, current state, restrictions, and CV/source evidence."
+    ),
+    mime_type="text/markdown",
+)
+def role_application_resource(role_id: str, application_id: str) -> str:
+    ctx = mcp_app.get_context()
+    with _open_session(ctx, SCOPE_APPLICATIONS_READ) as (db, user):
+        payload = handlers.get_role_candidate(
+            db,
+            user,
+            role_id=int(role_id),
+            application_id=int(application_id),
+            include_cv_text=True,
+        )
+        return _markdown_role_application(payload)
 
 
 @mcp_app.resource(

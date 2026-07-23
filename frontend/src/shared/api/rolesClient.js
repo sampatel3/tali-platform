@@ -134,11 +134,28 @@ export const roles = {
   // (active + revoked + expired so the report footer can render audit
   // history); DELETE revokes a single link by id without affecting the
   // others.
-  listApplicationShareLinks: (applicationId) =>
-    api.get(`/applications/${applicationId}/share-links`),
-  createApplicationShareLink: (applicationId, { mode, expiry }) =>
-    api.post(`/applications/${applicationId}/share-links`, { mode, expiry }),
-  revokeShareLink: (linkId) => api.delete(`/share-links/${linkId}`),
+  listApplicationShareLinks: (applicationId, viewRoleId = null) => (
+    Number.isInteger(viewRoleId) && viewRoleId > 0
+      ? api.get(`/applications/${applicationId}/share-links`, {
+        params: { view_role_id: viewRoleId },
+      })
+      : api.get(`/applications/${applicationId}/share-links`)
+  ),
+  createApplicationShareLink: (applicationId, { mode, expiry, viewRoleId }) =>
+    api.post(`/applications/${applicationId}/share-links`, {
+      mode,
+      expiry,
+      ...(Number.isInteger(viewRoleId) && viewRoleId > 0
+        ? { view_role_id: viewRoleId }
+        : {}),
+    }),
+  revokeShareLink: (linkId, viewRoleId = null) => (
+    Number.isInteger(viewRoleId) && viewRoleId > 0
+      ? api.delete(`/share-links/${linkId}`, {
+        params: { view_role_id: viewRoleId },
+      })
+      : api.delete(`/share-links/${linkId}`)
+  ),
   // WS2 — curated multi-candidate client submittal packs. POST mints a frozen,
   // client-safe snapshot of the selected candidates for one role and returns
   // { id, token, url_path, expires_at }; GET lists packs for the role (audit +
@@ -189,7 +206,13 @@ export const roles = {
   // agent never submits. Optional { interview_id } picks a specific interview.
   draftScorecardFromTranscript: (applicationId, data = {}) =>
     api.post(`/applications/${applicationId}/scorecards/draft-from-transcript`, data),
-  downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
+  downloadApplicationReport: (applicationId, roleId = null) => api.get(
+    `/applications/${applicationId}/report.pdf`,
+    {
+      responseType: 'blob',
+      ...(roleId ? { params: { view_role_id: roleId } } : {}),
+    },
+  ),
   downloadApplicationDocument: (applicationId, docType = 'cv', config = {}) =>
     api.get(`/applications/${applicationId}/documents/${docType}`, { responseType: 'blob', ...config }),
   createApplication: (roleId, data) => api.post(`/roles/${roleId}/applications`, data),
@@ -204,7 +227,11 @@ export const roles = {
   // rationale, confidence, next steps) on an application with no assessment
   // linked. `data` carries { status, expected_version, decision, rationale,
   // confidence, next_steps }. Idempotent upsert with optimistic locking.
-  updateApplicationDecision: (applicationId, data) => api.patch(`/applications/${applicationId}/manual-decision`, data),
+  updateApplicationDecision: (applicationId, data, roleId = null) => api.patch(
+    `/applications/${applicationId}/manual-decision`,
+    data,
+    roleId ? { params: { view_role_id: roleId } } : {},
+  ),
   // Hand-back to Workable: pushes the candidate into the chosen Workable
   // stage. `data` is `{ target_stage: string, reason?: string }`. Used at
   // the end of the Tali pipeline (typically when stage === 'review').

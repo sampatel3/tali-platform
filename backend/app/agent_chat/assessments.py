@@ -13,6 +13,8 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..candidate_search.application_role_scope import application_outcome_expression
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 
@@ -33,6 +35,38 @@ def _entry_for(details: Any, rid: str) -> dict[str, Any] | None:
     return None
 
 
+def _role_assessment_rows(
+    db: Session,
+    role: Any,
+    *,
+    open_only: bool = False,
+) -> list[tuple[Any, str | None]]:
+    """Return live role members projected onto role-owned scoring details."""
+
+    scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+    )
+    query = (
+        db.query(CandidateApplication, Candidate.full_name)
+        .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .filter(CandidateApplication.organization_id == int(role.organization_id))
+    )
+    query = scope.scope_visible_roster(query)
+    if open_only:
+        query = query.filter(application_outcome_expression(scope) == "open")
+    rows = query.all()
+    application_ids = [int(application.id) for application, _ in rows]
+    adapter = scope.row_adapter(
+        scope.evaluation_map(db, application_ids=application_ids)
+    )
+    return [
+        (adapter(application) if adapter is not None else application, full_name)
+        for application, full_name in rows
+    ]
+
+
 def criterion_breakdown(
     db: Session, role: Any, criterion_id: int, *, sample: int = 5
 ) -> dict[str, Any]:
@@ -40,15 +74,7 @@ def criterion_breakdown(
     criterion (met / missing / unknown / not_assessed), with a reasoning sample
     per bucket. Read-only — the basis for scoping a change to this criterion."""
     rid = _req_id(criterion_id)
-    rows = (
-        db.query(CandidateApplication, Candidate.full_name)
-        .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplication.role_id == int(role.id),
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .all()
-    )
+    rows = _role_assessment_rows(db, role)
 
     groups: dict[str, list[dict[str, Any]]] = {
         "met": [], "missing": [], "unknown": [], "not_assessed": []
@@ -92,16 +118,7 @@ def affected_applications(
     without re-reading the CV."""
     rid = _req_id(criterion_id)
     want = {s.lower() for s in statuses}
-    rows = (
-        db.query(CandidateApplication, Candidate.full_name)
-        .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplication.role_id == int(role.id),
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.cv_match_details.isnot(None),
-        )
-        .all()
-    )
+    rows = _role_assessment_rows(db, role)
     out: list[dict[str, Any]] = []
     for app, full_name in rows:
         entry = _entry_for(app.cv_match_details, rid)

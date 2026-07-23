@@ -198,7 +198,7 @@ export default function AgentNeedsInputCard({ roleId }) {
                 confirmingRejectId === row.id ? (
                   <>
                     <div className="agent-needs-input-reject-warning" role="alert">
-                      {buildRejectConsequenceCopy(row.role_family)} This action applies to every
+                      {buildRejectConsequenceCopy(row.role_family, row.role_id)} This action applies to every
                       candidate in this CV-gap cohort.
                     </div>
                     <button

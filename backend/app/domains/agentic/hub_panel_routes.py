@@ -24,14 +24,14 @@ from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from ._activity_feed import AgentActivityEntry, OrgActivityPayload, build_activity_feed
+from ._activity_feed import OrgActivityPayload, build_activity_feed
 from ._hub_shared import (
-    month_start_utc,
     now_utc,
     pending_filter,
     start_of_day_utc,
 )
 from .hub_routes import _compute_kpis
+from ...candidate_search.population import apply_searchable_candidate_scope
 from ...deps import get_current_user
 from ...models.agent_decision import AgentDecision
 from ...models.agent_run import AgentRun
@@ -39,15 +39,21 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...agent_runtime import budget_guard
 from ...models.cv_score_job import SCORE_JOB_PENDING, CvScoreJob
-from ...models.role import Role
+from ...models.role import ROLE_KIND_SISTER, Role
+from ...models.sister_role_evaluation import (
+    SISTER_EVAL_PENDING,
+    SISTER_EVAL_RETRY_WAIT,
+    SISTER_EVAL_RUNNING,
+    SisterRoleEvaluation,
+)
 from ...models.user import User
 from ...platform.database import get_db
+from ...services.decision_membership import resolve_live_logical_decision_scope
 
 
 router = APIRouter(tags=["agentic-hub"])
 
-# Cycle statuses the time-series + KPI strip count as a hard error (vs.
-# budget_paused, which is a normal pause, not a failure).
+# Hard errors for the time-series/KPI; budget pauses are expected control flow.
 _ERROR_STATUSES = ("failed", "aborted")
 _TS_HOURS = 24
 
@@ -202,10 +208,18 @@ def agent_panel(
     org_id = current_user.organization_id
     now = now_utc()
     today_start = start_of_day_utc()
-    month_start = month_start_utc()
     window_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=_TS_HOURS - 1)
 
-    base = _compute_kpis(db, organization_id=org_id, range_days=7)
+    decision_scope = resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(org_id),
+    )
+    base = _compute_kpis(
+        db,
+        organization_id=org_id,
+        range_days=7,
+        decision_scope=decision_scope,
+    )
     from ...services.workspace_agent_control import workspace_agent_pause_state
 
     workspace_pause = workspace_agent_pause_state(
@@ -217,8 +231,12 @@ def agent_panel(
 
     # --- per-role aggregates (single query each, no N+1) ------------------
     pending_by_role = dict(
-        db.query(AgentDecision.role_id, func.count(AgentDecision.id))
-        .filter(AgentDecision.organization_id == org_id, pending_filter(now))
+        decision_scope.query(
+            db,
+            AgentDecision.role_id,
+            func.count(AgentDecision.id),
+        )
+        .filter(pending_filter(now))
         .group_by(AgentDecision.role_id)
         .all()
     )
@@ -236,14 +254,6 @@ def agent_panel(
         .filter(AgentRun.organization_id == org_id, AgentRun.status == "running")
         .all()
     )
-    scoring_pending_by_role = dict(
-        db.query(CvScoreJob.role_id, func.count(CvScoreJob.id))
-        .join(Role, Role.id == CvScoreJob.role_id)
-        .filter(Role.organization_id == org_id, CvScoreJob.status == SCORE_JOB_PENDING)
-        .group_by(CvScoreJob.role_id)
-        .all()
-    )
-
     roles = (
         db.query(Role)
         .filter(
@@ -253,6 +263,60 @@ def agent_panel(
         )
         .all()
     )
+    standard_role_ids = [int(role.id) for role in roles if role.role_kind != ROLE_KIND_SISTER]
+    related_role_ids = [int(role.id) for role in roles if role.role_kind == ROLE_KIND_SISTER]
+    scoring_pending_by_role: dict[int, int] = {}
+    if standard_role_ids:
+        score_jobs = (
+            db.query(CvScoreJob.role_id, func.count(CvScoreJob.id))
+            .join(
+                CandidateApplication,
+                CandidateApplication.id == CvScoreJob.application_id,
+            )
+            .filter(
+                CvScoreJob.role_id.in_(standard_role_ids),
+                CvScoreJob.status == SCORE_JOB_PENDING,
+                CandidateApplication.deleted_at.is_(None),
+            )
+        )
+        score_jobs = apply_searchable_candidate_scope(
+            score_jobs,
+            organization_id=int(org_id),
+        )
+        scoring_pending_by_role.update(
+            dict(
+                score_jobs.group_by(CvScoreJob.role_id).all()
+            )
+        )
+    if related_role_ids:
+        scoring_pending_by_role.update(
+            dict(
+                db.query(
+                    SisterRoleEvaluation.role_id,
+                    func.count(SisterRoleEvaluation.id),
+                )
+                .join(
+                    Candidate,
+                    Candidate.id == SisterRoleEvaluation.candidate_id,
+                )
+                .filter(
+                    SisterRoleEvaluation.organization_id == org_id,
+                    SisterRoleEvaluation.role_id.in_(related_role_ids),
+                    SisterRoleEvaluation.deleted_at.is_(None),
+                    Candidate.organization_id == int(org_id),
+                    Candidate.deleted_at.is_(None),
+                    SisterRoleEvaluation.status.in_(
+                        (
+                            SISTER_EVAL_PENDING,
+                            SISTER_EVAL_RUNNING,
+                            SISTER_EVAL_RETRY_WAIT,
+                        )
+                    ),
+                )
+                .group_by(SisterRoleEvaluation.role_id)
+                .all()
+            )
+        )
 
     agents: list[AgentCard] = []
     for role in roles:
@@ -316,8 +380,11 @@ def agent_panel(
     ]
     decision_ts = [
         r[0]
-        for r in db.query(AgentDecision.created_at)
-        .filter(AgentDecision.organization_id == org_id, AgentDecision.created_at >= window_start)
+        for r in decision_scope.query(
+            db,
+            AgentDecision.created_at,
+        )
+        .filter(AgentDecision.created_at >= window_start)
         .all()
     ]
     timeseries = TimeseriesPayload(
@@ -333,22 +400,31 @@ def agent_panel(
     # --- decisions by type (today) ---------------------------------------
     decisions_by_type = [
         DecisionTypeCount(decision_type=str(dt), count=int(c))
-        for dt, c in (
-            db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
-            .filter(AgentDecision.organization_id == org_id, AgentDecision.created_at >= today_start)
-            .group_by(AgentDecision.decision_type)
-            .order_by(desc(func.count(AgentDecision.id)))
-            .all()
+        for dt, c in decision_scope.query(
+            db,
+            AgentDecision.decision_type,
+            func.count(AgentDecision.id),
         )
+        .filter(AgentDecision.created_at >= today_start)
+        .group_by(AgentDecision.decision_type)
+        .order_by(desc(func.count(AgentDecision.id)))
+        .all()
     ]
 
     # --- recent decisions (decision log) ---------------------------------
     role_names = dict(db.query(Role.id, Role.name).filter(Role.organization_id == org_id).all())
     recent_rows = (
-        db.query(AgentDecision, Candidate)
-        .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(AgentDecision.organization_id == org_id)
+        decision_scope.apply(
+            db.query(AgentDecision, Candidate)
+            .join(
+                CandidateApplication,
+                CandidateApplication.id == AgentDecision.application_id,
+            )
+            .outerjoin(
+                Candidate,
+                Candidate.id == CandidateApplication.candidate_id,
+            )
+        )
         .order_by(desc(AgentDecision.created_at))
         .limit(12)
         .all()
@@ -372,11 +448,9 @@ def agent_panel(
         .filter(AgentRun.organization_id == org_id)
         .scalar()
     )
-    last_decision_at = (
-        db.query(func.max(AgentDecision.created_at))
-        .filter(AgentDecision.organization_id == org_id)
-        .scalar()
-    )
+    last_decision_at = decision_scope.query(
+        db, func.max(AgentDecision.created_at)
+    ).scalar()
     last_activity_at = max(
         (_as_utc(t) for t in (last_cycle_at, last_decision_at) if t is not None),
         default=None,

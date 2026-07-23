@@ -210,17 +210,8 @@ def update_my_org(
         org.invite_email_template = template or None
     if data.default_role_budget_cents is not None:
         org.default_role_budget_cents = max(0, int(data.default_role_budget_cents))
-    # The org default reject threshold is the policy every role that hasn't
-    # set its own override inherits. Snapshot it before mutating so we can
-    # tell afterwards whether it actually moved and, if so, prompt the agent
-    # to revisit those roles (below).
-    _default_threshold_before = getattr(org, "default_score_threshold", None)
-    _default_threshold_changed = False
     if data.default_score_threshold is not None:
         org.default_score_threshold = max(0, min(100, int(data.default_score_threshold)))
-        _default_threshold_changed = (
-            org.default_score_threshold != _default_threshold_before
-        )
     if "monthly_spend_cap_cents" in data.model_fields_set:
         # Explicit null clears the cap (NULL = no cap); a number sets it.
         # Absent field leaves the existing cap untouched.
@@ -237,56 +228,6 @@ def update_my_org(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update organization")
-    # Changing the org default threshold changes the policy the agent enforces
-    # on every role that inherits it (no per-role score_threshold override, in
-    # manual mode). Re-apply the deterministic decisions for each such role
-    # right away — retract advances now below the cutoff, then emit the matching
-    # reject cards — instead of waiting up to an hour for the next cohort tick.
-    # Agent-off / paused / auto_reject roles are skipped by the helpers. This is
-    # pure DB (no LLM); failures never fail the settings save — the beat sweep
-    # reconciles regardless.
-    if _default_threshold_changed:
-        try:
-            from ...models.role import Role
-            from ...services.pre_screen_decision_emitter import (
-                reconcile_pre_screen_reject_decisions,
-                retract_advances_below_threshold,
-            )
-
-            new_threshold = float(org.default_score_threshold)
-            impacted_roles = (
-                db.query(Role)
-                .filter(
-                    Role.organization_id == int(org.id),
-                    Role.deleted_at.is_(None),
-                    Role.agentic_mode_enabled.is_(True),
-                    Role.agent_paused_at.is_(None),
-                    Role.score_threshold.is_(None),
-                    (Role.auto_reject_threshold_mode == "manual")
-                    | (Role.auto_reject_threshold_mode.is_(None)),
-                )
-                .all()
-            )
-            for impacted in impacted_roles:
-                retract_advances_below_threshold(
-                    db,
-                    role=impacted,
-                    organization_id=int(org.id),
-                    threshold=new_threshold,
-                )
-                reconcile_pre_screen_reject_decisions(
-                    db,
-                    role=impacted,
-                    organization_id=int(org.id),
-                    threshold=new_threshold,
-                )
-            db.commit()
-        except Exception:
-            import logging as _logging
-            _logging.getLogger("taali.organizations").exception(
-                "Failed to re-apply org threshold policy for org_id=%s", org.id
-            )
-            db.rollback()
     if getattr(org, "default_assessment_duration_minutes", None) is None:
         org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))

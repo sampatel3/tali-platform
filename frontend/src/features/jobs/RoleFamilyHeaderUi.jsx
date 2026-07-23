@@ -55,11 +55,11 @@ export const RoleFamilyHeaderNote = ({ role, providerLabel }) => {
     <span className="related-role-header-note" role="note">
       <Link2 size={13} strokeWidth={2.2} aria-hidden="true" />
       <span>
-        Shared {providerLabel} candidate pool
-        {role?.role_kind === 'sister' && ownerLabel ? ` with ${ownerLabel} (original)` : ''}.
-        {' '}Rejecting and advancing apply to {references.length > 1
-          ? references.map(roleReferenceLabel).filter(Boolean).join(', ')
-          : 'the original and every related role'}.
+        {role?.role_kind === 'sister'
+          ? `Independent related role${ownerLabel ? ` with a ${providerLabel} link to ${ownerLabel}` : ''}.`
+          : `This role has related roles using its ${providerLabel} ATS link.`}
+        {' '}Each role keeps its own candidate membership, scores, decisions, and pipeline state.
+        {' '}The ATS link is used only for evidence, permitted write-backs, and write-back restrictions.
       </span>
     </span>
   );

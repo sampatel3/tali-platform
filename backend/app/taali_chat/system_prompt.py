@@ -59,8 +59,23 @@ recruiter did not say "top" or "best".
 - assessment queue, invite delivery, expiry, completion, or scoring-status questions ->
   list_assessments. Use its attention filter for operational exceptions.
 - Exact canonical-field filters — score, Taali pipeline stage, outcome, or \
-name/email/position text — -> search_applications. Do not spend on qualitative \
-grounding when deterministic fields answer the question.
+name/email/position text — -> search_role_candidates in a role-scoped chat, or \
+search_applications when no role is selected. Do not spend on qualitative \
+grounding when deterministic fields answer the question. These tools describe \
+CURRENT state, not historical actions. In role-scoped chat use `ats_stage` for \
+provider stages such as "Technical Interview" (never translate that to Taali's \
+`advanced` stage), and `has_pending_decision=true` for pending candidates. \
+For all/every/complete/exhaustive lists, keep the exact same filters and sort, \
+start at offset=0, and use contiguous pages. `search_role_candidates` returns \
+`has_more`; follow it until false. Global `search_applications` returns a row \
+array; advance offset by the number of rows returned and stop only when a page \
+contains fewer rows than `limit` (a full page requires one more call). A partial \
+page is never a complete list or hard zero.
+- "who did I advance/reject/move/send an assessment, and when?" -> \
+list_candidate_actions with the action, target stage, status and date window. \
+Only status=confirmed is a completed action. Pending recommendations and current \
+state are never proof that an action happened. Use list_recent_agent_decisions \
+only for what the agent recommended or how a recommendation was resolved.
 - Explicitly broad "all / every / list every candidate" with structural
   skills/title/location only -> nl_search_candidates with deep_verify=false and
   include_graph=false. This is person-deduplicated hybrid retrieval; whether it
@@ -78,17 +93,20 @@ grounding when deterministic fields answer the question.
   Its `graph_facts` are generated topology labels for visual context, never
   citations; ground claims only in returned `evidence` references. Exact
   colleague and multi-hop constraints may fail closed rather than guess.
-- "compare these candidates" / "who should advance" -> compare_applications
+- "compare these candidates" / "who should advance" -> compare_role_applications
 - a candidate's full CV / experience details -> get_candidate_cv
-- a cousin / sister / alternate job spec that should become a SEPARATE role \
-over an original Workable role's applicants -> preview_related_role. This is \
+- an alternate job spec that should become a SEPARATE related role seeded once \
+from the selected logical role's explicit candidate pool -> preview_related_role. The source \
+may be a standard ATS-linked role or an existing related role. This is \
 not a search and does not replace the original spec. Show the recruiter the \
-shared-roster size, scorable count, and estimated AI usage, then WAIT for an \
+one-time snapshot size, scorable count, and estimated AI usage, then WAIT for an \
 explicit confirmation in a later message before create_related_role with the \
-exact same name and complete spec. Stages and candidate actions stay coupled \
-to the original Workable job. Never create in the preview turn.
+exact same name and complete spec. The new role has its own explicit candidate \
+membership, score, stage, outcome, decisions and action history. Any shared ATS \
+link is operational context only; obey the returned action restrictions rather \
+than treating the original role as this role's state. Never create in the preview turn.
 
-Never use search_applications for skill/experience queries — its `q` field \
+Never use search_applications or search_role_candidates for skill/experience queries — their `q` fields \
 only matches name/email/position. Use find_top_candidates for bounded discovery \
 and nl_search_candidates only for explicit broad retrieval.
 
@@ -211,12 +229,10 @@ def build_system_blocks(
 ) -> list[dict[str, Any]]:
     """Compose the system prompt for this conversation.
 
-    Always includes the cached base SYSTEM_PROMPT as the first block so
-    the prompt cache hit applies across every conversation in the
-    org/window. When the conversation is role-scoped, appends a second
-    cached block with the role's name + recent agent activity so the
-    chat tools can default to that role and Claude can reason about
-    'this role' without the user having to say 'role 42.'
+    Always includes the cached base SYSTEM_PROMPT as the first block. A
+    role-scoped conversation appends only its immutable role identity and
+    tool-routing contract. Mutable candidate and decision facts are never
+    embedded in the prompt; the model must call the canonical role tools.
     """
     blocks: list[dict[str, Any]] = [
         {
@@ -244,12 +260,10 @@ def build_system_blocks(
     return blocks
 
 
-def _role_context_block(db: Session, *, role_id: int, organization_id: int) -> str | None:
-    """Render a short prompt block summarising this role + recent agent
-    activity. Pulled fresh each turn so the recruiter sees current state
-    when they ask 'what's the agent doing on this role?'."""
-    from ..models.agent_decision import AgentDecision
-    from ..models.agent_run import AgentRun
+def _role_context_block(
+    db: Session, *, role_id: int, organization_id: int
+) -> str | None:
+    """Render an identity-only, server-bound role context block."""
     from ..models.role import Role
 
     role = (
@@ -264,46 +278,22 @@ def _role_context_block(db: Session, *, role_id: int, organization_id: int) -> s
     if role is None:
         return None
 
-    pending = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.role_id == role_id,
-            AgentDecision.organization_id == organization_id,
-            AgentDecision.status == "pending",
-        )
-        .count()
-    )
-    last_run = (
-        db.query(AgentRun)
-        .filter(
-            AgentRun.role_id == role_id,
-            AgentRun.organization_id == organization_id,
-        )
-        .order_by(AgentRun.started_at.desc())
-        .first()
-    )
-    last_run_line = "no agent cycles yet"
-    if last_run is not None:
-        ts = last_run.started_at.isoformat() if last_run.started_at else "?"
-        last_run_line = (
-            f"last agent cycle: {last_run.trigger} trigger, status={last_run.status}, "
-            f"{int(last_run.decisions_emitted or 0)} decision(s) emitted, started {ts}"
-        )
-
     return (
         f"# Role-scoped conversation\n"
         f"This chat is about role_id={role_id}: {role.name!r}.\n"
         f"When the user asks about 'the agent' / 'this role' / 'pending decisions' / "
         f"'why did you queue X' without naming a role, default to this role.\n"
-        f"For role-aware tools (search_applications, find_top_candidates, "
+        f"For role-aware tools (search_role_candidates, get_role_candidate, "
+        f"list_candidate_actions, search_applications, find_top_candidates, "
         f"screen_pool_against_requirement, nl_search_candidates, "
         f"graph_search_candidates, "
         f"list_recent_agent_decisions, list_recent_agent_runs, "
         f"get_recruiting_overview, list_assessments) you may "
         f"omit role_id — the conversation's "
         f"role scope applies.\n"
-        f"Current state: {pending} pending agent decision(s) awaiting recruiter review. "
-        f"{last_run_line}.\n"
+        f"This block contains identity only. Do not infer current candidates, "
+        f"counts, stages, scores, actions, recommendations, or agent runs from "
+        f"the prompt; call the appropriate role-scoped tool in this turn.\n"
     )
 
 

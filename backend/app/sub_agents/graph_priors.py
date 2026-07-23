@@ -40,13 +40,14 @@ from sqlalchemy.orm import Session
 
 from ..candidate_graph import search as graph_search
 from ..candidate_graph import client as graph_client
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..candidate_search.schemas import GraphPredicate
 from ..cv_matching.calibrators.extractor import _default_role_family_mapper
 from ..decision_policy.engine import load_active_policy
 from ..decision_policy.schema import GraphPriorConfig, PolicyJson
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
-from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.role import Role
 from ..platform.database import SessionLocal
 from ..services.metered_async_anthropic_client import GraphProviderAdmissionError
 from .base import SubAgent, SubAgentRequest, SubAgentResult
@@ -308,38 +309,19 @@ class GraphPriorsSubAgent:
                 error=f"role {req.role_id} not found",
             )
 
-        expected_application_role_id = int(role.id)
-        if str(role.role_kind or "") == ROLE_KIND_SISTER:
-            if role.ats_owner_role_id is None:
-                return SubAgentResult(
-                    sub_agent=self.name,
-                    ok=False,
-                    error=f"sister role {req.role_id} has no ATS owner role",
-                )
-            expected_application_role_id = int(role.ats_owner_role_id)
-            owner_exists = (
-                db.query(Role.id)
-                .filter(
-                    Role.id == expected_application_role_id,
-                    Role.organization_id == int(req.organization_id),
-                    Role.deleted_at.is_(None),
-                )
-                .one_or_none()
-            )
-            if owner_exists is None:
-                return SubAgentResult(
-                    sub_agent=self.name,
-                    ok=False,
-                    error=f"ATS owner role {expected_application_role_id} not found",
-                )
-
+        role_scope = resolve_candidate_role_scope(
+            db,
+            organization_id=int(req.organization_id),
+            role_id=int(role.id),
+        )
+        app_query = db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(req.application_id),
+            CandidateApplication.organization_id == int(req.organization_id),
+        )
         app = (
-            db.query(CandidateApplication)
+            role_scope.scope_visible_roster(app_query)
             .filter(
-                CandidateApplication.id == int(req.application_id),
-                CandidateApplication.organization_id == int(req.organization_id),
-                CandidateApplication.role_id == expected_application_role_id,
-                CandidateApplication.deleted_at.is_(None),
+                CandidateApplication.candidate_id.isnot(None),
             )
             .one_or_none()
         )
@@ -349,7 +331,7 @@ class GraphPriorsSubAgent:
                 ok=False,
                 error=(
                     f"application {req.application_id} not found for role "
-                    f"{expected_application_role_id}"
+                    f"{int(role.id)}"
                 ),
             )
 

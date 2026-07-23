@@ -2,8 +2,8 @@
 
 Regression: the agent told a recruiter it "couldn't see" candidates in Workable's
 "Final Interview" stage even though `workable_stage` is synced onto the application
-and loaded into the agent's candidate rows — `list_candidates` was just dropping the
-field before the LLM saw it, and Taali's `pipeline_stage` doesn't track Workable's
+and loaded into the agent's canonical candidate rows. Taali's `pipeline_stage`
+doesn't track Workable's
 interview stages (a Final-Interview candidate can be Taali `pipeline_stage='applied'`).
 """
 from __future__ import annotations
@@ -56,21 +56,27 @@ def _app(db, org, role, *, name, score, workable_stage, pipeline_stage="applied"
     return app
 
 
-def test_list_candidates_exposes_workable_stage(db):
-    org = _org(db); user = _user(db, org); role = _role(db, org)
+def test_canonical_role_search_exposes_workable_stage(db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org)
     _app(db, org, role, name="Jojo", score=59, workable_stage="Final Interview", pipeline_stage="advanced")
     _app(db, org, role, name="Rahaf", score=56.9, workable_stage="Final Interview", pipeline_stage="applied")
     _app(db, org, role, name="Tariq", score=40, workable_stage="Technical Interview", pipeline_stage="applied")
 
-    res = tools.dispatch_tool("list_candidates", {"bucket": "all"}, db=db, role=role, user=user)
-    by_name = {c["name"]: c for c in res["candidates"]}
+    res = tools.dispatch_tool(
+        "search_role_candidates", {}, db=db, role=role, user=user
+    )
+    by_name = {c["candidate_name"]: c for c in res["items"]}
     assert by_name["Jojo"]["workable_stage"] == "Final Interview"
     assert by_name["Rahaf"]["workable_stage"] == "Final Interview"
     assert by_name["Tariq"]["workable_stage"] == "Technical Interview"
 
 
-def test_list_candidates_filters_by_workable_stage(db):
-    org = _org(db); user = _user(db, org); role = _role(db, org)
+def test_canonical_role_search_filters_by_external_stage(db):
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org)
     _app(db, org, role, name="Jojo", score=59, workable_stage="Final Interview", pipeline_stage="advanced")
     _app(db, org, role, name="Rahaf", score=56.9, workable_stage="Final Interview", pipeline_stage="applied")
     _app(db, org, role, name="Tariq", score=40, workable_stage="Technical Interview", pipeline_stage="applied")
@@ -78,14 +84,20 @@ def test_list_candidates_filters_by_workable_stage(db):
     # "final interview" (case-insensitive) → both, best score first — INCLUDING the
     # one Taali calls 'applied'. That's the whole point: pipeline_stage != workable_stage.
     res = tools.dispatch_tool(
-        "list_candidates", {"workable_stage": "final interview"}, db=db, role=role, user=user
+        "search_role_candidates",
+        {"ats_stage": "final interview"},
+        db=db,
+        role=role,
+        user=user,
     )
-    assert res["count"] == 2
-    assert [c["name"] for c in res["candidates"]] == ["Jojo", "Rahaf"]
+    assert res["total"] == 2
+    assert [c["candidate_name"] for c in res["items"]] == ["Jojo", "Rahaf"]
 
 
 def test_overview_has_workable_stage_funnel(db):
-    org = _org(db); user = _user(db, org); role = _role(db, org)
+    org = _org(db)
+    user = _user(db, org)
+    role = _role(db, org)
     _app(db, org, role, name="Jojo", score=59, workable_stage="Final Interview")
     _app(db, org, role, name="Rahaf", score=56.9, workable_stage="Final Interview")
     _app(db, org, role, name="Tariq", score=40, workable_stage="Technical Interview")

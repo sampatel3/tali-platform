@@ -4,9 +4,9 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from ...candidate_search.role_scope import resolve_candidate_role_scope
 from ...deps import get_current_user
 from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
@@ -17,6 +17,7 @@ from ...models.job_hiring_team import (
 )
 from ...models.organization import Organization
 from ...models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, ROLE_KIND_SISTER, Role
+from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.role_change_event import RoleChangeEvent
 from ...models.role_brief import RoleBrief
 from ...models.task import Task
@@ -51,11 +52,9 @@ from ...schemas.role import (
 from ...services.application_events import on_role_jd_attached
 from ...services.agent_policy_settings import (
     GRANULAR_AUTOMATION_FIELDS,
-    RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
     activation_policy_values,
     apply_workspace_agent_defaults,
     role_automation_enabled,
-    role_shares_ats_application,
 )
 from ...services.document_service import process_document_upload
 from ...services.cv_score_orchestrator import mark_role_scores_stale
@@ -81,7 +80,8 @@ from ...services.role_provider_generation import (
 from ...services.workspace_agent_control import workspace_agent_control_snapshot
 from ...services import related_role_spec_lifecycle
 from ...services.sister_role_evaluation_lifecycle import release_sister_role_score_holds
-from ...services.sister_role_service import pipeline_counts_for_role, related_role_pipeline_counts_bulk
+from ...services.sister_role_service import pipeline_counts_for_role
+from ...services.role_candidate_metrics import load_role_candidate_metrics
 from ...services.role_change_audit import (
     ROLE_CHANGE_ACTION_AGENT_DISABLED,
     ROLE_CHANGE_ACTION_AGENT_ENABLED,
@@ -102,7 +102,6 @@ from .role_criteria_runtime import (
 )
 from .role_support import get_role, role_family_load_options, role_to_response
 from .job_authorization import JobPermission, require_job_permission
-from .pipeline_service import role_pipeline_counts_bulk
 from ..agentic._hub_shared import role_pending_decisions_by_type
 
 router = APIRouter(tags=["Roles"])
@@ -390,68 +389,12 @@ def list_roles(
         return []
 
     role_ids = [role.id for role in roles]
-    operational_role_ids = list({
-        int(role.ats_owner_role_id or role.id) for role in roles
-    })
-    app_counts_rows = (
-        db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
-        .filter(
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.role_id.in_(operational_role_ids),
-        )
-        .group_by(CandidateApplication.role_id)
-        .all()
+    candidate_metrics = load_role_candidate_metrics(
+        db,
+        roles=roles,
+        organization_id=int(current_user.organization_id),
+        include_pipeline_stats=include_pipeline_stats,
     )
-    app_counts = {int(role_id): int(total) for role_id, total in app_counts_rows}
-    active_counts: dict[int, int] = {}
-    last_activity_by_role: dict[int, datetime | None] = {}
-    stage_counts_by_role: dict[int, dict[str, int]] = {}
-
-    if include_pipeline_stats:
-        active_rows = (
-            db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
-            .filter(
-                CandidateApplication.organization_id == current_user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-                CandidateApplication.application_outcome == "open",
-                CandidateApplication.role_id.in_(operational_role_ids),
-            )
-            .group_by(CandidateApplication.role_id)
-            .all()
-        )
-        active_counts = {int(role_id): int(total) for role_id, total in active_rows}
-
-        last_activity_rows = (
-            db.query(
-                CandidateApplication.role_id,
-                func.max(
-                    func.coalesce(
-                        CandidateApplication.pipeline_stage_updated_at,
-                        CandidateApplication.updated_at,
-                        CandidateApplication.created_at,
-                    )
-                ),
-            )
-            .filter(
-                CandidateApplication.organization_id == current_user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-                CandidateApplication.role_id.in_(operational_role_ids),
-            )
-            .group_by(CandidateApplication.role_id)
-            .all()
-        )
-        last_activity_by_role = {int(role_id): ts for role_id, ts in last_activity_rows}
-        # Batched: two queries for the whole role list instead of the 2×N the
-        # per-role helper would issue. role_pipeline_counts_bulk mirrors
-        # role_pipeline_counts exactly (zero-filled, "rejected" included) and is
-        # locked to it by test_role_pipeline_counts_bulk.
-        stage_counts_by_role = role_pipeline_counts_bulk(
-            db,
-            organization_id=current_user.organization_id,
-            role_ids=operational_role_ids,
-        )
-        stage_counts_by_role.update(related_role_pipeline_counts_bulk(db, [int(role.id) for role in roles if str(role.role_kind or "") == ROLE_KIND_SISTER]))
 
     # Batched role -> client lookup (one query) for the Jobs list's Client column
     # + filter. Roles with no requisition (or no client) are simply absent.
@@ -496,10 +439,15 @@ def list_roles(
             role,
             summary=True,
             tasks_count=len(role.tasks or []),
-            applications_count=app_counts.get(int(role.ats_owner_role_id or role.id), 0),
-            stage_counts=pipeline_counts_for_role(db, role, organization_id=current_user.organization_id, standard_counts=stage_counts_by_role.get(int(role.id), {})),
-            active_candidates_count=active_counts.get(int(role.ats_owner_role_id or role.id), 0),
-            last_candidate_activity_at=last_activity_by_role.get(int(role.ats_owner_role_id or role.id)),
+            applications_count=candidate_metrics.application_counts.get(int(role.id), 0),
+            stage_counts=pipeline_counts_for_role(
+                db,
+                role,
+                organization_id=current_user.organization_id,
+                standard_counts=candidate_metrics.stage_counts.get(int(role.id), {}),
+            ),
+            active_candidates_count=candidate_metrics.active_counts.get(int(role.id), 0),
+            last_candidate_activity_at=candidate_metrics.last_activity.get(int(role.id)),
             client=clients_by_role.get(role.id),
             is_published=role.id in live_native_role_ids,
         )
@@ -511,17 +459,11 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
     """The full role-detail payload: funnel counts + pending-decision chips + the
     linked requisition's structured spec. Shared by GET /roles/{id} and the
     job-status mutation so both stay in lock-step."""
-    operational_role_id = int(role.ats_owner_role_id or role.id)
-    app_count = (
-        db.query(func.count(CandidateApplication.id))
-        .filter(
-            CandidateApplication.organization_id == organization_id,
-            CandidateApplication.role_id == operational_role_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .scalar()
-        or 0
-    )
+    app_count = resolve_candidate_role_scope(
+        db,
+        organization_id=int(organization_id),
+        role_id=int(role.id),
+    ).roster_size(db)
     # Per-stage funnel counts (applied → invited → in_assessment → review →
     # advanced + rejected) — the same aggregate the /roles list attaches, so
     # the role detail page can render the home-card funnel summary from the
@@ -614,9 +556,9 @@ def set_job_status_endpoint(
 ):
     """Set a Taali-owned job's lifecycle status.
 
-    Workable and Bullhorn own the lifecycle of their linked jobs, while sister
-    roles are scoring views over an owner role; neither can be changed through
-    this endpoint. Opening a requisition-backed native page is an intake/spend
+    Workable and Bullhorn own the lifecycle of directly linked external jobs.
+    A related role owns its local lifecycle; its optional ATS owner only limits
+    provider writes. Opening a requisition-backed native page is an intake/spend
     boundary and cannot bypass the durable Turn-on readiness contract. The role
     must already have an active, unpaused agent whose runtime preflight passes.
     """
@@ -746,20 +688,20 @@ def set_role_client_endpoint(
 
 
 def _effective_pre_screen_threshold(db: Session, role: Role) -> float | None:
-    """The 0-100 cutoff the deterministic pre-screen reject actually uses
-    for this role — the same value ``resolved_auto_reject_config`` feeds the
-    auto-reject decider (``score_threshold`` in manual mode, the computed
-    value in auto mode). ``org`` isn't needed for the threshold itself, so
-    we pass None to avoid an extra load.
+    """The 0-100 cutoff the logical role's decision runtime actually uses.
+
+    Kept as a local seam for the PATCH route's fail-safe tests. Ordinary roles
+    resolve the pre-screen cutoff; related roles resolve their independent
+    role-fit decision boundary.
 
     Raises on failure (does NOT swallow to ``None``): a resolution error —
     e.g. while switching to ``auto`` mode — must not be mistaken for a
     genuine "no threshold" value, or the reconcile would treat every
     numeric-score reject as no-longer-below-threshold and discard it.
     """
-    from ...services.pre_screening_service import resolved_auto_reject_config
+    from ...services.role_threshold_reconciliation import effective_role_threshold
 
-    return resolved_auto_reject_config(None, role, db=db)["threshold_100"]
+    return effective_role_threshold(db, role=role)
 
 
 def _thresholds_equal(a: float | None, b: float | None) -> bool:
@@ -834,17 +776,6 @@ def update_role(
     activation_assessment_action = updates.pop(
         "activation_assessment_action", None
     )
-    if role_shares_ats_application(role, db=db):
-        reject_automation = {
-            key
-            for key in ("auto_reject", "auto_reject_pre_screen")
-            if updates.get(key) is True
-        }
-        if reject_automation:
-            raise HTTPException(
-                status_code=409,
-                detail=RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
-            )
     if activation_assessment_action and not bool(
         updates.get("agentic_mode_enabled")
     ):
@@ -948,11 +879,10 @@ def update_role(
         role = get_role(role_id, current_user.organization_id, db)
         _ = activation_intent_state(role)
         return _serialize_role_detail(db, role, current_user.organization_id)
-    # A pre-screen threshold change (the per-role override or the
-    # manual/auto mode) moves the deterministic reject verdict for every
-    # candidate without touching any score. Snapshot the *effective*
-    # threshold before mutating so we can tell afterwards whether it
-    # actually moved and, if so, reconcile the reject queue (below).
+    # A threshold change moves the logical role's deterministic verdicts
+    # without touching any score. Snapshot the role-aware effective boundary
+    # before mutating so ordinary and related roles reconcile through their
+    # own candidate-state stores.
     _threshold_may_change = (
         "score_threshold" in updates or "auto_reject_threshold_mode" in updates
     )
@@ -964,7 +894,7 @@ def update_role(
             # No safe baseline to compare against → don't reconcile (and
             # never block the role edit itself on a threshold-resolution error).
             logger.exception(
-                "Pre-screen threshold (pre-update) resolution failed for role_id=%s", role.id
+                "Role threshold (pre-update) resolution failed for role_id=%s", role.id
             )
             _threshold_may_change = False
     if "name" in updates and updates["name"] is not None:
@@ -1240,7 +1170,9 @@ def update_role(
         # recruiter-facing pipeline distribution. PATCH was accepting the
         # field in the schema but never assigning it to the model, so
         # threshold changes from the UI silently no-op'd on existing
-        # roles. Allow ``None`` to clear back to the org default.
+        # roles. Allow ``None`` to remove the role override; the runtime then
+        # uses its learned/dynamic fallback. Workspace defaults are copied only
+        # when a role is created and never mutate existing role policy.
         role.score_threshold = updates["score_threshold"]
     if "auto_reject" in updates and updates["auto_reject"] is not None:
         role.auto_reject = bool(updates["auto_reject"])
@@ -1592,13 +1524,10 @@ def update_role(
                 logger.exception(
                     "stale-scores chat heads-up failed for role_id=%s", role.id
                 )
-    # When the effective pre-screen threshold actually moved, re-align the
-    # deterministic skip_assessment_reject queue so the Decision Hub, the
-    # role's pending count, and the "below threshold" stat all agree with
-    # the new cutoff. No re-scoring — scores are unchanged; only the
-    # verdict moves (contrast mark_role_scores_stale for criteria/job-spec
-    # edits, which DO change scores). Failures are logged, never fatal to
-    # the PATCH.
+    # When the effective boundary moved, re-align this logical role's decision
+    # queue. No re-scoring occurs: ordinary roles reuse application scores and
+    # related roles reuse their SisterRoleEvaluation scores. Failures are
+    # logged and the next deterministic role cycle self-heals.
     if _threshold_may_change:
         try:
             _threshold_after = _effective_pre_screen_threshold(db, role)
@@ -1607,27 +1536,16 @@ def update_role(
             # treat the failure as a (None) threshold, which would discard
             # valid numeric-score reject cards.
             logger.exception(
-                "Pre-screen threshold (post-update) resolution failed for role_id=%s; "
-                "skipping reject reconcile", role.id
+                "Role threshold (post-update) resolution failed for role_id=%s; "
+                "skipping decision reconcile", role.id
             )
         else:
             if not _thresholds_equal(_threshold_before, _threshold_after):
                 try:
-                    from ...services.pre_screen_decision_emitter import (
-                        reconcile_pre_screen_reject_decisions,
-                        retract_advances_below_threshold,
+                    from ...services.role_threshold_reconciliation import (
+                        reconcile_role_threshold_decisions,
                     )
-                    # Order matters: retract stale advances FIRST so the reject
-                    # reconcile's emit loop (which skips apps that already have a
-                    # pending decision) can replace each with the correct
-                    # skip_assessment_reject card.
-                    retract_advances_below_threshold(
-                        db,
-                        role=role,
-                        organization_id=int(current_user.organization_id),
-                        threshold=_threshold_after,
-                    )
-                    reconcile_pre_screen_reject_decisions(
+                    reconcile_role_threshold_decisions(
                         db,
                         role=role,
                         organization_id=int(current_user.organization_id),
@@ -1636,7 +1554,7 @@ def update_role(
                     db.commit()
                 except Exception:
                     logger.exception(
-                        "Pre-screen threshold re-apply failed for role_id=%s", role.id
+                        "Role threshold re-apply failed for role_id=%s", role.id
                     )
                     db.rollback()
     return role_to_response(role)
@@ -2045,11 +1963,18 @@ def delete_role(
         permission=JobPermission.DELETE_ROLE,
     )
     assert_role_version(role, expected_version=expected_version)
-    has_applications = db.query(CandidateApplication).filter(
+    has_direct_applications = db.query(CandidateApplication.id).filter(
         CandidateApplication.organization_id == current_user.organization_id,
         CandidateApplication.role_id == role.id,
     ).first()
-    if has_applications:
+    has_related_memberships = db.query(SisterRoleEvaluation.id).filter(
+        SisterRoleEvaluation.organization_id == current_user.organization_id,
+        SisterRoleEvaluation.role_id == role.id,
+    ).first()
+    # A related role owns its membership rows and their historical lifecycle,
+    # even when the optional evidence/ATS application belongs to another role.
+    # Never let the physical application FK bypass the same deletion guard.
+    if has_direct_applications or has_related_memberships:
         raise HTTPException(status_code=400, detail="Cannot delete role with applications")
     in_use = db.query(Assessment).filter(
         Assessment.organization_id == current_user.organization_id,

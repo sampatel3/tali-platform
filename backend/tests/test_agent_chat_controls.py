@@ -180,7 +180,7 @@ def test_related_role_chat_controls_allow_agent_and_positive_automation(kick, db
     kick.assert_called()
 
 
-def test_related_role_chat_blocks_only_automatic_reject_settings(db):
+def test_related_role_chat_keeps_automatic_reject_settings_role_local(db):
     org = _org(db)
     user = _user(db, org)
     owner = _role(db, org, agentic=True, budget=5_000)
@@ -198,10 +198,10 @@ def test_related_role_chat_blocks_only_automatic_reject_settings(db):
         {"auto_reject_pre_screen": True},
     )
 
-    assert result["ok"] is False
-    assert result["reason"] == "related_role_reject_requires_confirmation"
-    assert "share an ATS application" in result["message"]
-    assert role.auto_reject_pre_screen is False
+    assert result["ok"] is True
+    assert result["changed"] == ["auto_reject_pre_screen"]
+    assert role.auto_reject_pre_screen is True
+    assert owner.auto_reject is False
 
     result = _run(
         db,
@@ -210,9 +210,10 @@ def test_related_role_chat_blocks_only_automatic_reject_settings(db):
         "adjust_agent_settings",
         {"auto_reject": True},
     )
-    assert result["ok"] is False
-    assert result["reason"] == "related_role_reject_requires_confirmation"
-    assert owner.auto_reject is False
+    assert result["ok"] is True
+    assert result["changed"] == ["auto_reject"]
+    assert owner.auto_reject is True
+    assert role.auto_reject_pre_screen is True
 
 
 @patch.object(_controls, "_kick_cycle", return_value=True)

@@ -43,6 +43,40 @@ def count_inflight_score_jobs(db: Session, role_id: int) -> int:
     """
     from sqlalchemy import func
 
+    from ..models.role import ROLE_KIND_SISTER, Role
+    from ..models.sister_role_evaluation import (
+        SISTER_EVAL_PENDING,
+        SISTER_EVAL_RETRY_WAIT,
+        SISTER_EVAL_RUNNING,
+        SisterRoleEvaluation,
+    )
+
+    role = db.get(Role, int(role_id))
+    if role is None or role.deleted_at is not None:
+        return 0
+    if (
+        str(role.role_kind or "") == ROLE_KIND_SISTER
+        or role.ats_owner_role_id is not None
+    ):
+        return int(
+            db.query(func.count(SisterRoleEvaluation.id))
+            .filter(
+                SisterRoleEvaluation.organization_id == int(role.organization_id),
+                SisterRoleEvaluation.role_id == int(role.id),
+                SisterRoleEvaluation.deleted_at.is_(None),
+                SisterRoleEvaluation.application_outcome == "open",
+                SisterRoleEvaluation.status.in_(
+                    (
+                        SISTER_EVAL_PENDING,
+                        SISTER_EVAL_RUNNING,
+                        SISTER_EVAL_RETRY_WAIT,
+                    )
+                ),
+            )
+            .scalar()
+            or 0
+        )
+
     latest = (
         db.query(
             CvScoreJob.application_id.label("app_id"),

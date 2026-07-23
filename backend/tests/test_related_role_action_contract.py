@@ -1,15 +1,15 @@
-"""Regression contract for roles that share one ATS application.
+"""Regression contract for independent roles with optional shared ATS links.
 
-Related roles remain full Taali roles.  Only automatic rejection is forbidden
-because rejection closes the shared ATS application.  Positive settings stay
-role-owned, scheduled work must use the role-aware dispatcher, and explicit
-recruiter reject/advance actions continue to operate on the shared application.
+Related roles own their membership, stage, outcome, decisions, and history.
+The shared ATS application is an external-write transport and restriction
+boundary only; it never couples the roles' local funnel state.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -28,6 +28,7 @@ from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.schemas.role import ApplicationOutcomeUpdate, WorkableMoveStageRequest
 from app.services.workable_actions_service import WorkableWritebackError
+from app.services.sister_role_service import text_fingerprint
 from tests.conftest import auth_headers
 
 
@@ -97,16 +98,82 @@ def _family(client, db, *, related_count: int = 1):
             SisterRoleEvaluation(
                 organization_id=user.organization_id,
                 role_id=related.id,
+                candidate_id=candidate.id,
                 source_application_id=application.id,
+                ats_application_id=application.id,
                 status="done",
                 pipeline_stage="review",
-                spec_fingerprint=f"contract-{index}",
+                spec_fingerprint=text_fingerprint(related.job_spec_text),
+                cv_fingerprint=text_fingerprint(candidate.cv_text),
                 role_fit_score=80 + index,
             )
         )
         related_roles.append(related)
     db.commit()
     return headers, user, owner, related_roles, application
+
+
+def _direct_related_application(
+    db,
+    *,
+    related: Role,
+    ats_application: CandidateApplication,
+) -> tuple[CandidateApplication, SisterRoleEvaluation]:
+    """Make the role-local application distinct from its explicit ATS transport."""
+
+    direct_application = CandidateApplication(
+        organization_id=int(ats_application.organization_id),
+        candidate_id=int(ats_application.candidate_id),
+        role_id=int(related.id),
+        source="manual",
+        pipeline_stage="review",
+        application_outcome="open",
+        cv_text=ats_application.cv_text,
+    )
+    db.add(direct_application)
+    db.flush()
+    evaluation = (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == int(related.id))
+        .one()
+    )
+    evaluation.source_application_id = int(direct_application.id)
+    evaluation.candidate_id = int(direct_application.candidate_id)
+    evaluation.ats_application_id = int(ats_application.id)
+    evaluation.pipeline_stage = "review"
+    evaluation.application_outcome = "open"
+    db.flush()
+    return direct_application, evaluation
+
+
+def _related_decision(
+    db,
+    *,
+    role: Role,
+    application: CandidateApplication,
+    status: str,
+):
+    from app.models.agent_decision import AgentDecision
+
+    decision = AgentDecision(
+        organization_id=int(application.organization_id),
+        role_id=int(role.id),
+        application_id=int(application.id),
+        decision_type="advance_to_interview",
+        recommendation="advance_to_interview",
+        status=status,
+        reasoning="Grounded role-local evidence supports progression.",
+        evidence={"related_role_id": int(role.id), "role_fit_score": 84},
+        confidence=0.84,
+        model_version="test",
+        prompt_version="test",
+        idempotency_key=(
+            f"related-contract:{role.id}:{application.id}:{status}"
+        ),
+    )
+    db.add(decision)
+    db.flush()
+    return decision
 
 
 def _role_only_recruiter(db, *, owner: Role, role: Role) -> User:
@@ -134,10 +201,12 @@ def _role_only_recruiter(db, *, owner: Role, role: Role) -> User:
 
 @pytest.mark.parametrize("member", ["owner", "related"])
 @pytest.mark.parametrize("field", ["auto_reject", "auto_reject_pre_screen"])
-def test_role_api_blocks_both_automatic_rejects_for_every_family_member(
+def test_role_api_persists_automatic_reject_for_only_the_acting_role(
     client, db, member, field
 ):
-    headers, _user, owner, related_roles, _application = _family(client, db)
+    headers, _user, owner, related_roles, _application = _family(
+        client, db, related_count=2
+    )
     role = owner if member == "owner" else related_roles[0]
 
     response = client.patch(
@@ -146,20 +215,28 @@ def test_role_api_blocks_both_automatic_rejects_for_every_family_member(
         json={"expected_version": int(role.version or 1), field: True},
     )
 
-    assert response.status_code == 409, response.text
-    detail = response.json()["detail"]
-    assert "ATS application" in detail
-    assert "every linked role" in detail
+    assert response.status_code == 200, response.text
     db.expire_all()
-    assert getattr(db.get(Role, role.id), field) is False
+    assert getattr(db.get(Role, role.id), field) is True
+    untouched_ids = {
+        int(candidate_role.id)
+        for candidate_role in [owner, *related_roles]
+        if int(candidate_role.id) != int(role.id)
+    }
+    assert all(
+        getattr(db.get(Role, role_id), field) is False
+        for role_id in untouched_ids
+    )
 
 
 @pytest.mark.parametrize("member", ["owner", "related"])
 @pytest.mark.parametrize("field", ["auto_reject", "auto_reject_pre_screen"])
-def test_job_chat_blocks_both_automatic_rejects_for_every_family_member(
+def test_job_chat_persists_automatic_reject_for_only_the_acting_role(
     client, db, member, field
 ):
-    _headers, user, owner, related_roles, _application = _family(client, db)
+    _headers, user, owner, related_roles, _application = _family(
+        client, db, related_count=2
+    )
     role = owner if member == "owner" else related_roles[0]
 
     result = agent_chat_tools.dispatch_tool(
@@ -170,11 +247,118 @@ def test_job_chat_blocks_both_automatic_rejects_for_every_family_member(
         user=user,
     )
 
-    assert result["ok"] is False
-    assert result["reason"] == "related_role_reject_requires_confirmation"
-    assert "ATS application" in result["message"]
-    assert "every linked role" in result["message"]
-    assert getattr(role, field) is False
+    assert result["ok"] is True
+    assert field in result["changed"]
+    db.expire_all()
+    assert getattr(db.get(Role, role.id), field) is True
+    untouched_ids = {
+        int(candidate_role.id)
+        for candidate_role in [owner, *related_roles]
+        if int(candidate_role.id) != int(role.id)
+    }
+    assert all(
+        getattr(db.get(Role, role_id), field) is False
+        for role_id in untouched_ids
+    )
+
+
+def test_related_pre_screen_auto_reject_is_local_and_never_calls_an_ats_provider(
+    client, db
+):
+    from app.services import application_automation_service as automation
+
+    _headers, _user, owner, related_roles, application = _family(
+        client, db, related_count=2
+    )
+    acting_role, sibling_role = related_roles
+    acting_role.auto_reject_pre_screen = True
+    db.commit()
+
+    verdict = {
+        "should_trigger": True,
+        "auto_disqualify_eligible": True,
+        "state": "eligible",
+        "reason": "Deterministic pre-screen score is below this role's threshold",
+        "snapshot": {"pre_screen_score": 10},
+        "config": {"threshold_100": 50},
+    }
+    with patch.object(
+        automation, "evaluate_auto_reject_decision", return_value=verdict
+    ), patch.object(automation, "try_bullhorn_reject") as bullhorn_reject, patch.object(
+        automation, "disqualify_candidate_in_workable"
+    ) as workable_reject:
+        result = automation.run_auto_reject_if_needed(
+            db=db,
+            org=db.get(Organization, owner.organization_id),
+            app=application,
+            role=acting_role,
+            actor_type="system",
+        )
+        db.commit()
+
+    db.expire_all()
+    evaluations = {
+        row.role_id: row
+        for row in db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.source_application_id == application.id)
+        .all()
+    }
+    assert result["performed"] is True
+    assert result["role_local"] is True
+    assert result["workable_synced"] is False
+    assert evaluations[acting_role.id].application_outcome == "rejected"
+    assert evaluations[sibling_role.id].application_outcome == "open"
+    assert db.get(CandidateApplication, application.id).application_outcome == "open"
+    bullhorn_reject.assert_not_called()
+    workable_reject.assert_not_called()
+
+
+def test_owner_pre_screen_automation_remains_enabled_when_related_roles_exist(
+    client, db
+):
+    from app.services import application_automation_service as automation
+
+    _headers, _user, owner, related_roles, application = _family(
+        client, db, related_count=2
+    )
+    owner.agentic_mode_enabled = True
+    owner.auto_reject_pre_screen = True
+    application.source = "careers"
+    db.commit()
+
+    verdict = {
+        "should_trigger": True,
+        "auto_disqualify_eligible": True,
+        "state": "eligible",
+        "reason": "Deterministic pre-screen score is below the owner's threshold",
+        "snapshot": {"pre_screen_score": 10},
+        "config": {"threshold_100": 50},
+    }
+    with patch.object(
+        automation, "evaluate_auto_reject_decision", return_value=verdict
+    ), patch.object(automation, "try_bullhorn_reject") as bullhorn_reject, patch.object(
+        automation, "disqualify_candidate_in_workable"
+    ) as workable_reject:
+        result = automation.run_auto_reject_if_needed(
+            db=db,
+            org=db.get(Organization, owner.organization_id),
+            app=application,
+            role=owner,
+            actor_type="system",
+        )
+        db.commit()
+
+    db.expire_all()
+    assert result["performed"] is True
+    assert db.get(CandidateApplication, application.id).application_outcome == "rejected"
+    assert {
+        row.role_id: row.application_outcome
+        for row in db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.source_application_id == application.id)
+        .all()
+    } == {role.id: "open" for role in related_roles}
+    bullhorn_reject.assert_not_called()
+    workable_reject.assert_not_called()
 
 
 def test_related_role_api_persists_positive_settings_and_activation(client, db):
@@ -332,7 +516,7 @@ def test_scheduled_sweeps_route_related_roles_without_generic_owner_work(
     assert dispatch.call_args.args[0].id == related.id
 
 
-def test_manual_reject_remains_allowed_and_closes_the_whole_family(client, db):
+def test_owner_manual_reject_does_not_close_independent_related_roles(client, db):
     headers, _user, _owner, related_roles, application = _family(
         client, db, related_count=2
     )
@@ -358,7 +542,8 @@ def test_manual_reject_remains_allowed_and_closes_the_whole_family(client, db):
     assert {row.role_id for row in evaluations} == {
         role.id for role in related_roles
     }
-    assert {row.status for row in evaluations} == {"excluded"}
+    assert {row.status for row in evaluations} == {"done"}
+    assert {row.application_outcome for row in evaluations} == {"open"}
 
 
 def test_related_only_recruiter_can_reject_via_related_role_not_owner_or_sibling(
@@ -389,7 +574,7 @@ def test_related_only_recruiter_can_reject_via_related_role_not_owner_or_sibling
         data=ApplicationOutcomeUpdate(
             application_outcome="rejected",
             acting_role_id=int(related_roles[0].id),
-            reason="Related recruiter confirmed the shared rejection",
+            reason="Related recruiter rejected the candidate for this role",
         ),
         db=db,
         current_user=recruiter,
@@ -397,7 +582,15 @@ def test_related_only_recruiter_can_reject_via_related_role_not_owner_or_sibling
 
     assert response.application_outcome == "rejected"
     db.expire_all()
-    assert db.get(CandidateApplication, application.id).application_outcome == "rejected"
+    assert db.get(CandidateApplication, application.id).application_outcome == "open"
+    evaluations = {
+        row.role_id: row
+        for row in db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.source_application_id == application.id)
+        .all()
+    }
+    assert evaluations[related_roles[0].id].application_outcome == "rejected"
+    assert evaluations[related_roles[1].id].application_outcome == "open"
 
 
 def test_related_only_recruiter_can_move_ats_via_own_related_role_only(client, db):
@@ -580,6 +773,17 @@ def test_related_role_manual_advance_targets_and_updates_the_shared_ats_applicat
     )
     assert projected.status_code == 200, projected.text
     assert projected.json()[0]["workable_stage"] == "final-interview"
+    db.expire_all()
+    assert db.get(CandidateApplication, application.id).pipeline_stage == "review"
+    evaluation = (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.role_id == related.id,
+            SisterRoleEvaluation.source_application_id == application.id,
+        )
+        .one()
+    )
+    assert evaluation.pipeline_stage == "advanced"
 
 
 def test_related_role_note_failure_does_not_replay_confirmed_workable_move(
@@ -636,6 +840,134 @@ def test_related_role_note_failure_does_not_replay_confirmed_workable_move(
     )
 
 
+def test_delayed_related_move_cancels_when_candidate_was_deleted(client, db):
+    from app.services import workable_op_runner
+
+    _headers, _user, owner, related_roles, application = _family(client, db)
+    related = related_roles[0]
+    application.source = "workable"
+    application.workable_candidate_id = "deleted-before-related-move"
+    application.candidate.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    payload = {
+        "application_id": int(application.id),
+        "role_application_id": int(application.id),
+        "target_stage": "final-interview",
+        "acting_role_id": int(related.id),
+    }
+
+    with patch.object(
+        workable_op_runner, "_route_bullhorn_op", return_value=None
+    ), patch(
+        "app.services.workable_actions_service.move_candidate_in_workable"
+    ) as provider_move:
+        with pytest.raises(WorkableWritebackError) as blocked:
+            workable_op_runner._op_move_stage(
+                db,
+                int(owner.organization_id),
+                payload,
+            )
+
+    assert blocked.value.code == "related_role_context_invalid"
+    assert "candidate is unavailable" in blocked.value.message.lower()
+    provider_move.assert_not_called()
+
+
+def test_direct_related_membership_uses_ats_only_as_transport(client, db):
+    from app.models.candidate_application_event import CandidateApplicationEvent
+    from app.services import workable_op_runner
+
+    _headers, user, owner, related_roles, ats_application = _family(client, db)
+    related = related_roles[0]
+    direct_application = CandidateApplication(
+        organization_id=int(owner.organization_id),
+        candidate_id=int(ats_application.candidate_id),
+        role_id=int(related.id),
+        source="manual",
+        pipeline_stage="review",
+        application_outcome="open",
+        cv_text=ats_application.cv_text,
+    )
+    db.add(direct_application)
+    db.flush()
+    evaluation = (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == related.id)
+        .one()
+    )
+    evaluation.source_application_id = int(direct_application.id)
+    evaluation.candidate_id = int(direct_application.candidate_id)
+    evaluation.ats_application_id = int(ats_application.id)
+    owner.workable_stages = [
+        {
+            "id": "final-interview",
+            "slug": "final-interview",
+            "name": "Final Interview",
+            "kind": "interview",
+        }
+    ]
+    ats_application.source = "workable"
+    ats_application.workable_candidate_id = "direct-related-ats-candidate"
+    db.commit()
+    db.expire_all()
+
+    with patch(
+        "app.components.integrations.resolver.resolve_application_ats_provider",
+        return_value=SimpleNamespace(ats="workable"),
+    ), patch(
+        "app.services.workable_op_runner.enqueue_workable_op", return_value=915
+    ) as enqueue:
+        response = move_application_in_active_ats(
+            application_id=int(direct_application.id),
+            data=WorkableMoveStageRequest(
+                target_stage="final-interview",
+                acting_role_id=int(related.id),
+            ),
+            db=db,
+            current_user=user,
+        )
+
+    assert response.id == int(direct_application.id)
+    assert response.role_id == int(related.id)
+    payload = enqueue.call_args.kwargs["payload"]
+    assert payload["application_id"] == int(ats_application.id)
+    assert payload["role_application_id"] == int(direct_application.id)
+    assert payload["acting_role_id"] == int(related.id)
+
+    with patch.object(
+        workable_op_runner, "_route_bullhorn_op", return_value=None
+    ), patch(
+        "app.services.workable_actions_service.move_candidate_in_workable",
+        return_value={"success": True, "code": "ok"},
+    ), patch.object(
+        workable_op_runner,
+        "_post_confirmed_related_role_workable_note",
+        return_value={"status": "ok"},
+    ):
+        result = workable_op_runner._op_move_stage(
+            db, int(owner.organization_id), payload
+        )
+
+    assert result == {"status": "ok", "application_id": int(ats_application.id)}
+    db.expire_all()
+    assert db.get(CandidateApplication, ats_application.id).pipeline_stage == "review"
+    assert db.get(CandidateApplication, direct_application.id).pipeline_stage == "review"
+    evaluation = db.get(SisterRoleEvaluation, evaluation.id)
+    assert evaluation.pipeline_stage == "advanced"
+    role_events = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == direct_application.id,
+            CandidateApplicationEvent.role_id == related.id,
+        )
+        .all()
+    )
+    assert {event.event_type for event in role_events} >= {
+        "workable_moved",
+        "role_pipeline_stage_changed",
+    }
+
+
 def test_related_role_exact_workable_target_alias_is_silent_noop(client, db):
     from app.services import workable_op_runner
 
@@ -679,7 +1011,16 @@ def test_related_role_exact_workable_target_alias_is_silent_noop(client, db):
     provider_move.assert_not_called()
     post_note.assert_not_called()
     db.expire_all()
-    assert db.get(CandidateApplication, application.id).pipeline_stage == "advanced"
+    assert db.get(CandidateApplication, application.id).pipeline_stage == "review"
+    evaluation = (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.role_id == related.id,
+            SisterRoleEvaluation.source_application_id == application.id,
+        )
+        .one()
+    )
+    assert evaluation.pipeline_stage == "advanced"
 
 
 @pytest.mark.parametrize(
@@ -771,3 +1112,355 @@ def test_workable_note_failure_audit_error_cannot_replay_confirmed_move(
     assert len(rollback_calls) >= 2
     db.expire_all()
     assert db.get(CandidateApplication, application.id).workable_stage == "final-interview"
+
+
+def test_owner_terminal_state_does_not_block_open_related_decision(client, db):
+    from datetime import datetime, timezone
+
+    from app.services.decision_approval_guard import (
+        enforce_decision_approval_eligibility,
+    )
+    from app.services.decision_role_context import (
+        load_related_evaluation,
+        load_related_evaluation_map,
+    )
+
+    _headers, _user, _owner, related_roles, application = _family(client, db)
+    related = related_roles[0]
+    evaluation = (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == int(related.id))
+        .one()
+    )
+    application.pipeline_stage = "advanced"
+    application.application_outcome = "rejected"
+    evaluation.pipeline_stage = "review"
+    evaluation.application_outcome = "open"
+    decision = _related_decision(
+        db,
+        role=related,
+        application=application,
+        status="pending",
+    )
+    freshness = SimpleNamespace(is_stale=False, reasons=[])
+
+    with patch(
+        "app.services.decision_approval_guard.enforce_decision_approval_freshness",
+        return_value=freshness,
+    ):
+        assert (
+            enforce_decision_approval_eligibility(
+                db,
+                decision,
+                allow_engine_outdated=False,
+                application=application,
+            )
+            is freshness
+        )
+
+    evaluation.deleted_at = datetime.now(timezone.utc)
+    db.flush()
+    assert (
+        load_related_evaluation(
+            db,
+            decision=decision,
+            application=application,
+        )
+        is None
+    )
+    assert load_related_evaluation_map(
+        db,
+        decisions=[decision],
+        applications_by_id={int(application.id): application},
+    ) == {}
+
+
+def test_related_queue_serializes_with_role_local_terminal_transition(
+    client, db
+):
+    from app.actions import queue_decision
+    from app.actions.types import Actor
+    from app.models.agent_run import AgentRun
+    from app.services.related_role_action_service import (
+        lock_related_role_membership as real_membership_lock,
+        transition_related_role_outcome_action,
+    )
+    from app.services.role_execution_guard import lock_live_role as real_role_lock
+
+    _headers, _user, _owner, related_roles, application = _family(client, db)
+    related = related_roles[0]
+    run = AgentRun(
+        id=90_000_000 + int(related.id),
+        organization_id=int(related.organization_id),
+        role_id=int(related.id),
+        trigger="manual",
+        status="running",
+        model_version="offline-test",
+        prompt_version="related-role-lock-contract.v1",
+    )
+    db.add(run)
+    db.flush()
+
+    lock_order: list[str] = []
+
+    def lock_role(*args, **kwargs):
+        lock_order.append("role")
+        return real_role_lock(*args, **kwargs)
+
+    def lock_membership(*args, **kwargs):
+        lock_order.append("membership")
+        return real_membership_lock(*args, **kwargs)
+
+    with patch(
+        "app.services.role_execution_guard.lock_live_role",
+        side_effect=lock_role,
+    ), patch(
+        "app.services.related_role_action_service.lock_related_role_membership",
+        side_effect=lock_membership,
+    ):
+        decision = queue_decision.run(
+            db,
+            Actor.agent(int(run.id)),
+            organization_id=int(related.organization_id),
+            role_id=int(related.id),
+            application_id=int(application.id),
+            decision_type="send_assessment",
+            reasoning="Role-local evidence supports an assessment.",
+            evidence={"related_role_id": int(related.id), "role_fit_score": 80},
+            confidence=0.8,
+            model_version="offline-test",
+            prompt_version="related-role-lock-contract.v1",
+            skip_episode=True,
+        )
+
+    assert lock_order == ["role", "membership"]
+    assert decision.status == "pending"
+
+    transitioned = transition_related_role_outcome_action(
+        db,
+        application=application,
+        acting_role_id=int(related.id),
+        to_outcome="rejected",
+        source="recruiter",
+        actor_type="recruiter",
+        reason="Role-local terminal transition won after queue admission",
+    )
+    assert transitioned is not None
+    db.flush()
+    db.refresh(decision)
+    assert decision.status == "discarded"
+
+    with pytest.raises(HTTPException) as terminal_first:
+        queue_decision.run(
+            db,
+            Actor.agent(int(run.id)),
+            organization_id=int(related.organization_id),
+            role_id=int(related.id),
+            application_id=int(application.id),
+            decision_type="advance_to_interview",
+            reasoning="This must not queue after the role-local terminal state.",
+            confidence=0.8,
+            model_version="offline-test",
+            prompt_version="related-role-lock-contract.v1",
+            skip_episode=True,
+        )
+    assert terminal_first.value.status_code == 422
+    assert "resolved" in str(terminal_first.value.detail)
+
+
+def test_direct_related_decision_uses_workable_transport_but_logical_history(
+    client, db, monkeypatch
+):
+    from app.actions._decision_side_effects import apply_decision_side_effects
+    from app.actions.types import Actor
+    from app.models.candidate_application_event import CandidateApplicationEvent
+    from app.platform import config as platform_config
+
+    _headers, _user, owner, related_roles, ats_application = _family(client, db)
+    related = related_roles[0]
+    direct_application, _evaluation = _direct_related_application(
+        db,
+        related=related,
+        ats_application=ats_application,
+    )
+    org = db.get(Organization, int(owner.organization_id))
+    owner.workable_stages = [
+        {
+            "id": "final-interview",
+            "slug": "final-interview",
+            "name": "Final Interview",
+            "kind": "interview",
+        }
+    ]
+    ats_application.source = "workable"
+    ats_application.workable_candidate_id = "explicit-workable-transport"
+    org.workable_connected = True
+    org.workable_access_token = "test-token"
+    org.workable_subdomain = "test-workspace"
+    org.workable_config = {
+        "workable_writeback": True,
+        "granted_scopes": ["r_jobs", "r_candidates", "w_candidates"],
+        "workable_actor_member_id": "member-1",
+    }
+    decision = _related_decision(
+        db,
+        role=related,
+        application=direct_application,
+        status="approved",
+    )
+    db.flush()
+    monkeypatch.setattr(platform_config.settings, "MVP_DISABLE_WORKABLE", False)
+    adapter = SimpleNamespace(
+        post_candidate_comment=Mock(return_value={"success": True})
+    )
+
+    with patch(
+        "app.components.integrations.resolver.resolve_application_ats_provider",
+        return_value=SimpleNamespace(ats="workable"),
+    ), patch(
+        "app.services.workable_actions_service.move_candidate_in_workable",
+        return_value={
+            "success": True,
+            "code": "ok",
+            "config": {"actor_member_id": "member-1"},
+        },
+    ) as move, patch(
+        "app.actions._workable_decision_summary.build_workable_adapter",
+        return_value=adapter,
+    ), patch(
+        "app.candidate_graph.episode_outbox.enqueue_recruiter_action",
+        return_value=None,
+    ):
+        apply_decision_side_effects(
+            db,
+            Actor.system(),
+            decision=decision,
+            app=direct_application,
+            org=org,
+            role=related,
+            disposition="approved",
+            workable_target_stage="final-interview",
+        )
+
+    assert move.call_args.kwargs["candidate_id"] == "explicit-workable-transport"
+    assert move.call_args.kwargs["role"].id == owner.id
+    assert (
+        adapter.post_candidate_comment.call_args.kwargs["candidate_id"]
+        == "explicit-workable-transport"
+    )
+    assert related.name in adapter.post_candidate_comment.call_args.kwargs["body"]
+    assert ats_application.workable_stage == "final-interview"
+    assert direct_application.workable_stage is None
+
+    event_types = {"workable_moved", "workable_decision_note_posted"}
+    logical_events = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == int(direct_application.id),
+            CandidateApplicationEvent.event_type.in_(event_types),
+        )
+        .all()
+    )
+    assert {event.event_type for event in logical_events} == event_types
+    assert all(event.role_id == related.id for event in logical_events)
+    assert all(event.agent_decision_id == decision.id for event in logical_events)
+    assert all(event.effect_status == "confirmed" for event in logical_events)
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == int(ats_application.id),
+            CandidateApplicationEvent.event_type.in_(event_types),
+        )
+        .count()
+        == 0
+    )
+
+
+def test_direct_related_decision_uses_bullhorn_transport_but_logical_history(
+    client, db
+):
+    from app.actions._decision_side_effects import apply_decision_side_effects
+    from app.actions.types import Actor
+    from app.components.integrations.bullhorn.provider import BullhornProvider
+    from app.models.candidate_application_event import CandidateApplicationEvent
+
+    _headers, _user, owner, related_roles, ats_application = _family(client, db)
+    related = related_roles[0]
+    direct_application, _evaluation = _direct_related_application(
+        db,
+        related=related,
+        ats_application=ats_application,
+    )
+    org = db.get(Organization, int(owner.organization_id))
+    owner.source = "bullhorn"
+    owner.bullhorn_job_order_id = "bullhorn-owner-job"
+    ats_application.source = "bullhorn"
+    ats_application.bullhorn_job_submission_id = "explicit-bullhorn-transport"
+    ats_application.candidate.bullhorn_candidate_id = "explicit-bullhorn-candidate"
+    decision = _related_decision(
+        db,
+        role=related,
+        application=direct_application,
+        status="approved",
+    )
+    provider = BullhornProvider(org, db)
+    db.flush()
+
+    with patch(
+        "app.components.integrations.resolver.resolve_application_ats_provider",
+        return_value=provider,
+    ), patch.object(
+        provider,
+        "move_application",
+        return_value={
+            "success": True,
+            "code": "ok",
+            "config": {"remote_status": "Interview Scheduled"},
+        },
+    ) as move, patch.object(
+        provider,
+        "post_note",
+        return_value={"success": True, "code": "ok", "config": {}},
+    ) as post_note, patch(
+        "app.candidate_graph.episode_outbox.enqueue_recruiter_action",
+        return_value=None,
+    ):
+        apply_decision_side_effects(
+            db,
+            Actor.system(),
+            decision=decision,
+            app=direct_application,
+            org=org,
+            role=related,
+            disposition="approved",
+            workable_target_stage="technical-interview",
+        )
+
+    assert move.call_args.kwargs["candidate_id"] == "explicit-bullhorn-transport"
+    assert move.call_args.kwargs["role"].id == owner.id
+    assert post_note.call_args.kwargs["candidate_id"] == "explicit-bullhorn-candidate"
+    assert post_note.call_args.kwargs["role"].id == owner.id
+    assert related.name in post_note.call_args.kwargs["body"]
+
+    event_types = {"bullhorn_moved", "bullhorn_decision_note_posted"}
+    logical_events = (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == int(direct_application.id),
+            CandidateApplicationEvent.event_type.in_(event_types),
+        )
+        .all()
+    )
+    assert {event.event_type for event in logical_events} == event_types
+    assert all(event.role_id == related.id for event in logical_events)
+    assert all(event.agent_decision_id == decision.id for event in logical_events)
+    assert all(event.effect_status == "confirmed" for event in logical_events)
+    assert (
+        db.query(CandidateApplicationEvent)
+        .filter(
+            CandidateApplicationEvent.application_id == int(ats_application.id),
+            CandidateApplicationEvent.event_type.in_(event_types),
+        )
+        .count()
+        == 0
+    )

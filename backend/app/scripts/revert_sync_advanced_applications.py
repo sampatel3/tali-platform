@@ -172,6 +172,7 @@ def revert_sync_advanced_applications(
             CandidateApplicationEvent(
                 application_id=app.id,
                 organization_id=app.organization_id,
+                role_id=int(app.role_id),
                 event_type="pipeline_stage_changed",
                 from_stage=from_stage,
                 to_stage=target,

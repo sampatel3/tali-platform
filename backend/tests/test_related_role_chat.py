@@ -38,6 +38,13 @@ SPEC = (
 )
 
 
+def test_role_agent_prompt_allows_related_role_as_source():
+    from app.agent_chat.system_prompt import SYSTEM_PROMPT
+
+    assert "the source may itself be a related role" in SYSTEM_PROMPT
+    assert "never create one from an already-related role" not in SYSTEM_PROMPT
+
+
 def _seed(db):
     org = Organization(name="Related Chat Org", slug=f"related-chat-{id(db)}")
     db.add(org)
@@ -190,8 +197,8 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
             {"id": created["role_id"], "name": args["name"]},
         ],
     }
-    assert f"{existing.name} #{existing.id}" in created["message"]
-    assert "across all linked roles" in created["message"]
+    assert "owns its candidate membership" in created["message"]
+    assert "do not fan out to linked roles" in created["message"]
     assert created["evaluation_counts"] == {"total": 1, "pending": 1, "unscorable": 0}
     copied_membership = (
         db.query(JobHiringTeam)
@@ -203,6 +210,67 @@ def test_role_agent_previews_then_creates_only_after_later_confirmation(db):
     )
     assert copied_membership.team_role == TEAM_ROLE_RECRUITER
     dispatch.assert_called_once()
+
+
+def test_role_agent_refreshes_confirmation_when_same_size_source_evidence_changes(db):
+    org, user, source = _seed(db)
+    conversation = AgentConversation(
+        organization_id=org.id,
+        role_id=source.id,
+        title="Changed related-role evidence",
+    )
+    db.add(conversation)
+    db.commit()
+    args = {"name": "AI Engineer · Evidence", "job_spec_text": SPEC}
+
+    preview = dispatch_agent_tool(
+        "preview_related_role",
+        args,
+        db=db,
+        role=source,
+        user=user,
+        conversation=conversation,
+    )
+    _agent_tool_row(db, conversation, preview)
+    db.add(
+        AgentConversationMessage(
+            conversation_id=conversation.id,
+            organization_id=org.id,
+            role_id=source.id,
+            author_role=AUTHOR_ROLE_USER,
+            author_user_id=user.id,
+            kind=MESSAGE_KIND_CHAT,
+            content=[{"type": "text", "text": "Yes, create it."}],
+            text="Yes, create it.",
+        )
+    )
+    application = db.query(CandidateApplication).filter_by(role_id=source.id).one()
+    application.cv_text = f"{application.cv_text} Added grounded retrieval evidence."
+    db.commit()
+
+    with patch(
+        "app.services.related_role_service.score_sister_role.apply_async"
+    ) as dispatch:
+        refreshed = dispatch_agent_tool(
+            "create_related_role",
+            args,
+            db=db,
+            role=source,
+            user=user,
+            conversation=conversation,
+        )
+
+    assert refreshed["type"] == "related_role_preview"
+    assert refreshed["needs_confirmation"] is True
+    assert refreshed["candidates_total"] == preview["candidates_total"] == 1
+    assert refreshed["candidates_with_cv"] == preview["candidates_with_cv"] == 1
+    assert (
+        refreshed["source_snapshot_fingerprint"]
+        != preview["source_snapshot_fingerprint"]
+    )
+    assert "roster changed" in refreshed["message"]
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+    dispatch.assert_not_called()
 
 
 def test_role_agent_can_start_a_cloned_related_role_requisition_chat(db):
@@ -295,6 +363,78 @@ def test_global_chat_uses_the_same_preview_and_later_confirmation_guard(db):
         .count()
         == 1
     )
+
+
+def test_global_chat_refreshes_confirmation_when_same_size_source_evidence_changes(db):
+    org, user, source = _seed(db)
+    conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=source.id,
+        title="Changed global related-role evidence",
+    )
+    db.add(conversation)
+    db.commit()
+    args = {
+        "role_id": source.id,
+        "name": "AI Engineer · Evidence",
+        "job_spec_text": SPEC,
+    }
+    preview = dispatch_global_tool(
+        "preview_related_role",
+        args,
+        db=db,
+        user=user,
+        conversation=conversation,
+    )
+    db.add_all(
+        [
+            TaaliChatMessage(
+                conversation_id=conversation.id,
+                organization_id=org.id,
+                role=ROLE_USER,
+                content=[
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "changed-preview-global",
+                        "content": json.dumps(preview),
+                    }
+                ],
+            ),
+            TaaliChatMessage(
+                conversation_id=conversation.id,
+                organization_id=org.id,
+                role=ROLE_USER,
+                content=[{"type": "text", "text": "Confirm this version."}],
+            ),
+        ]
+    )
+    application = db.query(CandidateApplication).filter_by(role_id=source.id).one()
+    application.cv_text = f"{application.cv_text} Added grounded evaluation evidence."
+    db.commit()
+
+    with patch(
+        "app.services.related_role_service.score_sister_role.apply_async"
+    ) as dispatch:
+        refreshed = dispatch_global_tool(
+            "create_related_role",
+            args,
+            db=db,
+            user=user,
+            conversation=conversation,
+        )
+
+    assert refreshed["type"] == "related_role_preview"
+    assert refreshed["needs_confirmation"] is True
+    assert refreshed["candidates_total"] == preview["candidates_total"] == 1
+    assert refreshed["candidates_with_cv"] == preview["candidates_with_cv"] == 1
+    assert (
+        refreshed["source_snapshot_fingerprint"]
+        != preview["source_snapshot_fingerprint"]
+    )
+    assert "roster changed" in refreshed["message"]
+    assert db.query(Role).filter(Role.role_kind == ROLE_KIND_SISTER).count() == 0
+    dispatch.assert_not_called()
 
 
 def test_global_chat_related_role_preview_denies_unassigned_member(db):

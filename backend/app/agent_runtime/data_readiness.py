@@ -37,10 +37,16 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, not_, or_
 from sqlalchemy.orm import Session
 
+from ..candidate_search.application_role_scope import (
+    application_outcome_expression,
+    pipeline_stage_expression,
+)
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..models.agent_needs_input import AgentNeedsInput
+from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 
@@ -56,31 +62,58 @@ def _open_no_cv_text_query(db: Session, *, role: Role):
     """Base query: open, non-deleted applications on the role that have no
     extracted CV text — the agent can't score any of these. Callers narrow
     further by whether a CV *file* exists (missing vs. unreadable)."""
-    return db.query(CandidateApplication).filter(
-        CandidateApplication.organization_id == role.organization_id,
-        CandidateApplication.role_id == role.id,
-        CandidateApplication.deleted_at.is_(None),
-        CandidateApplication.application_outcome == "open",
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+    )
+    query = (
+        db.query(CandidateApplication)
+        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .filter(
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+    )
+    return role_scope.scope_visible_roster(query).filter(
+        application_outcome_expression(role_scope) == "open",
+        func.lower(
+            func.coalesce(pipeline_stage_expression(role_scope), "applied")
+        )
+        != "advanced",
         or_(
             CandidateApplication.cv_text.is_(None),
             func.trim(CandidateApplication.cv_text) == "",
         ),
+        or_(Candidate.cv_text.is_(None), func.trim(Candidate.cv_text) == ""),
+    )
+
+
+def _blank(column):
+    return or_(column.is_(None), func.trim(column) == "")
+
+
+def _has_any_cv_file_clause():
+    return or_(
+        not_(_blank(CandidateApplication.cv_file_url)),
+        not_(_blank(CandidateApplication.cv_filename)),
+        not_(_blank(Candidate.cv_file_url)),
+        not_(_blank(Candidate.cv_filename)),
     )
 
 
 def _no_cv_file_clause():
     """SQL predicate: the application has no CV file on record."""
-    return or_(
-        CandidateApplication.cv_file_url.is_(None),
-        func.trim(CandidateApplication.cv_file_url) == "",
+    return and_(
+        _blank(CandidateApplication.cv_file_url),
+        _blank(CandidateApplication.cv_filename),
+        _blank(Candidate.cv_file_url),
+        _blank(Candidate.cv_filename),
     )
 
 
 def _has_cv_file_clause():
     """SQL predicate: the application has a CV file on record."""
-    return CandidateApplication.cv_file_url.isnot(None) & (
-        func.trim(CandidateApplication.cv_file_url) != ""
-    )
+    return _has_any_cv_file_clause()
 
 
 def missing_cv_count(db: Session, *, role: Role) -> int:

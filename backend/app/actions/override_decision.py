@@ -29,11 +29,11 @@ from typing import Optional
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from ..domains.assessments_runtime.role_support import is_resolved
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
-from ..models.role import Role
+from ..services.decision_membership import lock_resolution_roles
+from ..services.decision_resolution_provenance import record_resolution_request
 from . import advance_stage, reject_application, send_assessment
 from ._decision_side_effects import (
     apply_decision_side_effects,
@@ -82,7 +82,15 @@ def _require_unresolved_application(
     )
     if application is None:
         raise HTTPException(status_code=404, detail="decision application not found")
-    if is_resolved(application):
+    from ..services.related_role_application_runtime import (
+        role_application_is_resolved,
+    )
+
+    if role_application_is_resolved(
+        db,
+        role_id=int(decision.role_id),
+        application=application,
+    ):
         raise HTTPException(
             status_code=409,
             detail={
@@ -157,6 +165,7 @@ def reclassify_to_advance_queue(
         try:
             decision.decision_dedup_key = _compute_dedup_key(
                 db,
+                role_id=int(decision.role_id),
                 application_id=int(decision.application_id),
                 decision_type="advance_to_interview",
             )
@@ -212,6 +221,11 @@ def enqueue(
     if note is not None:
         decision.resolution_note = note
     decision.override_action = override_action
+    record_resolution_request(
+        decision,
+        requested_action=override_action or "hold",
+        target_stage=workable_target_stage,
+    )
     db.commit()
 
     from ..services.workable_op_runner import (
@@ -275,7 +289,7 @@ def run(
         raise HTTPException(status_code=403, detail="override is recruiter-only")
 
     identity = (
-        db.query(AgentDecision.application_id)
+        db.query(AgentDecision.application_id, AgentDecision.role_id)
         .filter(
             AgentDecision.id == decision_id,
             AgentDecision.organization_id == organization_id,
@@ -284,6 +298,18 @@ def run(
     )
     if identity is None:
         raise HTTPException(status_code=404, detail=f"agent_decision {decision_id} not found")
+    if identity[1] is None:
+        raise HTTPException(status_code=409, detail="decision role is unavailable")
+    application_role_id = (
+        db.query(CandidateApplication.role_id)
+        .filter(
+            CandidateApplication.id == int(identity[0]),
+            CandidateApplication.organization_id == int(organization_id),
+        )
+        .scalar()
+    )
+    if application_role_id is None:
+        raise HTTPException(status_code=404, detail="decision application not found")
     # Match graph provider admission's Organization -> Role lock order before
     # taking the canonical application and decision locks below. Assessment
     # sends reserve capacity under an Organization UPDATE lock, so acquire that
@@ -293,6 +319,13 @@ def run(
         organization_id=int(organization_id),
         exclusive=override_action == "send_assessment",
     )
+    locked_roles = lock_resolution_roles(
+        db,
+        organization_id=int(organization_id),
+        role_ids=(int(identity[1]), int(application_role_id)),
+    )
+    if len(locked_roles) != len({int(identity[1]), int(application_role_id)}):
+        raise HTTPException(status_code=409, detail="decision role is unavailable")
     # Related decisions share one canonical application. Lock that row first,
     # then the decision, matching approve/advance/reject and preventing sibling
     # terminal actions from taking the same locks in opposite order.
@@ -305,7 +338,24 @@ def run(
     app = application_lock.populate_existing().one_or_none()
     if app is None:
         raise HTTPException(status_code=404, detail="decision application not found")
-    if is_resolved(app):
+    from ..services.related_role_action_service import (
+        lock_related_role_membership,
+    )
+
+    lock_related_role_membership(
+        db,
+        application=app,
+        acting_role_id=int(identity[1]),
+    )
+    from ..services.related_role_application_runtime import (
+        role_application_is_resolved,
+    )
+
+    if role_application_is_resolved(
+        db,
+        role_id=int(identity[1]),
+        application=app,
+    ):
         raise HTTPException(
             status_code=409,
             detail={
@@ -349,7 +399,13 @@ def run(
         "prompt_version": decision.prompt_version,
         "override_reason": note,
         "acting_role_id": int(decision.role_id),
+        "workable_target_stage": workable_target_stage,
     }
+    record_resolution_request(
+        decision,
+        requested_action=override_action or "hold",
+        target_stage=workable_target_stage,
+    )
     idempotency = f"override_decision:{decision.id}"
 
     org = (
@@ -357,16 +413,7 @@ def run(
         if app is not None
         else None
     )
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == int(decision.role_id),
-            Role.organization_id == int(organization_id),
-        )
-        .one_or_none()
-        if app is not None
-        else None
-    )
+    role = locked_roles.get(int(decision.role_id)) if app is not None else None
 
     # "Did this override freshly reject the candidate?" — gates the deferred
     # Workable disqualify (Taali never emails the candidate; the ATS owns job

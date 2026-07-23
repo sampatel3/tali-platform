@@ -47,7 +47,7 @@ describe('RoleFamilyHeaderUi', () => {
     expect(button).toHaveAttribute('data-initial', 'false');
   });
 
-  it('does not present a partial family as an exhaustive reject list', () => {
+  it('describes an ATS link without coupling role lifecycle state', () => {
     render(
       <RoleFamilyHeaderNote
         providerLabel="Workable"
@@ -63,7 +63,7 @@ describe('RoleFamilyHeaderUi', () => {
     );
 
     expect(screen.getByRole('note')).toHaveTextContent(
-      'Shared Workable candidate pool with Data Platform Lead #31 (original). Rejecting and advancing apply to the original and every related role',
+      'Independent related role with a Workable link to Data Platform Lead #31. Each role keeps its own candidate membership, scores, decisions, and pipeline state.',
     );
   });
 });

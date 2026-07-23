@@ -401,7 +401,7 @@ def test_native_deterministic_pre_screen_rejects_locally_when_opted_in(
     assert event.event_metadata["ats_provider"] == "standalone"
 
 
-def test_role_family_pre_screen_reject_is_diverted_for_confirmation(
+def test_owner_pre_screen_reject_is_not_diverted_by_related_roles(
     db, monkeypatch
 ):
     from app.services import application_automation_service as automation
@@ -426,7 +426,7 @@ def test_role_family_pre_screen_reject_is_diverted_for_confirmation(
         )
     )
     db.flush()
-    app = _application(db, org=org, role=owner, source="workable")
+    app = _application(db, org=org, role=owner, source="careers")
     monkeypatch.setattr(automation, "refresh_pre_screening_fields", lambda app: None)
     monkeypatch.setattr(
         automation,
@@ -451,8 +451,10 @@ def test_role_family_pre_screen_reject_is_diverted_for_confirmation(
         actor_type="system",
     )
 
-    assert result == {"performed": False, "state": "pending"}
-    assert "ATS application is shared" in diverted.call_args.kwargs["carded_reason"]
+    assert result["performed"] is True
+    assert result["workable_synced"] is False
+    assert app.application_outcome == "rejected"
+    diverted.assert_not_called()
 
 
 def test_autonomous_workable_advance_uses_configured_interview_stage(

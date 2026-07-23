@@ -32,7 +32,8 @@ from ..actions import Actor, create_application as _create_application_action
 from ..domains.assessments_runtime.role_support import role_has_job_spec
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.sister_role_evaluation import SisterRoleEvaluation
 from ..models.user import User
 from ..schemas.role import ApplicationCreate, ApplicationNoteCreate
 from ..services.application_notes import create_recruiter_note
@@ -127,16 +128,37 @@ def _scoped_application(
         .filter(
             CandidateApplication.id == app_id,
             CandidateApplication.organization_id == org_id,
-            CandidateApplication.role_id == int(role.id),
-            CandidateApplication.deleted_at.is_(None),
         )
         .one_or_none()
     )
-    if app is None:
+    visible = bool(
+        app is not None
+        and (
+            (
+                str(role.role_kind or "") != ROLE_KIND_SISTER
+                and int(app.role_id or 0) == int(role.id)
+                and app.deleted_at is None
+            )
+            or (
+                str(role.role_kind or "") == ROLE_KIND_SISTER
+                and db.query(SisterRoleEvaluation.id)
+                .filter(
+                    SisterRoleEvaluation.organization_id == int(org_id),
+                    SisterRoleEvaluation.role_id == int(role.id),
+                    SisterRoleEvaluation.source_application_id == int(app.id),
+                    SisterRoleEvaluation.deleted_at.is_(None),
+                )
+                .scalar()
+                is not None
+            )
+        )
+    )
+    if not visible:
         raise ApplicationCommandError(
             "application_not_found",
             f"Application {app_id} was not found in this role.",
         )
+    assert app is not None
     return app
 
 
@@ -233,17 +255,30 @@ def preview_create_application(
     )
     existing = None
     if candidate is not None:
-        # Match the canonical action exactly: even a soft-deleted historical
-        # application currently occupies the unique candidate/role pair.
-        existing = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.organization_id == org_id,
-                CandidateApplication.role_id == int(role.id),
-                CandidateApplication.candidate_id == int(candidate.id),
+        if str(role.role_kind or "") == ROLE_KIND_SISTER:
+            membership = (
+                db.query(SisterRoleEvaluation)
+                .filter(
+                    SisterRoleEvaluation.organization_id == int(org_id),
+                    SisterRoleEvaluation.role_id == int(role.id),
+                    SisterRoleEvaluation.candidate_id == int(candidate.id),
+                    SisterRoleEvaluation.deleted_at.is_(None),
+                )
+                .first()
             )
-            .first()
-        )
+            existing = membership.source_application if membership is not None else None
+        else:
+            # Match the canonical action exactly: even a soft-deleted
+            # historical application occupies the unique candidate/role pair.
+            existing = (
+                db.query(CandidateApplication)
+                .filter(
+                    CandidateApplication.organization_id == org_id,
+                    CandidateApplication.role_id == int(role.id),
+                    CandidateApplication.candidate_id == int(candidate.id),
+                )
+                .first()
+            )
 
     has_spec = bool(role_has_job_spec(role))
     can_create = has_spec and existing is None
@@ -377,6 +412,7 @@ def add_internal_note(
         author=user,
         for_agent=data.for_agent,
         kind="note",
+        role_id=int(role.id),
     )
     db.flush()
     return {

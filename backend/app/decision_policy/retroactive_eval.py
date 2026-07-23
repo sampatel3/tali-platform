@@ -1,8 +1,9 @@
 """Retroactively evaluate the current policy against a manual event.
 
 For each manual recruiter ``CandidateApplicationEvent``, reconstruct
-``DecisionInputs`` *as of the event time* (using scores cached on the
-application — we do NOT backfill scoring just for retune) and run
+``DecisionInputs`` from the event's exact logical-role membership (using its
+currently persisted role-local scores — we do NOT backfill scoring just for
+retune) and run
 ``engine.evaluate`` against the *current active policy*. Compare the
 verdict to what the recruiter actually did to produce a
 ``disagreement_pattern``.
@@ -28,9 +29,12 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from ..candidate_search.logical_policy_state import (
+    LogicalCandidatePolicyState,
+    read_logical_candidate_policy_states,
+)
 from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
-from ..models.role import Role
 from ..services.decision_evidence_service import must_have_blocked
 from .engine import DecisionInputs, evaluate
 
@@ -80,26 +84,35 @@ def _classify_event(event: CandidateApplicationEvent) -> str | None:
     return None
 
 
-def _scores_at_event(app: CandidateApplication) -> dict[str, float]:
-    """Use the scores currently cached on the application. We do NOT
-    backfill — if the application was unscored at the time of the
-    event, we operate on whatever is on the row now (best effort).
+def _state_for_event(
+    db: Session, *, event: CandidateApplicationEvent
+) -> LogicalCandidatePolicyState | None:
+    """Resolve the event's exact active logical-role membership.
+
+    ``CandidateApplication.role_id`` is a storage/ATS identity and is not a
+    fallback for an event that lacks logical-role provenance.  Legacy events
+    without ``event.role_id`` therefore cannot safely become policy feedback.
     """
-    out: dict[str, float] = {}
-    if app.role_fit_score_cache_100 is not None:
-        out["role_fit_score"] = float(app.role_fit_score_cache_100)
-    elif (
-        isinstance(app.cv_match_details, dict)
-        and app.cv_match_details.get("role_fit_score") is not None
-    ):
-        out["role_fit_score"] = float(app.cv_match_details["role_fit_score"])
-    if app.pre_screen_score_100 is not None:
-        out["pre_screen_score"] = float(app.pre_screen_score_100)
-    if app.taali_score_cache_100 is not None:
-        out["taali_score"] = float(app.taali_score_cache_100)
-    if app.assessment_score_cache_100 is not None:
-        out["assessment_score"] = float(app.assessment_score_cache_100)
-    return out
+
+    if event.role_id is None:
+        return None
+    candidate_id = (
+        db.query(CandidateApplication.candidate_id)
+        .filter(
+            CandidateApplication.id == int(event.application_id),
+            CandidateApplication.organization_id == int(event.organization_id),
+        )
+        .scalar()
+    )
+    if candidate_id is None:
+        return None
+    rows = read_logical_candidate_policy_states(
+        db,
+        organization_id=int(event.organization_id),
+        role_ids=(int(event.role_id),),
+        candidate_keys=((int(event.role_id), int(candidate_id)),),
+    )
+    return rows[0] if len(rows) == 1 else None
 
 
 def disagreement_for_manual_event(
@@ -115,29 +128,15 @@ def disagreement_for_manual_event(
     if recruiter_kind is None:
         return None
 
-    app = (
-        db.query(CandidateApplication)
-        .filter(CandidateApplication.id == event.application_id)
-        .one_or_none()
-    )
-    if app is None:
-        return None
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == app.role_id,
-            Role.organization_id == app.organization_id,
-        )
-        .one_or_none()
-    )
-    if role is None:
+    state = _state_for_event(db, event=event)
+    if state is None:
         return None
 
     inputs = DecisionInputs(
-        application_id=int(app.id),
-        role_id=int(role.id),
-        organization_id=int(app.organization_id),
-        scores=_scores_at_event(app),
+        application_id=state.application_id,
+        role_id=state.role_id,
+        organization_id=int(event.organization_id),
+        scores=state.decision_scores,
         graph_priors={},
         intent={},
         flags={
@@ -146,8 +145,8 @@ def disagreement_for_manual_event(
             # value (good enough for retune signal).
             "has_pending_assessment": False,
             "no_pending_assessment": True,
-            "assessment_completed": app.assessment_score_cache_100 is not None,
-            "must_have_blocked": must_have_blocked(app),
+            "assessment_completed": state.assessment_score is not None,
+            "must_have_blocked": must_have_blocked(state.application),
         },
         manual_actions=[],  # disable skip — we WANT the policy to opine
     )

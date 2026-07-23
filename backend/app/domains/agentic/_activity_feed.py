@@ -35,6 +35,11 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
+from ...services.decision_membership import apply_live_logical_decision_scope
+from ...services.logical_event_membership import apply_live_logical_event_scope
+from ...services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 
 
 class AgentActivityEntry(BaseModel):
@@ -132,32 +137,44 @@ def build_activity_feed(
     fetch_n = limit
 
     runs_q = db.query(AgentRun).filter(AgentRun.organization_id == organization_id)
-    decisions_q = (
+    decisions_q = apply_live_logical_decision_scope(
+        db,
         db.query(AgentDecision, Candidate)
-        .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(AgentDecision.organization_id == organization_id)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == AgentDecision.application_id,
+        )
+        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id),
+        organization_id=int(organization_id),
     )
-    events_q = (
-        db.query(CandidateApplicationEvent, Candidate, CandidateApplication.role_id)
+    events_q = apply_live_logical_event_scope(
+        db,
+        db.query(
+            CandidateApplicationEvent,
+            Candidate,
+            CandidateApplicationEvent.role_id,
+        )
         .join(
             CandidateApplication,
             CandidateApplication.id == CandidateApplicationEvent.application_id,
         )
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplicationEvent.organization_id == organization_id,
-            CandidateApplicationEvent.actor_type == "agent",
-        )
+        .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .filter(CandidateApplicationEvent.actor_type == "agent"),
+        organization_id=int(organization_id),
     )
-    needs_q = db.query(AgentNeedsInput).filter(
-        AgentNeedsInput.organization_id == organization_id
+    needs_q = apply_live_logical_needs_input_scope(
+        db,
+        db.query(AgentNeedsInput),
+        organization_id=int(organization_id),
     )
 
     if role_id is not None:
         runs_q = runs_q.filter(AgentRun.role_id == role_id)
         decisions_q = decisions_q.filter(AgentDecision.role_id == role_id)
-        events_q = events_q.filter(CandidateApplication.role_id == role_id)
+        # Event.role_id is the immutable logical role that owns the action.
+        # The joined application may belong to an ATS transport/owner role for
+        # a related-role member, so it is only used to resolve the candidate.
+        events_q = events_q.filter(CandidateApplicationEvent.role_id == role_id)
         needs_q = needs_q.filter(AgentNeedsInput.role_id == role_id)
 
     if before is not None:

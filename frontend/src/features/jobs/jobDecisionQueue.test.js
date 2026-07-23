@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  decisionQueueKey,
   indexPendingDecisionsByApplication,
   mergeDecisionQueueReceipts,
   withDecisionReceipt,
@@ -8,32 +9,44 @@ import {
 } from './jobDecisionQueue';
 import { createApprovalReceiptOverlay } from '../../shared/decisions/approvalReceipt';
 
-const source = { id: 42, application_id: 7, status: 'pending' };
-const row = { id: 42, application_id: 7, status: 'processing' };
+const source = { id: 42, role_id: 31, application_id: 7, status: 'pending' };
+const row = { id: 42, role_id: 31, application_id: 7, status: 'processing' };
 const overlay = createApprovalReceiptOverlay(source, row);
 
 describe('job decision approval receipts', () => {
-  it('prefers a processing row when duplicate live decisions share an application', () => {
-    const pending = { id: 601, application_id: 2, status: 'pending' };
-    const processing = { id: 600, application_id: 2, status: 'processing' };
+  it('prefers a processing row for the same logical role application', () => {
+    const pending = { id: 601, role_id: 31, application_id: 2, status: 'pending' };
+    const processing = { id: 600, role_id: 31, application_id: 2, status: 'processing' };
 
-    expect(indexPendingDecisionsByApplication([pending, processing])[2]).toBe(processing);
-    expect(indexPendingDecisionsByApplication([processing, pending])[2]).toBe(processing);
+    expect(indexPendingDecisionsByApplication([pending, processing])['31:2']).toBe(processing);
+    expect(indexPendingDecisionsByApplication([processing, pending])['31:2']).toBe(processing);
+  });
+
+  it('keeps decisions independent when related roles point at the same ATS application', () => {
+    const owner = { id: 601, role_id: 31, application_id: 2, status: 'processing' };
+    const related = { id: 602, role_id: 47, application_id: 2, status: 'pending' };
+
+    expect(indexPendingDecisionsByApplication([owner, related])).toEqual({
+      '31:2': owner,
+      '47:2': related,
+    });
+    expect(decisionQueueKey(47, 2)).toBe('47:2');
   });
 
   it('adds a frozen receipt to both local indexes', () => {
-    expect(withDecisionReceipt({}, overlay)).toEqual({ 7: row });
+    expect(withDecisionReceipt({}, overlay)).toEqual({ '31:7': row });
     expect(withRecordedDecisionReceipt({}, overlay)).toEqual({ 42: overlay });
   });
 
   it('preserves a known receipt only over its source generation', () => {
     expect(mergeDecisionQueueReceipts(
-      { 7: source },
+      { '31:7': source },
       { 42: overlay },
     )).toEqual({
       decisions: {
-        7: {
+        '31:7': {
           id: 42,
+          role_id: 31,
           application_id: 7,
           status: 'processing',
         },
@@ -47,8 +60,8 @@ describe('job decision approval receipts', () => {
       ...source,
       resolution_note: 'Returned to queue: the ATS did not accept the update.',
     };
-    expect(mergeDecisionQueueReceipts({ 7: canonical }, { 42: overlay })).toEqual({
-      decisions: { 7: canonical },
+    expect(mergeDecisionQueueReceipts({ '31:7': canonical }, { 42: overlay })).toEqual({
+      decisions: { '31:7': canonical },
       receipts: {},
     });
   });
@@ -56,16 +69,16 @@ describe('job decision approval receipts', () => {
   it('keeps a receipt over a fresh pending object', () => {
     const canonical = { ...source };
     const freshOverlay = createApprovalReceiptOverlay(source, row);
-    expect(mergeDecisionQueueReceipts({ 7: canonical }, { 42: freshOverlay })).toEqual({
-      decisions: { 7: row },
+    expect(mergeDecisionQueueReceipts({ '31:7': canonical }, { 42: freshOverlay })).toEqual({
+      decisions: { '31:7': row },
       receipts: { 42: freshOverlay },
     });
   });
 
   it('keeps the receipt when the capped poll returns only an actionable sibling', () => {
-    const sibling = { id: 43, application_id: 7, status: 'pending' };
-    expect(mergeDecisionQueueReceipts({ 7: sibling }, { 42: overlay })).toEqual({
-      decisions: { 7: row },
+    const sibling = { id: 43, role_id: 31, application_id: 7, status: 'pending' };
+    expect(mergeDecisionQueueReceipts({ '31:7': sibling }, { 42: overlay })).toEqual({
+      decisions: { '31:7': row },
       receipts: { 42: overlay },
     });
   });
@@ -74,8 +87,8 @@ describe('job decision approval receipts', () => {
     const canonical = { ...row, accepted_at: '2026-07-19T12:00:00Z' };
     const receipt = createApprovalReceiptOverlay(source, row);
 
-    expect(mergeDecisionQueueReceipts({ 7: canonical }, { 42: receipt })).toEqual({
-      decisions: { 7: canonical },
+    expect(mergeDecisionQueueReceipts({ '31:7': canonical }, { 42: receipt })).toEqual({
+      decisions: { '31:7': canonical },
       receipts: { 42: receipt },
     });
   });

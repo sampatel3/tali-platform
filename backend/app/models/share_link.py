@@ -56,6 +56,15 @@ class ShareLink(Base):
         index=True,
         nullable=False,
     )
+    # Logical role whose standing report was shared. Nullable preserves links
+    # minted before role-local related memberships existed. Scoped links are
+    # deleted with the role so they can never fall back to physical owner data.
+    view_role_id = Column(
+        Integer,
+        ForeignKey("roles.id", ondelete="CASCADE"),
+        index=True,
+        nullable=True,
+    )
     created_by_user_id = Column(
         Integer, ForeignKey("users.id"), nullable=True
     )
@@ -82,6 +91,7 @@ class ShareLink(Base):
         backref="share_links",
         lazy="select",
     )
+    view_role = relationship("Role", lazy="select")
 
     @property
     def is_revoked(self) -> bool:

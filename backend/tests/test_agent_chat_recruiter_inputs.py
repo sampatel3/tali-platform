@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from app.agent_chat import recruiter_inputs
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.user import User
 
 
@@ -184,6 +184,46 @@ def test_threshold_accepts_numeric_override_and_applies_canonical_writeback(db):
     )
     assert row.response == {"value": 68}
     assert role.score_threshold == 68
+
+
+def test_threshold_answer_uses_canonical_related_role_reconciler(db, monkeypatch):
+    from app.services import role_threshold_reconciliation as threshold_service
+
+    org, user, role, _ = _world(db)
+    role.role_kind = ROLE_KIND_SISTER
+    role.source = "sister"
+    role.score_threshold = 70
+    row = _request(
+        db,
+        role,
+        kind="threshold_ambiguous",
+        prompt="Choose the independent role threshold",
+        options=[{"value": "90", "label": "Use 90"}],
+    )
+    called: list[int] = []
+
+    def record(_db, *, role, organization_id, threshold=None):
+        assert int(organization_id) == int(org.id)
+        called.append(int(role.id))
+        return {"status": "ok", "role_id": int(role.id)}
+
+    monkeypatch.setattr(
+        threshold_service,
+        "reconcile_role_threshold_decisions",
+        record,
+    )
+
+    recruiter_inputs.answer_recruiter_input(
+        db,
+        role=role,
+        user=user,
+        needs_input_id=int(row.id),
+        value="90",
+        expected_role_version=int(role.version or 1),
+    )
+
+    assert role.score_threshold == 90
+    assert called == [role.id]
 
 
 def test_answer_cannot_cross_the_conversation_role_boundary(db):

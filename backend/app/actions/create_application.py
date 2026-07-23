@@ -32,6 +32,8 @@ from ..domains.assessments_runtime.role_support import (
 )
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
+from ..models.role import ROLE_KIND_SISTER
+from ..models.sister_role_evaluation import SisterRoleEvaluation
 from ..components.assessments.repository import utcnow
 from .types import Actor
 
@@ -114,6 +116,22 @@ def run(
             status_code=400,
             detail="Candidate already has an application for this role",
         )
+    if str(role.role_kind or "") == ROLE_KIND_SISTER:
+        existing_membership = (
+            db.query(SisterRoleEvaluation.id)
+            .filter(
+                SisterRoleEvaluation.organization_id == int(organization_id),
+                SisterRoleEvaluation.role_id == int(role.id),
+                SisterRoleEvaluation.candidate_id == int(candidate.id),
+                SisterRoleEvaluation.deleted_at.is_(None),
+            )
+            .scalar()
+        )
+        if existing_membership is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Candidate already belongs to this role's candidate pool",
+            )
 
     mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(status)
     final_pipeline_stage = pipeline_stage or mapped_stage
@@ -143,6 +161,16 @@ def run(
         reason="Application created",
     )
     refresh_application_score_cache(app, db=db)
+    if str(role.role_kind or "") == ROLE_KIND_SISTER:
+        from ..services.sister_role_service import (
+            create_direct_related_membership,
+        )
+
+        create_direct_related_membership(
+            db,
+            role=role,
+            application=app,
+        )
     return CreateApplicationResult(
         application_id=int(app.id),
         candidate_id=int(candidate.id),

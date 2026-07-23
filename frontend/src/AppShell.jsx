@@ -13,7 +13,7 @@ import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import { JobStatusProvider } from './contexts/JobStatusContext';
 import { assessments as assessmentsApi } from './shared/api/assessmentsClient';
-import { pathForPage } from './app/routing';
+import { createPageNavigator } from './app/pageNavigation';
 import {
   AssessmentLiveRoute,
   CandidateWelcomeRoute,
@@ -312,45 +312,13 @@ function AppContent() {
     }
   }, [isAuthenticated, authLoading, location.hash, location.pathname, location.search, navigate]);
 
-  const navigateToPage = (page, options = {}) => {
-    const nextPath = pathForPage(page, {
-      assessmentToken: Object.prototype.hasOwnProperty.call(options, 'assessmentToken')
-        ? options.assessmentToken
-        : activeAssessmentToken,
-      assessmentIdFromLink: Object.prototype.hasOwnProperty.call(options, 'assessmentIdFromLink')
-        ? options.assessmentIdFromLink
-        : assessmentIdFromLink,
-      candidateApplicationId: Object.prototype.hasOwnProperty.call(options, 'candidateApplicationId')
-        ? options.candidateApplicationId
-        : null,
-      clientId: Object.prototype.hasOwnProperty.call(options, 'clientId')
-        ? options.clientId
-        : null,
-      candidateDetailAssessmentId: Object.prototype.hasOwnProperty.call(options, 'candidateDetailAssessmentId')
-        ? options.candidateDetailAssessmentId
-        : candidateDetailAssessmentId,
-      resetPasswordToken: Object.prototype.hasOwnProperty.call(options, 'resetPasswordToken')
-        ? options.resetPasswordToken
-        : resetPasswordToken,
-      verifyEmailToken: Object.prototype.hasOwnProperty.call(options, 'verifyEmailToken')
-        ? options.verifyEmailToken
-        : verifyEmailToken,
-      roleId: Object.prototype.hasOwnProperty.call(options, 'roleId')
-        ? options.roleId
-        : null,
-      chatInitialQuery: Object.prototype.hasOwnProperty.call(options, 'initialQuery')
-        ? options.initialQuery
-        : (Object.prototype.hasOwnProperty.call(options, 'chatInitialQuery')
-          ? options.chatInitialQuery
-          : null),
-    });
-
-    if (nextPath) {
-      navigate(nextPath, { replace: Boolean(options.replace) });
-    }
-    // Scroll-to-top is handled by <ScrollToTop /> at the router level so
-    // that <Link>-driven navigations also reset scroll.
-  };
+  const navigateToPage = createPageNavigator(navigate, {
+    activeAssessmentToken,
+    assessmentIdFromLink,
+    candidateDetailAssessmentId,
+    resetPasswordToken,
+    verifyEmailToken,
+  });
 
   const handleCandidateStarted = (startData) => {
     setStartedAssessmentData(startData);

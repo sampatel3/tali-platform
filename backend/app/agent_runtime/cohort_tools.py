@@ -18,13 +18,23 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import false, func, or_
 from sqlalchemy.orm import Session
 
+from ..candidate_search.application_role_scope import (
+    application_outcome_expression,
+    pipeline_stage_expression,
+    scope_with_evaluations,
+    score_expression,
+)
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from ..services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 
 
 logger = logging.getLogger("taali.agent_runtime.cohort_tools")
@@ -77,9 +87,12 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
     )
 
     open_questions = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == organization_id,
             AgentNeedsInput.role_id == role_id,
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),
@@ -219,9 +232,12 @@ def _recent_resolved_answers(
     column itself is still null.
     """
     rows = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == organization_id,
             AgentNeedsInput.role_id == role_id,
             AgentNeedsInput.resolved_at.isnot(None),
             AgentNeedsInput.kind.in_(("threshold_ambiguous", "monthly_budget_missing")),
@@ -346,13 +362,26 @@ def find_apps_in_state(
                 AgentDecision.role_id == role_id,
                 AgentDecision.status == "pending",
             )
-            .subquery()
+            .scalar_subquery()
         )
         q = q.filter(~CandidateApplication.id.in_(pending_subq))
     if state == "ready_for_assessment_decision":
-        q = q.order_by(CandidateApplication.cv_match_score.desc().nullslast())
+        role_scope = resolve_candidate_role_scope(
+            db, organization_id=organization_id, role_id=role_id
+        )
+        q = q.order_by(
+            score_expression(role_scope, "cv_match_score").desc().nullslast()
+        )
     elif state == "ready_for_advance_decision":
-        q = q.order_by(CandidateApplication.assessment_score_cache_100.desc().nullslast())
+        role_scope = resolve_candidate_role_scope(
+            db, organization_id=organization_id, role_id=role_id
+        )
+        ordering_score = (
+            score_expression(role_scope, "role_fit_score_cache_100")
+            if role_scope.is_related
+            else CandidateApplication.assessment_score_cache_100
+        )
+        q = q.order_by(ordering_score.desc().nullslast())
 
     if not is_triage:
         rows = q.with_entities(CandidateApplication.id).limit(int(limit)).all()
@@ -447,11 +476,25 @@ def _state_query(
     """Build the SQL query that defines a state. One place so the
     counts and id-lists never drift apart.
     """
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=organization_id,
+        role_id=role_id,
+    )
     base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == organization_id,
-        CandidateApplication.role_id == role_id,
-        CandidateApplication.deleted_at.is_(None),
     )
+    # Ordinary membership is the live application row. Related membership is
+    # the live SisterRoleEvaluation row, so deleting its evidence/ATS transport
+    # must add a restriction—not make the candidate disappear from the agent's
+    # mandatory planning survey.
+    if not role_scope.is_related:
+        base = base.filter(CandidateApplication.deleted_at.is_(None))
+    base = scope_with_evaluations(role_scope, base)
+    stage = pipeline_stage_expression(role_scope)
+    outcome = application_outcome_expression(role_scope)
+    pre_screen_score = score_expression(role_scope, "pre_screen_score_100")
+    cv_match_score = score_expression(role_scope, "cv_match_score")
 
     # A6: explicit exclusion of pipeline_stage='advanced' from every
     # active-pipeline state. ``application_outcome == "open"`` doesn't
@@ -468,46 +511,59 @@ def _state_query(
                 CandidateApplication.cv_text == "",
             ),
             CandidateApplication.cv_file_url.isnot(None),
-            CandidateApplication.application_outcome == "open",
-            CandidateApplication.pipeline_stage != "advanced",
+            outcome == "open",
+            stage != "advanced",
         )
     if state == "needs_pre_screen":
+        if role_scope.is_related:
+            # Related-role scoring has its own SisterRoleEvaluation lifecycle;
+            # never send its source application through the owner-role
+            # pre-screen action merely because a role-local score is pending.
+            return base.filter(false())
         return base.filter(
             CandidateApplication.cv_text.isnot(None),
             CandidateApplication.cv_text != "",
-            CandidateApplication.pre_screen_score_100.is_(None),
-            CandidateApplication.application_outcome == "open",
-            CandidateApplication.pipeline_stage != "advanced",
+            pre_screen_score.is_(None),
+            outcome == "open",
+            stage != "advanced",
         )
     if state == "needs_score":
+        if role_scope.is_related:
+            return base.filter(false())
         return base.filter(
-            CandidateApplication.pre_screen_score_100.isnot(None),
-            CandidateApplication.pre_screen_score_100 >= 50,
-            CandidateApplication.cv_match_score.is_(None),
-            CandidateApplication.application_outcome == "open",
-            CandidateApplication.pipeline_stage != "advanced",
+            pre_screen_score.isnot(None),
+            pre_screen_score >= 50,
+            cv_match_score.is_(None),
+            outcome == "open",
+            stage != "advanced",
         )
     if state == "ready_for_assessment_decision":
         return base.filter(
-            CandidateApplication.cv_match_score.isnot(None),
-            CandidateApplication.pipeline_stage.in_(["applied", "review"]),
-            CandidateApplication.application_outcome == "open",
+            cv_match_score.isnot(None),
+            stage.in_(["applied"] if role_scope.is_related else ["applied", "review"]),
+            outcome == "open",
         )
     if state == "in_assessment":
         return base.filter(
-            CandidateApplication.pipeline_stage == "in_assessment",
-            CandidateApplication.application_outcome == "open",
+            stage == "in_assessment",
+            outcome == "open",
         )
     if state == "ready_for_advance_decision":
+        if role_scope.is_related:
+            return base.filter(
+                cv_match_score.isnot(None),
+                stage == "review",
+                outcome == "open",
+            )
         return base.filter(
             CandidateApplication.assessment_score_cache_100.isnot(None),
-            CandidateApplication.pipeline_stage.in_(["in_assessment", "review"]),
-            CandidateApplication.application_outcome == "open",
+            stage.in_(["in_assessment", "review"]),
+            outcome == "open",
         )
     if state == "rejected":
-        return base.filter(CandidateApplication.application_outcome == "rejected")
+        return base.filter(outcome == "rejected")
     if state == "hired":
-        return base.filter(CandidateApplication.application_outcome == "hired")
+        return base.filter(outcome == "hired")
     return None
 
 
@@ -528,9 +584,12 @@ def read_pending_recruiter_inputs(
     Limits to 25 most recent rows; older resolved rows are noise.
     """
     rows = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == organization_id,
             AgentNeedsInput.role_id == role_id,
         )
         .order_by(AgentNeedsInput.created_at.desc())

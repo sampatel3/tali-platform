@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
@@ -176,6 +176,66 @@ def test_export_is_org_scoped(client, db):
     assert resp.status_code == 200, resp.text
     app_ids = {r["application_id"] for r in resp.json()["rows"]}
     assert app_ids == {app_a.id}
+
+
+def test_export_rejects_cross_tenant_user_and_feedback_pointers(client, db):
+    headers_a, email_a = auth_headers(
+        client,
+        organization_name="Audit pointer org A",
+    )
+    org_a = _org_id(db, email_a)
+    role_a = Role(organization_id=org_a, name="A", source="manual")
+    db.add(role_a)
+    db.flush()
+    app_a = _app(db, org_a, role_a.id, "audit-a@x.test")
+    decision_a = _decision(db, org_a, role_a.id, app_a.id, status="overridden")
+    db.commit()
+
+    _, email_b = auth_headers(
+        client,
+        organization_name="Audit pointer org B",
+    )
+    org_b = _org_id(db, email_b)
+    user_b = db.query(User).filter(User.email == email_b).one()
+    role_b = Role(organization_id=org_b, name="B", source="manual")
+    db.add(role_b)
+    db.flush()
+    app_b = _app(db, org_b, role_b.id, "audit-b@x.test")
+    decision_b = _decision(db, org_b, role_b.id, app_b.id, status="overridden")
+    feedback_b = DecisionFeedback(
+        decision_id=int(decision_b.id),
+        reviewer_id=int(user_b.id),
+        organization_id=org_b,
+        role_id=int(role_b.id),
+        failure_mode="policy_violation",
+        correction_text="foreign private correction",
+        scope="decision",
+        attributed_to="policy_combination",
+    )
+    db.add(feedback_b)
+    db.flush()
+
+    # Simulate a corrupt import/legacy pointer. Global foreign keys accept both
+    # ids, so the export joins must independently enforce tenant and ownership.
+    decision_a.resolved_by_user_id = int(user_b.id)
+    decision_a.feedback_id = int(feedback_b.id)
+    db.commit()
+
+    response = client.get(
+        "/api/v1/agent-decisions/export?format=json",
+        headers=headers_a,
+    )
+    assert response.status_code == 200, response.text
+    rows = response.json()["rows"]
+    assert len(rows) == 1
+    assert rows[0]["id"] == int(decision_a.id)
+    assert rows[0]["resolved_by_email"] is None
+    assert rows[0]["feedback_failure_mode"] is None
+    assert rows[0]["feedback_attributed_to"] is None
+    assert rows[0]["feedback_correction_text"] is None
+    assert rows[0]["feedback_cosigned"] is None
+    assert email_b not in response.text
+    assert "foreign private correction" not in response.text
 
 
 def test_export_date_filter(client, db):

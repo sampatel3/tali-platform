@@ -32,7 +32,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..models.candidate_application import CandidateApplication
+from ..candidate_search.logical_policy_state import (
+    read_logical_candidate_policy_metrics,
+)
 from ..models.role import Role
 
 
@@ -92,26 +94,21 @@ def _advanced_scores(db: Session, *, role: Role) -> list[float]:
     reached an interview stage or hire outcome. Falls back to
     ``cv_match_score`` when pre-screen score is missing.
     """
-    rows = (
-        db.query(
-            CandidateApplication.pre_screen_score_100,
-            CandidateApplication.cv_match_score,
-        )
-        .filter(
-            CandidateApplication.role_id == role.id,
-            CandidateApplication.organization_id == role.organization_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .filter(
-            (CandidateApplication.application_outcome == "hired")
-            | CandidateApplication.pipeline_stage.in_(
-                ("invited", "in_assessment", "review", "advanced")
-            )
-        )
-        .all()
+    states = read_logical_candidate_policy_metrics(
+        db,
+        organization_id=int(role.organization_id),
+        role_ids=(int(role.id),),
     )
     out: list[float] = []
-    for pre_score, match_score in rows:
+    progressed_stages = {"invited", "in_assessment", "review", "advanced"}
+    for state in states:
+        if (
+            state.application_outcome != "hired"
+            and state.pipeline_stage not in progressed_stages
+        ):
+            continue
+        pre_score = state.pre_screen_score
+        match_score = state.cv_match_score
         if pre_score is not None:
             out.append(float(pre_score))
         elif match_score is not None:
@@ -121,17 +118,16 @@ def _advanced_scores(db: Session, *, role: Role) -> list[float]:
 
 def _scored_distribution(db: Session, *, role: Role) -> list[float]:
     """All pre-screen scores for the role's currently-scored pool."""
-    rows = (
-        db.query(CandidateApplication.pre_screen_score_100)
-        .filter(
-            CandidateApplication.role_id == role.id,
-            CandidateApplication.organization_id == role.organization_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.pre_screen_score_100.isnot(None),
-        )
-        .all()
+    states = read_logical_candidate_policy_metrics(
+        db,
+        organization_id=int(role.organization_id),
+        role_ids=(int(role.id),),
     )
-    return [float(r[0]) for r in rows if r[0] is not None]
+    return [
+        float(state.pre_screen_score)
+        for state in states
+        if state.pre_screen_score is not None
+    ]
 
 
 def _percentile(values: list[float], pct: int) -> float:
@@ -201,20 +197,21 @@ def compute_recommended_threshold(
 
 
 def _org_scored_role_fit(db: Session, *, organization_id: int) -> list[float]:
-    """Role-fit (CV-match) scores of EVERY scored candidate in the org,
-    across all roles. This org-wide pool defines the general, absolute
-    quality bar — it is deliberately NOT filtered to one role, so the bar
-    is not tailored to any single (possibly weak) role's pool."""
-    rows = (
-        db.query(CandidateApplication.cv_match_score)
-        .filter(
-            CandidateApplication.organization_id == organization_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.cv_match_score.isnot(None),
-        )
-        .all()
+    """Role-fit scores of every scored logical membership in the organization.
+
+    Owner and related memberships for one candidate remain independent rows
+    with independent scores. This pool defines the general, absolute quality
+    bar and is deliberately not filtered to one role.
+    """
+    states = read_logical_candidate_policy_metrics(
+        db,
+        organization_id=int(organization_id),
     )
-    return [float(r[0]) for r in rows if r[0] is not None]
+    return [
+        float(state.cv_match_score)
+        for state in states
+        if state.cv_match_score is not None
+    ]
 
 
 def compute_role_fit_send_threshold(

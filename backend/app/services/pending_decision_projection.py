@@ -8,6 +8,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
+from ..models.candidate_application import CandidateApplication
 
 
 def pending_decision_map(
@@ -17,27 +18,38 @@ def pending_decision_map(
     role_id: int,
     statuses: tuple[str, ...] = ("pending",),
 ) -> dict[int, dict]:
-    """Return each application's latest visible decision for exactly one role.
+    """Return each candidate's latest visible decision keyed to the shown app.
 
-    Related roles reuse the owner's application ids, so application id alone
-    is not a decision identity. The role filter prevents owner and sibling
-    pages from rendering one another's recommendations.
+    Physical application id is not decision identity. The role filter prevents
+    owner and sibling pages from rendering one another's recommendations, while
+    candidate identity carries a card across its source/transport projection.
     """
 
     if not application_ids:
+        return {}
+    application_by_candidate = {
+        int(candidate_id): int(application_id)
+        for application_id, candidate_id in db.query(
+            CandidateApplication.id,
+            CandidateApplication.candidate_id,
+        )
+        .filter(CandidateApplication.id.in_(application_ids))
+        .all()
+    }
+    if not application_by_candidate:
         return {}
     now = datetime.now(timezone.utc)
     row_num = (
         func.row_number()
         .over(
-            partition_by=AgentDecision.application_id,
+            partition_by=AgentDecision.candidate_id,
             order_by=(AgentDecision.created_at.desc(), AgentDecision.id.desc()),
         )
         .label("rn")
     )
     ranked = (
         db.query(
-            AgentDecision.application_id.label("application_id"),
+            AgentDecision.candidate_id.label("candidate_id"),
             AgentDecision.id.label("id"),
             AgentDecision.decision_type.label("decision_type"),
             AgentDecision.recommendation.label("recommendation"),
@@ -46,7 +58,7 @@ def pending_decision_map(
         )
         .filter(
             AgentDecision.role_id == int(role_id),
-            AgentDecision.application_id.in_(application_ids),
+            AgentDecision.candidate_id.in_(application_by_candidate),
             AgentDecision.status.in_(statuses),
             or_(
                 AgentDecision.snoozed_until.is_(None),
@@ -57,7 +69,7 @@ def pending_decision_map(
     )
     rows = (
         db.query(
-            ranked.c.application_id,
+            ranked.c.candidate_id,
             ranked.c.id,
             ranked.c.decision_type,
             ranked.c.recommendation,
@@ -67,13 +79,13 @@ def pending_decision_map(
         .all()
     )
     return {
-        int(app_id): {
+        application_by_candidate[int(candidate_id)]: {
             "id": int(decision_id),
             "decision_type": decision_type,
             "recommendation": recommendation,
             "status": status,
         }
-        for app_id, decision_id, decision_type, recommendation, status in rows
+        for candidate_id, decision_id, decision_type, recommendation, status in rows
     }
 
 

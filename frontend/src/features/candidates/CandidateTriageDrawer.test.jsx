@@ -12,9 +12,13 @@ describe('candidateReportHref', () => {
     expect(candidateReportHref({ id: 2393 }, undefined)).toBe('/candidates/2393');
   });
 
-  it('includes ?from=jobs/<id> for a real role id', () => {
-    expect(candidateReportHref({ id: 2393 }, 31)).toBe('/candidates/2393?from=jobs/31');
-    expect(candidateReportHref({ id: 2393 }, '31')).toBe('/candidates/2393?from=jobs/31');
+  it('keeps breadcrumb source and logical role scope as separate query parameters', () => {
+    expect(candidateReportHref({ id: 2393 }, 31, 31)).toBe(
+      '/candidates/2393?from=jobs/31&view_role_id=31',
+    );
+    expect(candidateReportHref({ id: 2393 }, '31', '42')).toBe(
+      '/candidates/2393?from=jobs/31&view_role_id=42',
+    );
   });
 
   it('falls back to /jobs without an application id', () => {

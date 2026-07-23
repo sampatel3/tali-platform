@@ -23,8 +23,8 @@ own durable ``graph_episode_outbox`` path; this complements it.)
 Registered in ``app.tasks.__init__`` so the worker doesn't ``NotRegistered``
 them — the same trap documented for the other eager-imported tasks.
 
-Each task resolves the owning application role before provider work, then
-hard-admits every Graphiti Anthropic/Voyage call. Provider, budget, and
+Each task resolves first-class logical-role provenance before provider work,
+then hard-admits every Graphiti Anthropic/Voyage call. Provider, budget, and
 metering outages use uncapped Celery retry with bounded backoff; missing rows
 retain a small bounded retry for rolling-deploy and post-commit deletion races.
 """
@@ -34,6 +34,7 @@ from __future__ import annotations
 import logging
 
 from .celery_app import celery_app
+from ..candidate_graph.event_identity import logical_event_role_id
 from ..platform.database import SessionLocal
 
 logger = logging.getLogger("taali.tasks.graph_ingest")
@@ -226,8 +227,7 @@ def sync_event_to_graph(self, event_id: int) -> dict:
             if self.request.retries < _NOT_FOUND_MAX_RETRIES:
                 raise self.retry(countdown=_NOT_FOUND_RETRY_COUNTDOWN)
             return {"status": "skipped", "reason": "event_not_found", "id": event_id}
-        application = getattr(ev, "application", None)
-        role_id = getattr(application, "role_id", None)
+        role_id = logical_event_role_id(ev)
         if role_id is None:
             return {
                 "status": "skipped",

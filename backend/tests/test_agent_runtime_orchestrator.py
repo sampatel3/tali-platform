@@ -216,6 +216,15 @@ def test_run_cycle_calls_agent_run_complete_immediately(db):
     metering = client.messages.create.call_args.kwargs["metering"]
     assert metering["feature"] == "agent_autonomous"
     assert metering["require_role_authority"] is True
+    assert {
+        "search_role_candidates",
+        "get_role_candidate",
+        "list_candidate_actions",
+        "list_recent_agent_decisions",
+    } <= {
+        str(tool["name"])
+        for tool in client.messages.create.call_args.kwargs["tools"]
+    }
 
 
 def test_run_cycle_records_tool_call_then_finishes(db):

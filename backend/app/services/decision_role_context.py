@@ -1,10 +1,9 @@
-"""Role-local presentation and freshness for decisions over a shared ATS row.
+"""Role-local presentation and freshness for related-role decisions.
 
-Candidate identity and the provider application are intentionally shared across
-related roles. Scoring output is not. This module is the boundary used by the
-Decision Hub: once ``decision.role_id`` differs from ``application.role_id``,
-score-derived fields may come only from that role's ``SisterRoleEvaluation``
-or from immutable evidence frozen on the decision.
+Related-role membership is explicit and may use either an owner-role evidence
+row or a direct application. Score and funnel state always come from that
+role's ``SisterRoleEvaluation``; an optional ATS application is transport and
+restriction context only.
 """
 
 from __future__ import annotations
@@ -17,8 +16,13 @@ from typing import Any, Iterable
 
 from sqlalchemy.orm import Session
 
+from ..candidate_search.assessment_score_truth import (
+    assessment_taali_score_100,
+    latest_completed_role_assessment,
+    latest_role_assessment,
+    role_assessment_truth,
+)
 from ..cv_matching.holistic import is_engine_outdated, resolve_engine_version
-from ..domains.assessments_runtime.role_support import is_resolved
 from ..models.agent_decision import AgentDecision
 from ..models.assessment import Assessment, AssessmentStatus
 from ..models.candidate_application import CandidateApplication
@@ -40,6 +44,7 @@ from .decision_staleness import (
     criteria_content_fingerprint,
 )
 from .decision_policy_generation import policy_generation_drift
+from .related_role_application_runtime import role_application_is_resolved
 
 
 _IN_FLIGHT_STATUSES = {
@@ -80,35 +85,30 @@ def _application_cv_text(application: CandidateApplication | None) -> str:
     return str(getattr(candidate, "cv_text", None) or "").strip()
 
 
-def _assessment_score(assessment: Assessment | None) -> float | None:
-    if assessment is None:
-        return None
-    for value in (
-        assessment.taali_score,
-        assessment.final_score,
-        assessment.assessment_score,
-    ):
-        score = _first_score(value)
-        if score is not None:
-            return max(0.0, min(100.0, score))
-    legacy = _first_score(assessment.score)
-    if legacy is not None:
-        return max(0.0, min(100.0, legacy * 10.0))
-    return None
-
-
 def is_cross_role_decision(
     decision: AgentDecision,
     application: CandidateApplication | None,
 ) -> bool:
+    if application is None:
+        return False
+    if int(decision.role_id) != int(application.role_id):
+        return True
+    role = getattr(decision, "role", None) or getattr(application, "role", None)
+    if role is not None:
+        from .logical_role_batch_operations import is_related_role
+
+        if is_related_role(role):
+            return True
+    evidence = decision.evidence if isinstance(decision.evidence, dict) else {}
     return bool(
-        application is not None
-        and int(decision.role_id) != int(application.role_id)
+        evidence.get("related_role_id")
+        or evidence.get("related_role_membership_id")
+        or evidence.get("shared_ats_application")
     )
 
 
 def effective_workable_job_id(role: Role | None) -> str | None:
-    """Return the one ATS job backing a role's shared application pool."""
+    """Return the ATS job available as this role's optional write transport."""
 
     if role is None:
         return None
@@ -139,6 +139,7 @@ def load_related_evaluation(
             SisterRoleEvaluation.role_id == int(decision.role_id),
             SisterRoleEvaluation.source_application_id
             == int(decision.application_id),
+            SisterRoleEvaluation.deleted_at.is_(None),
         )
         .one_or_none()
     )
@@ -172,6 +173,7 @@ def load_related_evaluation_map(
             SisterRoleEvaluation.organization_id.in_(organization_ids),
             SisterRoleEvaluation.role_id.in_(role_ids),
             SisterRoleEvaluation.source_application_id.in_(application_ids),
+            SisterRoleEvaluation.deleted_at.is_(None),
         )
         .all()
     )
@@ -188,44 +190,115 @@ def load_related_assessment_map(
     decisions: Iterable[AgentDecision],
     applications_by_id: dict[int, CandidateApplication],
 ) -> dict[int, Assessment | None]:
-    """Batch-load the assessment frozen on each related-role decision.
+    """Batch-load current assessment truth for each related-role decision.
 
-    The map deliberately includes ``None`` entries for cross-role decisions
-    without a valid assessment row. Callers can therefore distinguish "already
-    batch-checked and missing" from "not loaded" and avoid an N+1 fallback.
+    Assessment identity is ``(organization, logical role, candidate)``.
+    ``application_id`` is transport metadata and may legitimately point at an
+    ATS row different from the role membership's source evidence row.
     """
 
-    decision_assessment_ids: dict[int, int | None] = {}
-    organization_ids: set[int] = set()
+    decision_identities: dict[int, tuple[int, int, int, bool]] = {}
     for decision in decisions:
         application = applications_by_id.get(int(decision.application_id))
         if not is_cross_role_decision(decision, application):
             continue
         evidence = decision.evidence if isinstance(decision.evidence, dict) else {}
-        decision_assessment_ids[int(decision.id)] = _safe_int(
-            evidence.get("assessment_id")
+        if _safe_int(evidence.get("assessment_id")) is None or application is None:
+            decision_identities[int(decision.id)] = (
+                int(decision.organization_id),
+                int(decision.role_id),
+                int(getattr(decision, "candidate_id", 0) or 0),
+                True,
+            )
+            continue
+        decision_identities[int(decision.id)] = (
+            int(decision.organization_id),
+            int(decision.role_id),
+            int(application.candidate_id),
+            str(decision.decision_type) != "resend_assessment_invite",
         )
-        organization_ids.add(int(decision.organization_id))
-
-    assessment_ids = {
-        assessment_id
-        for assessment_id in decision_assessment_ids.values()
-        if assessment_id is not None
+    valid_identities = {
+        (organization_id, role_id, candidate_id)
+        for organization_id, role_id, candidate_id, _ in decision_identities.values()
+        if candidate_id > 0
     }
-    assessments_by_id: dict[int, Assessment] = {}
-    if assessment_ids:
-        assessments_by_id = {
-            int(assessment.id): assessment
-            for assessment in db.query(Assessment)
+    latest_any: dict[tuple[int, int, int], Assessment] = {}
+    latest_completed: dict[tuple[int, int, int], Assessment] = {}
+    if valid_identities:
+        organization_ids = {item[0] for item in valid_identities}
+        role_ids = {item[1] for item in valid_identities}
+        candidate_ids = {item[2] for item in valid_identities}
+        completed_rows = (
+            db.query(Assessment)
             .filter(
-                Assessment.id.in_(assessment_ids),
                 Assessment.organization_id.in_(organization_ids),
+                Assessment.role_id.in_(role_ids),
+                Assessment.candidate_id.in_(candidate_ids),
+                Assessment.is_voided.is_(False),
+                Assessment.status.in_(
+                    (
+                        AssessmentStatus.COMPLETED,
+                        AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+                    )
+                ),
+            )
+            .order_by(
+                Assessment.organization_id.asc(),
+                Assessment.role_id.asc(),
+                Assessment.candidate_id.asc(),
+                Assessment.completed_at.desc().nullslast(),
+                Assessment.created_at.desc().nullslast(),
+                Assessment.id.desc(),
             )
             .all()
-        }
+        )
+        for row in completed_rows:
+            key = (
+                int(row.organization_id),
+                int(row.role_id),
+                int(row.candidate_id),
+            )
+            if key not in valid_identities:
+                continue
+            latest_completed.setdefault(key, row)
+        if any(not item[3] for item in decision_identities.values()):
+            any_rows = (
+                db.query(Assessment)
+                .filter(
+                    Assessment.organization_id.in_(organization_ids),
+                    Assessment.role_id.in_(role_ids),
+                    Assessment.candidate_id.in_(candidate_ids),
+                    Assessment.is_voided.is_(False),
+                )
+                .order_by(
+                    Assessment.organization_id.asc(),
+                    Assessment.role_id.asc(),
+                    Assessment.candidate_id.asc(),
+                    Assessment.created_at.desc().nullslast(),
+                    Assessment.id.desc(),
+                )
+                .all()
+            )
+            for row in any_rows:
+                key = (
+                    int(row.organization_id),
+                    int(row.role_id),
+                    int(row.candidate_id),
+                )
+                if key in valid_identities:
+                    latest_any.setdefault(key, row)
     return {
-        decision_id: assessments_by_id.get(assessment_id)
-        for decision_id, assessment_id in decision_assessment_ids.items()
+        decision_id: (
+            latest_completed.get((organization_id, role_id, candidate_id))
+            if completed_only
+            else latest_any.get((organization_id, role_id, candidate_id))
+        )
+        for decision_id, (
+            organization_id,
+            role_id,
+            candidate_id,
+            completed_only,
+        ) in decision_identities.items()
     }
 
 
@@ -445,7 +518,11 @@ def related_decision_staleness(
 
     if application is None:
         application = db.get(CandidateApplication, int(decision.application_id))
-    if application is not None and is_resolved(application):
+    if application is not None and role_application_is_resolved(
+        db,
+        role_id=int(decision.role_id),
+        application=application,
+    ):
         return StalenessReport(is_stale=False)
     if role is None:
         role = (
@@ -616,36 +693,84 @@ def related_decision_staleness(
 
     assessment_id = _safe_int(evidence.get("assessment_id"))
     if assessment_id is not None:
+        candidate_id = _safe_int(
+            getattr(application, "candidate_id", None)
+            or getattr(decision, "candidate_id", None)
+        )
+        completed_assessment_expected = (
+            str(decision.decision_type) != "resend_assessment_invite"
+        )
         if assessment is _ASSESSMENT_NOT_LOADED:
-            assessment = (
-                db.query(Assessment)
-                .filter(
-                    Assessment.id == assessment_id,
-                    Assessment.organization_id == int(decision.organization_id),
-                    Assessment.role_id == int(decision.role_id),
-                    Assessment.application_id == int(decision.application_id),
+            if candidate_id is None:
+                assessment = None
+            elif completed_assessment_expected:
+                assessment = latest_completed_role_assessment(
+                    db,
+                    organization_id=int(decision.organization_id),
+                    role_id=int(decision.role_id),
+                    candidate_id=candidate_id,
                 )
-                .one_or_none()
-            )
+            else:
+                assessment = latest_role_assessment(
+                    db,
+                    organization_id=int(decision.organization_id),
+                    role_id=int(decision.role_id),
+                    candidate_id=candidate_id,
+                )
         valid_assessment = bool(
             isinstance(assessment, Assessment)
             and int(assessment.id) == assessment_id
+            and int(assessment.organization_id or 0)
+            == int(decision.organization_id)
             and int(assessment.role_id or 0) == int(decision.role_id)
-            and int(assessment.application_id or 0) == int(decision.application_id)
+            and candidate_id is not None
+            and int(assessment.candidate_id or 0) == candidate_id
             and not bool(assessment.is_voided)
-            and _status(assessment.status) in _ASSESSMENT_TERMINAL_STATUSES
+            and (
+                not completed_assessment_expected
+                or _status(assessment.status) in _ASSESSMENT_TERMINAL_STATUSES
+            )
         )
         if not valid_assessment:
             add_reason("assessment_changed")
         else:
-            frozen_assessment_score = _first_score(evidence.get("assessment_score"))
-            current_assessment_score = _assessment_score(assessment)
-            if (
+            truth = (
+                role_assessment_truth(assessment)
+                if completed_assessment_expected
+                else None
+            )
+            if truth is not None and truth.grading_pending:
+                add_reason("assessment_grading_incomplete")
+                details["assessment_grading_incomplete"] = {
+                    "state": truth.grading_state,
+                    "scoring_partial": truth.scoring_partial,
+                    "scoring_failed": truth.scoring_failed,
+                }
+            frozen_assessment_score = _first_score(
+                evidence.get("assessment_taali_score"),
+                evidence.get("taali_score"),
+                # Compatibility with decisions emitted before TAALI and
+                # technical-assessment evidence were stored separately.
+                evidence.get("assessment_score"),
+                fingerprint.get("taali_score_at_emit"),
+            )
+            current_assessment_score = (
+                assessment_taali_score_100(assessment)
+                if completed_assessment_expected
+                else None
+            )
+            score_became_unavailable = (
+                frozen_assessment_score is not None
+                and current_assessment_score is None
+                and completed_assessment_expected
+            )
+            score_drifted = (
                 frozen_assessment_score is not None
                 and current_assessment_score is not None
                 and abs(frozen_assessment_score - current_assessment_score)
                 >= SCORE_DRIFT_BAND
-            ):
+            )
+            if score_became_unavailable or score_drifted:
                 add_reason("assessment_score_shifted")
                 details["assessment_score_shifted"] = {
                     "at_emit": frozen_assessment_score,

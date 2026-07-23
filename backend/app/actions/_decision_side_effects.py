@@ -23,10 +23,16 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from ..domains.assessments_runtime.pipeline_service import append_application_event
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.sister_role_evaluation import SisterRoleEvaluation
+from ..services.decision_resolution_provenance import record_resolution_effect
+from ..services.related_role_application_runtime import (
+    related_role_evaluation_for_application,
+)
 from ..services.workable_actions_service import WorkableWritebackError
 from ._workable_decision_summary import (
     post_decision_summary_to_workable,
@@ -116,22 +122,47 @@ def verdict_for(
     return VERDICT_BY_DECISION_TYPE.get(decision_type or "")
 
 
-def _operational_role(
+def _related_ats_transport(
     db: Session,
     *,
     app: CandidateApplication,
     decision_role: Optional[Role],
-) -> Optional[Role]:
+) -> tuple[
+    CandidateApplication | None,
+    SisterRoleEvaluation | None,
+    list[str],
+]:
+    """Resolve the explicit ATS transport for one logical role application.
+
+    Ordinary roles write through their own application. Related roles may use
+    a different evidence/application row, so only the membership's first-class
+    ``ats_application`` relationship can authorize transport. No owner-role or
+    role-id inference is permitted here.
+    """
+
     if (
         decision_role is None
         or str(decision_role.role_kind or "") != ROLE_KIND_SISTER
     ):
-        return decision_role
-    owner_id = int(decision_role.ats_owner_role_id or app.role_id or 0)
-    owner = db.get(Role, owner_id) if owner_id else None
-    if owner is None or int(owner.organization_id) != int(app.organization_id):
-        return decision_role
-    return owner
+        return app, None, []
+    evaluation = related_role_evaluation_for_application(
+        db,
+        role_id=int(decision_role.id),
+        application=app,
+    )
+    if evaluation is None:
+        return None, None, ["related_role_membership_missing"]
+    transport = evaluation.ats_application
+    if transport is None:
+        return None, evaluation, ["ats_application_unlinked"]
+    errors: list[str] = []
+    if int(transport.organization_id) != int(app.organization_id):
+        errors.append("ats_application_wrong_organization")
+    if int(transport.candidate_id) != int(app.candidate_id):
+        errors.append("ats_application_wrong_candidate")
+    if getattr(transport, "deleted_at", None) is not None:
+        errors.append("ats_application_deleted")
+    return (None if errors else transport), evaluation, errors
 
 
 def _workable_stage_display_name(role: Optional[Role], value: Optional[str]) -> Optional[str]:
@@ -219,37 +250,109 @@ def apply_decision_side_effects(
     )
     movement_confirmed = False
     moved_to: Optional[str] = None
+    transport_app: Optional[CandidateApplication] = app
     writeback_role: Optional[Role] = None
+    action_event_metadata = {
+        "acting_role_id": int(decision.role_id),
+        "agent_decision_id": int(decision.id),
+        "workable_target_stage": workable_target_stage,
+    }
 
     # 1. Workable stage move (advance) or disqualify (reject).
     if app is not None:
         if verdict in ("advanced", "skip_advanced"):
-            writeback_role = _operational_role(
+            transport_app, evaluation, transport_errors = _related_ats_transport(
                 db,
                 app=app,
                 decision_role=role,
             )
-            try:
-                moved = try_workable_advance(
-                    db,
-                    actor,
-                    app=app,
-                    org=org,
-                    role=writeback_role,
-                    target_stage=workable_target_stage,
-                    reason=(note or "").strip()
-                    or "Advanced by recruiter (decision resolution)",
+            if transport_app is not None:
+                action_event_metadata["ats_application_id"] = int(transport_app.id)
+                writeback_role = (
+                    db.get(Role, int(transport_app.role_id))
+                    if transport_app.role_id is not None
+                    else None
                 )
-                movement_confirmed = moved
-            except WorkableWritebackError:
-                # strict (batch) path — propagate so the batch can re-queue.
-                raise
-            except Exception:  # pragma: no cover — defensive
-                logger.warning(
-                    "workable advance raised for decision_id=%s",
-                    getattr(decision, "id", None),
-                )
-        elif verdict == "rejected" and reject_notify:
+            elif role is None or str(role.role_kind or "") != ROLE_KIND_SISTER:
+                writeback_role = role
+            ats_write_allowed = True
+            if role is not None and str(role.role_kind or "") == ROLE_KIND_SISTER:
+                if evaluation is not None:
+                    from ..services.sister_role_service import (
+                        related_role_action_restrictions,
+                    )
+
+                    restrictions = related_role_action_restrictions(
+                        role=role,
+                        evaluation=evaluation,
+                        source_application=app,
+                    )
+                    restriction_codes = list(restrictions.get("codes") or [])
+                    restriction_codes.extend(transport_errors)
+                    ats_write_allowed = bool(
+                        transport_app is not None
+                        and restrictions.get("can_advance_in_ats")
+                        and not transport_errors
+                    )
+                else:
+                    restriction_codes = transport_errors or [
+                        "related_role_membership_missing"
+                    ]
+                    ats_write_allowed = False
+                if not ats_write_allowed:
+                    append_application_event(
+                        db,
+                        app=app,
+                        role_id=int(role.id),
+                        agent_decision_id=int(decision.id),
+                        event_type="ats_writeback_restricted",
+                        actor_type=actor.type,
+                        actor_id=actor.event_actor_id,
+                        reason=(
+                            "Related-role advance kept local because its explicit "
+                            "ATS transport is unavailable or restricted"
+                        ),
+                        metadata={
+                            **action_event_metadata,
+                            "restriction_codes": sorted(set(restriction_codes)),
+                            "action": "advance",
+                        },
+                        target_stage=workable_target_stage,
+                        effect_status="skipped",
+                    )
+            if ats_write_allowed:
+                assert transport_app is not None
+                try:
+                    moved = try_workable_advance(
+                        db,
+                        actor,
+                        app=transport_app,
+                        event_app=app,
+                        event_role_id=int(decision.role_id),
+                        org=org,
+                        role=writeback_role,
+                        target_stage=workable_target_stage,
+                        reason=(note or "").strip()
+                        or "Advanced by recruiter (decision resolution)",
+                        event_metadata=action_event_metadata,
+                    )
+                    movement_confirmed = moved
+                except WorkableWritebackError:
+                    # strict (batch) path — propagate so the batch can re-queue.
+                    raise
+                except Exception:  # pragma: no cover — defensive
+                    logger.warning(
+                        "workable advance raised for decision_id=%s",
+                        getattr(decision, "id", None),
+                    )
+        elif (
+            verdict == "rejected"
+            and reject_notify
+            and not (
+                role is not None
+                and str(role.role_kind or "") == ROLE_KIND_SISTER
+            )
+        ):
             try:
                 from .reject_application import notify_rejection
 
@@ -259,7 +362,11 @@ def apply_decision_side_effects(
                 # text appears twice in its activity feed. Direct/manual
                 # rejection paths still pass their reason to the notifier.
                 movement_confirmed = notify_rejection(
-                    db, app=app, actor=actor, reason=None
+                    db,
+                    app=app,
+                    actor=actor,
+                    reason=None,
+                    event_metadata=action_event_metadata,
                 )
             except WorkableWritebackError:
                 # strict (batch) path — propagate so the batch can re-queue.
@@ -269,6 +376,35 @@ def apply_decision_side_effects(
                     "rejection notify raised for decision_id=%s",
                     getattr(decision, "id", None),
                 )
+
+    related_local_reject = bool(
+        verdict == "rejected"
+        and role is not None
+        and str(role.role_kind or "") == ROLE_KIND_SISTER
+    )
+    if related_local_reject:
+        record_resolution_effect(
+            decision,
+            effect_status="local_confirmed",
+            provider_movement_confirmed=False,
+        )
+    elif verdict in ("advanced", "skip_advanced", "rejected"):
+        record_resolution_effect(
+            decision,
+            effect_status=(
+                "confirmed"
+                if movement_confirmed
+                else (
+                    "local_confirmed"
+                    if role is not None
+                    and str(role.role_kind or "") == ROLE_KIND_SISTER
+                    else "unconfirmed"
+                )
+            ),
+            provider_movement_confirmed=movement_confirmed,
+        )
+    else:
+        record_resolution_effect(decision, effect_status="confirmed")
 
     movement_checkpointed = bool(
         movement_confirmed and commit_after_confirmed_movement
@@ -292,7 +428,7 @@ def apply_decision_side_effects(
                 with db.begin_nested():
                     moved_to = _confirmed_movement_destination(
                         db,
-                        app=app,
+                        app=transport_app or app,
                         org=org,
                         role=writeback_role,
                         requested_workable_stage=workable_target_stage,
@@ -300,7 +436,7 @@ def apply_decision_side_effects(
             else:
                 moved_to = _confirmed_movement_destination(
                     db,
-                    app=app,
+                    app=transport_app or app,
                     org=org,
                     role=writeback_role,
                     requested_workable_stage=workable_target_stage,
@@ -314,7 +450,7 @@ def apply_decision_side_effects(
                 _discard_checkpointed_optional_work(db)
 
     # 2. Provider-neutral ATS movement summary note.
-    if app is not None and verdict and movement_confirmed:
+    if app is not None and transport_app is not None and verdict and movement_confirmed:
         try:
             if movement_checkpointed:
                 # Keep database bookkeeping for the optional provider note in
@@ -325,7 +461,9 @@ def apply_decision_side_effects(
                     post_decision_summary_to_workable(
                         db,
                         actor,
-                        app=app,
+                        app=transport_app,
+                        event_app=app,
+                        event_role_id=int(decision.role_id),
                         org=org,
                         decision=decision,
                         verdict=verdict,
@@ -337,7 +475,9 @@ def apply_decision_side_effects(
                 post_decision_summary_to_workable(
                     db,
                     actor,
-                    app=app,
+                    app=transport_app,
+                    event_app=app,
+                    event_role_id=int(decision.role_id),
                     org=org,
                     decision=decision,
                     verdict=verdict,

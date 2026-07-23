@@ -22,6 +22,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
@@ -31,6 +32,7 @@ from ...models.policy_version import PolicyVersion
 from ...models.promotion_gate import BiasAuditResult
 from ...models.user import User
 from ...platform.database import get_db
+from ...services.decision_membership import apply_live_logical_decision_scope
 
 
 router = APIRouter(tags=["agentic-audit"])
@@ -104,11 +106,24 @@ def _build_export_rows(
     """Return (rows, truncated). Each row is a flat dict keyed by EXPORT_COLUMNS."""
     query = (
         db.query(AgentDecision, User.email, DecisionFeedback)
-        .outerjoin(User, User.id == AgentDecision.resolved_by_user_id)
+        .outerjoin(
+            User,
+            and_(
+                User.id == AgentDecision.resolved_by_user_id,
+                User.organization_id == int(org_id),
+            ),
+        )
         # Latest feedback for the decision — ``feedback_id`` points at it when
         # the disposition was ``taught``. Left join so decisions without
         # feedback still export.
-        .outerjoin(DecisionFeedback, DecisionFeedback.id == AgentDecision.feedback_id)
+        .outerjoin(
+            DecisionFeedback,
+            and_(
+                DecisionFeedback.id == AgentDecision.feedback_id,
+                DecisionFeedback.organization_id == int(org_id),
+                DecisionFeedback.decision_id == AgentDecision.id,
+            ),
+        )
         .filter(AgentDecision.organization_id == org_id)
     )
     if from_dt is not None:
@@ -125,9 +140,21 @@ def _build_export_rows(
     fetched = query.limit(EXPORT_ROW_CAP + 1).all()
     truncated = len(fetched) > EXPORT_ROW_CAP
     fetched = fetched[:EXPORT_ROW_CAP]
+    fetched_ids = [int(decision.id) for decision, _, _ in fetched]
+    live_subject_ids = {
+        int(decision_id)
+        for (decision_id,) in apply_live_logical_decision_scope(
+            db,
+            db.query(AgentDecision.id).filter(
+                AgentDecision.id.in_(fetched_ids or [-1]),
+            ),
+            organization_id=int(org_id),
+        ).all()
+    }
 
     rows: list[dict[str, Any]] = []
     for decision, resolved_by_email, feedback in fetched:
+        subject_live = int(decision.id) in live_subject_ids
         rows.append(
             {
                 "id": decision.id,
@@ -143,15 +170,29 @@ def _build_export_rows(
                 "application_id": decision.application_id,
                 "role_id": decision.role_id,
                 "resolved_by_email": resolved_by_email,
-                "resolution_note": decision.resolution_note,
-                "reasoning": decision.reasoning,
-                "evidence": _json_or_none(decision.evidence),
-                "input_fingerprint": _json_or_none(decision.input_fingerprint),
+                "resolution_note": (
+                    decision.resolution_note if subject_live else None
+                ),
+                "reasoning": decision.reasoning if subject_live else None,
+                "evidence": (
+                    _json_or_none(decision.evidence) if subject_live else None
+                ),
+                "input_fingerprint": (
+                    _json_or_none(decision.input_fingerprint)
+                    if subject_live
+                    else None
+                ),
                 "criteria_fingerprint": decision.criteria_fingerprint,
-                "cv_fingerprint": decision.cv_fingerprint,
+                "cv_fingerprint": (
+                    decision.cv_fingerprint if subject_live else None
+                ),
                 "feedback_failure_mode": feedback.failure_mode if feedback else None,
                 "feedback_attributed_to": feedback.attributed_to if feedback else None,
-                "feedback_correction_text": feedback.correction_text if feedback else None,
+                "feedback_correction_text": (
+                    feedback.correction_text
+                    if feedback is not None and subject_live
+                    else None
+                ),
                 "feedback_cosigned": (feedback.cosigned_at is not None) if feedback else None,
             }
         )

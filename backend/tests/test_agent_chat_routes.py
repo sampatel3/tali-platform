@@ -390,9 +390,10 @@ def test_send_message_runs_simulate_tool_and_returns_card(client, db):
     assert _timeline_json(client, role.id, headers)["agent_working"] is False
 
 
-def test_send_message_truncated_reply_gets_continue_note(client, db):
-    """A reply cut off at the length ceiling (stop_reason='max_tokens') keeps its
-    partial text + a graceful "say continue" note — never a bare mid-word stop."""
+def test_send_message_truncated_candidate_claim_is_withheld_without_grounding(
+    client, db
+):
+    """A length cutoff never bypasses the canonical candidate-read guard."""
     headers, email = auth_headers(client, organization_name="TruncOrg")
     org_id = _org_id(db, email)
     role = _role(db, org_id)
@@ -415,7 +416,39 @@ def test_send_message_truncated_reply_gets_continue_note(client, db):
 
     assert resp.status_code == 200, resp.text
     text = _last_agent_message(client, role.id, headers)["text"]
-    assert "Praveena" in text  # partial answer preserved
+    assert "Jojo" not in text
+    assert "Praveena" not in text
+    assert "canonical candidate pool" in text
+    assert "continue" not in text.lower()
+
+
+def test_send_message_grounding_free_truncated_reply_gets_continue_note(client, db):
+    """A non-candidate reply cut off at the length ceiling keeps its partial
+    text plus a graceful continuation note rather than a bare mid-word stop."""
+    headers, email = auth_headers(client, organization_name="GenericTruncOrg")
+    org_id = _org_id(db, email)
+    role = _role(db, org_id)
+    db.commit()
+
+    scripted = [
+        _resp(
+            [_text("Here is a detailed explanation of how the workspace is configured (")],
+            "max_tokens",
+        ),
+    ]
+    with patch(
+        "app.agent_chat.engine.routed_messages_client",
+        return_value=_FakeClient(scripted),
+    ):
+        resp = client.post(
+            f"/api/v1/agent-chat/conversations/{role.id}/messages",
+            headers=headers,
+            json={"message": "explain how this workspace is configured"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    text = _last_agent_message(client, role.id, headers)["text"]
+    assert "workspace is configured" in text
     assert "continue" in text.lower() and "length limit" in text.lower()
 
 
@@ -600,7 +633,11 @@ def test_timeline_caps_decisions_to_newest_window_in_chronological_order(client,
                 application_id=app.id,
                 decision_type="advance_to_interview",
                 recommendation="advance",
-                status="pending",
+                # Historical decisions are the valid high-volume case.  The
+                # domain invariant permits only one active decision per role
+                # membership, while the timeline still retains resolved
+                # decisions for its rolling history window.
+                status="approved",
                 reasoning=f"decision-{index}",
                 model_version="m",
                 prompt_version="p",
@@ -626,7 +663,6 @@ def test_timeline_excludes_pending_decision_while_snoozed(client, db):
     headers, email = auth_headers(client, organization_name="TimelineSnoozeOrg")
     org_id = _org_id(db, email)
     role = _role(db, org_id, name="Snooze Role")
-    app = _scored_app(db, org_id, role, score=55, name="Snooze Candidate")
     now = datetime.now(timezone.utc)
 
     for label, snoozed_until in (
@@ -634,6 +670,13 @@ def test_timeline_excludes_pending_decision_while_snoozed(client, db):
         ("elapsed-snooze", now - timedelta(minutes=1)),
         ("active-snooze", now + timedelta(hours=1)),
     ):
+        app = _scored_app(
+            db,
+            org_id,
+            role,
+            score=55,
+            name=f"Snooze Candidate {label}",
+        )
         db.add(
             AgentDecision(
                 organization_id=org_id,

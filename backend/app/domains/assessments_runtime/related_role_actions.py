@@ -9,10 +9,12 @@ from ...models.candidate_application import CandidateApplication
 from ...models.role import ROLE_KIND_SISTER, Role
 from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.user import User
+from ...services.related_role_action_service import (
+    lock_related_role_membership,
+    transition_related_role_stage_action,
+)
 from ...services.sister_role_service import (
-    source_application_is_globally_advanced,
-    source_application_is_globally_closed,
-    transition_related_role_stage,
+    related_role_action_restrictions,
 )
 from .job_authorization import JobPermission, require_job_permission
 from .role_support import get_application
@@ -35,11 +37,10 @@ def _require_related_role_permission(
     )
     if (
         str(role.role_kind or "") != ROLE_KIND_SISTER
-        or int(role.ats_owner_role_id or 0) != int(application.role_id)
     ):
         raise HTTPException(
             status_code=409,
-            detail="Related role does not own this shared candidate roster",
+            detail="The requested acting role is not a related role",
         )
     return role
 
@@ -54,10 +55,10 @@ def require_application_action_permission(
 ) -> CandidateApplication:
     """Authorize a shared-application action against its visible role."""
 
-    application = get_application(
-        int(application_id), int(current_user.organization_id), db
-    )
     if acting_role_id is None:
+        application = get_application(
+            int(application_id), int(current_user.organization_id), db
+        )
         require_job_permission(
             db,
             current_user=current_user,
@@ -66,23 +67,64 @@ def require_application_action_permission(
         )
         return application
 
-    _require_related_role_permission(
+    # Explicit related-role membership survives source-row soft deletion. The
+    # generic application reader intentionally hides deleted rows, so resolve
+    # the evidence row here and let the membership check below be authoritative.
+    application = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(current_user.organization_id),
+        )
+        .one_or_none()
+    )
+    if application is None:
+        raise HTTPException(status_code=404, detail="Application not found")
+
+    role = _require_related_role_permission(
         db,
         current_user=current_user,
         related_role_id=int(acting_role_id),
         application=application,
         lock_for_update=True,
     )
-    if not allow_closed_related and source_application_is_globally_closed(application):
-        raise HTTPException(
-            status_code=409,
-            detail="A disqualified or closed shared ATS application cannot be changed",
+    locked = lock_related_role_membership(
+        db,
+        application=application,
+        acting_role_id=int(role.id),
+        for_update=False,
+    )
+    assert locked is not None
+    if not allow_closed_related:
+        local_outcome = str(
+            locked[1].application_outcome or "open"
+        ).strip().lower()
+        local_stage = str(locked[1].pipeline_stage or "applied").strip().lower()
+        if local_outcome != "open" or local_stage == "advanced":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "related_role_application_resolved",
+                    "message": "This candidate has already left this role's active flow.",
+                    "role_id": int(role.id),
+                    "pipeline_stage": local_stage,
+                    "application_outcome": local_outcome,
+                },
+            )
+        restrictions = related_role_action_restrictions(
+            role=role,
+            evaluation=locked[1],
+            source_application=application,
         )
-    if not allow_closed_related and source_application_is_globally_advanced(application):
-        raise HTTPException(
-            status_code=409,
-            detail="An advanced shared ATS application cannot be moved or reopened",
-        )
+        if not bool(restrictions.get("can_advance_in_ats")):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "related_role_ats_write_restricted",
+                    "message": "This role remains active, but its shared ATS link cannot accept that write.",
+                    "restriction_codes": restrictions.get("codes") or [],
+                },
+            )
     return application
 
 
@@ -93,7 +135,7 @@ def require_related_role_application_action(
     related_role_id: int,
     application: CandidateApplication,
 ) -> Role:
-    """Authorize one action against a related role's shared roster."""
+    """Authorize one action against a related role's independent roster."""
 
     role = _require_related_role_permission(
         db,
@@ -102,16 +144,12 @@ def require_related_role_application_action(
         application=application,
         lock_for_update=False,
     )
-    if source_application_is_globally_closed(application):
-        raise HTTPException(
-            status_code=409,
-            detail="A disqualified or closed shared ATS application cannot be changed",
-        )
-    if source_application_is_globally_advanced(application):
-        raise HTTPException(
-            status_code=409,
-            detail="An advanced shared ATS application cannot be moved or reopened",
-        )
+    lock_related_role_membership(
+        db,
+        application=application,
+        acting_role_id=int(role.id),
+        for_update=False,
+    )
     return role
 
 
@@ -122,8 +160,10 @@ def move_related_role_application_stage(
     related_role_id: int,
     application: CandidateApplication,
     to_stage: str,
+    expected_version: int | None = None,
+    idempotency_key: str | None = None,
 ) -> tuple[Role, SisterRoleEvaluation]:
-    """Move locally, except shared advance which hands off the whole family."""
+    """Move one candidate in the acting related role's local lifecycle."""
 
     role = require_related_role_application_action(
         db,
@@ -138,52 +178,22 @@ def move_related_role_application_stage(
     if db.bind is not None and db.bind.dialect.name == "postgresql":
         application_query = application_query.with_for_update()
     application = application_query.populate_existing().one()
-    # Recheck after acquiring the shared row: another linked role may have
-    # advanced/rejected while authorization was being evaluated.
-    if source_application_is_globally_closed(application):
-        raise HTTPException(
-            status_code=409,
-            detail="A disqualified or closed shared ATS application cannot be changed",
-        )
-    if source_application_is_globally_advanced(application):
-        raise HTTPException(
-            status_code=409,
-            detail="An advanced shared ATS application cannot be moved or reopened",
-        )
-    evaluation = (
-        db.query(SisterRoleEvaluation)
-        .filter(
-            SisterRoleEvaluation.role_id == int(role.id),
-            SisterRoleEvaluation.source_application_id == int(application.id),
-        )
-        .with_for_update()
-        .one_or_none()
-    )
-    if evaluation is None:
-        raise HTTPException(
-            status_code=404, detail="Related-role candidate state not found"
-        )
     try:
-        if str(to_stage or "").strip().lower() == "advanced":
-            from ...actions import advance_stage
-            from ...actions.types import Actor
-
-            advance_stage.run(
-                db,
-                Actor.recruiter(current_user),
-                organization_id=int(application.organization_id),
-                application_id=int(application.id),
-                to_stage="advanced",
-                reason=f"Advanced from related role {role.name}",
-                idempotency_key=(
-                    f"related_role_advance:{role.id}:{application.id}"
-                ),
-                metadata={"acting_role_id": int(role.id)},
-            )
-        else:
-            transition_related_role_stage(
-                evaluation, to_stage=to_stage, source="recruiter"
-            )
+        result = transition_related_role_stage_action(
+            db,
+            application=application,
+            acting_role_id=int(role.id),
+            to_stage=to_stage,
+            source="recruiter",
+            actor_type="recruiter",
+            actor_id=int(current_user.id),
+            reason=f"Stage updated in related role {role.name}",
+            metadata={"acting_role_id": int(role.id)},
+            idempotency_key=idempotency_key,
+            expected_version=expected_version,
+        )
+        assert result is not None
+        evaluation = result.evaluation
         db.commit()
         db.refresh(evaluation)
     except ValueError as exc:

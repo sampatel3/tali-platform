@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from app.agent_runtime.budget_guard import MANUAL_PAUSE_REASON
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.role_change_event import RoleChangeEvent
 
 
@@ -61,6 +61,43 @@ def test_recovery_sweep_resumes_healthy_system_hold(db):
     assert event.actor_user_id is None
     assert event.from_version == initial_version
     assert event.to_version == initial_version + 1
+
+
+def test_recovery_sweep_dispatches_related_role_to_dedicated_cycle(db):
+    from app.tasks import agent_tasks
+    from tests.conftest import TestingSessionLocal
+
+    role = _paused_role(db, reason="related role provider hold cleared")
+    role.source = "sister"
+    role.role_kind = ROLE_KIND_SISTER
+    db.commit()
+    role_id = int(role.id)
+    initial_version = int(role.version or 1)
+    dispatched: list[tuple[int, dict]] = []
+
+    def capture_dispatch(dispatched_role, **kwargs):
+        dispatched.append((int(dispatched_role.id), kwargs))
+
+    with (
+        patch("app.platform.database.SessionLocal", new=TestingSessionLocal),
+        patch(
+            "app.services.role_agent_dispatch.dispatch_role_agent_cycle",
+            side_effect=capture_dispatch,
+        ) as dispatch,
+        patch.object(agent_tasks.agent_cohort_tick_role, "delay") as generic_dispatch,
+    ):
+        result = agent_tasks.agent_recovery_sweep.run()
+
+    assert result["status"] == "ok"
+    assert result["role_ids"] == [role_id]
+    generic_dispatch.assert_not_called()
+    dispatch.assert_called_once()
+    assert dispatched == [
+        (
+            role_id,
+            {"activation": False, "role_version": initial_version + 1},
+        )
+    ]
 
 
 def test_recovery_sweep_never_clears_manual_pause(db):

@@ -671,18 +671,37 @@ def test_invalidation_supersedes_pending_agent_decisions(db):
         prompt_version="related-role-v1",
         idempotency_key=f"related-role-{app.id}",
     )
+    processing_candidate = Candidate(
+        organization_id=app.organization_id,
+        email="processing-invalidation@x.test",
+        full_name="Processing Candidate",
+    )
+    db.add(processing_candidate)
+    db.flush()
+    processing_app = CandidateApplication(
+        organization_id=app.organization_id,
+        candidate_id=processing_candidate.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    db.add(processing_app)
+    db.flush()
     processing = AgentDecision(
         id=4,
         organization_id=app.organization_id,
         role_id=role.id,
-        application_id=app.id,
+        application_id=processing_app.id,
         decision_type="advance_to_interview",
         recommendation="Approval already accepted",
         status="processing",
         reasoning="Provider write is in flight",
         model_version="v3",
         prompt_version="v3",
-        idempotency_key=f"processing-{app.id}",
+        idempotency_key=f"processing-{processing_app.id}",
     )
     db.add(pending)
     db.add(resolved)
@@ -705,8 +724,10 @@ def test_invalidation_supersedes_pending_agent_decisions(db):
     # The same application can have a separate sister-role recommendation;
     # standard-role invalidation must not cross that role boundary.
     assert cross_role_pending.status == "pending"
-    # A concurrent recruiter approval owns pending -> processing. The
-    # conditional supersession update can never overwrite it.
+    # A concurrent recruiter approval on another candidate owns pending ->
+    # processing. The active-slot invariant forbids a pending and processing
+    # row for the same logical candidate, and role-wide invalidation must not
+    # overwrite this processing row.
     assert processing.status == "processing"
 
 

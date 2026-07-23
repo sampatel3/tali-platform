@@ -33,7 +33,8 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.cv_score_job import CvScoreJob
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.services.pre_screen_decision_emitter import (
     queue_knockout_reject,
     queue_pre_screen_reject,
@@ -310,6 +311,19 @@ def _make_role(client, headers):
     return r.json()
 
 
+def _make_related_role(client, headers, db):
+    payload = _make_role(client, headers)
+    role = db.get(Role, int(payload["id"]))
+    role.source = "sister"
+    role.role_kind = ROLE_KIND_SISTER
+    role.job_spec_text = (
+        "A complete related sourcing specification for production engineering "
+        "delivery, operational reliability, and measurable outcomes."
+    )
+    db.commit()
+    return role
+
+
 def test_create_sourced_candidate_endpoint(client):
     headers, _ = auth_headers(client)
     role = _make_role(client, headers)
@@ -381,6 +395,187 @@ def test_create_sourced_candidate_is_idempotent(client):
     assert first.status_code == 201
     assert second.status_code == 201
     assert first.json()["id"] == second.json()["id"]
+
+
+def test_related_sourced_candidate_materializes_only_its_canonical_membership(
+    client, db
+):
+    headers, _ = auth_headers(client)
+    related = _make_related_role(client, headers, db)
+    sibling = _make_related_role(client, headers, db)
+    candidate = Candidate(
+        organization_id=int(related.organization_id),
+        full_name="Existing Candidate With CV",
+        email="related-sourced@example.com",
+        cv_text="Existing Python and distributed systems evidence.",
+    )
+    db.add(candidate)
+    db.commit()
+
+    response = client.post(
+        f"/api/v1/roles/{related.id}/sourced-candidates",
+        json={
+            "name": "Related Sourced Prospect",
+            "email": "related-sourced@example.com",
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+    application_id = int(response.json()["id"])
+    membership = (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == int(related.id))
+        .one()
+    )
+    assert membership.source_application_id == application_id
+    assert membership.membership_source == "direct"
+    assert membership.pipeline_stage == "sourced"
+    assert membership.application_outcome == "open"
+    assert membership.status == "unscorable"
+    assert membership.cv_fingerprint is None
+    assert membership.last_error_code == "sourced_prospect"
+    assert (
+        db.query(CvScoreJob)
+        .filter(CvScoreJob.application_id == application_id)
+        .count()
+        == 0
+    )
+
+    related_rows = client.get(
+        f"/api/v1/roles/{related.id}/applications",
+        params={"pipeline_stage": "sourced"},
+        headers=headers,
+    )
+    sibling_rows = client.get(
+        f"/api/v1/roles/{sibling.id}/applications",
+        params={"pipeline_stage": "sourced"},
+        headers=headers,
+    )
+    assert related_rows.status_code == 200, related_rows.text
+    assert [row["id"] for row in related_rows.json()] == [application_id]
+    assert sibling_rows.status_code == 200, sibling_rows.text
+    assert sibling_rows.json() == []
+    assert (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == int(sibling.id))
+        .count()
+        == 0
+    )
+
+
+def test_related_sourced_candidate_reactivates_fresh_canonical_membership(
+    client, db
+):
+    headers, _ = auth_headers(client)
+    related = _make_related_role(client, headers, db)
+    payload = {
+        "name": "Returning Related Prospect",
+        "email": "returning-related-sourced@example.com",
+    }
+    first = client.post(
+        f"/api/v1/roles/{related.id}/sourced-candidates",
+        json=payload,
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+    application_id = int(first.json()["id"])
+    application = db.get(CandidateApplication, application_id)
+    membership = (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == int(related.id))
+        .one()
+    )
+    membership_id = int(membership.id)
+    membership.version = 4
+    membership.status = "done"
+    membership.pipeline_stage = "advanced"
+    membership.application_outcome = "rejected"
+    membership.role_fit_score = 93
+    membership.summary = "Prior sourced membership lifecycle"
+    membership.deleted_at = datetime.now(timezone.utc)
+    application.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    restored_response = client.post(
+        f"/api/v1/roles/{related.id}/sourced-candidates",
+        json=payload,
+        headers=headers,
+    )
+
+    assert restored_response.status_code == 201, restored_response.text
+    assert int(restored_response.json()["id"]) == application_id
+    restored = db.get(SisterRoleEvaluation, membership_id)
+    assert restored.deleted_at is None
+    assert restored.source_application_id == application_id
+    assert restored.membership_source == "direct"
+    assert restored.pipeline_stage == "sourced"
+    assert restored.application_outcome == "open"
+    assert restored.status == "unscorable"
+    assert restored.role_fit_score is None
+    assert restored.summary is None
+    assert restored.version == 5
+    assert restored.history[-1]["role_fit_score"] == 93
+
+    visible = client.get(
+        f"/api/v1/roles/{related.id}/applications",
+        params={"pipeline_stage": "sourced"},
+        headers=headers,
+    )
+    assert visible.status_code == 200, visible.text
+    assert [row["id"] for row in visible.json()] == [application_id]
+
+
+@pytest.mark.parametrize(
+    ("pipeline_stage", "application_outcome"),
+    [("advanced", "open"), ("applied", "rejected")],
+)
+def test_related_sourced_writer_materializes_terminal_membership_as_excluded(
+    client,
+    db,
+    pipeline_stage,
+    application_outcome,
+):
+    headers, _ = auth_headers(client)
+    related = _make_related_role(client, headers, db)
+    candidate = Candidate(
+        organization_id=int(related.organization_id),
+        full_name="Existing Terminal Candidate",
+        email=f"terminal-{pipeline_stage}-{application_outcome}@example.com",
+        cv_text="Existing production engineering evidence.",
+    )
+    db.add(candidate)
+    db.flush()
+    application = CandidateApplication(
+        organization_id=int(related.organization_id),
+        role_id=int(related.id),
+        candidate_id=int(candidate.id),
+        status=pipeline_stage,
+        pipeline_stage=pipeline_stage,
+        pipeline_stage_source="recruiter",
+        application_outcome=application_outcome,
+        source="manual",
+    )
+    db.add(application)
+    db.commit()
+
+    response = client.post(
+        f"/api/v1/roles/{related.id}/sourced-candidates",
+        json={"email": candidate.email},
+        headers=headers,
+    )
+
+    assert response.status_code == 201, response.text
+    membership = (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == int(related.id))
+        .one()
+    )
+    assert membership.source_application_id == int(application.id)
+    assert membership.pipeline_stage == pipeline_stage
+    assert membership.application_outcome == application_outcome
+    assert membership.status == "excluded"
+    assert membership.last_error_code == "direct_application_not_active"
 
 
 def test_create_sourced_candidate_requires_identity(client):

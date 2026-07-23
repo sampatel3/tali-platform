@@ -9,15 +9,24 @@ from __future__ import annotations
 
 import secrets
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from ...domains.assessments_runtime.pipeline_service import role_pipeline_counts
+from ...candidate_search.application_role_scope import (
+    application_outcome_expression,
+    with_ats_transport,
+)
+from ...candidate_search.population import apply_live_candidate_scope
+from ...candidate_search.role_candidate_reader import (
+    RoleCandidatePage,
+    read_role_candidate_page,
+)
+from ...candidate_search.role_scope import resolve_candidate_role_scope
 from ...domains.assessments_runtime.role_support import get_application
-from ...domains.identity_access.api_key_auth import get_api_principal, require_scope
+from ...domains.identity_access.api_key_auth import require_scope
 from ...models.api_key import (
     ApiKey,
     SCOPE_APPLICATIONS_READ,
@@ -26,13 +35,19 @@ from ...models.api_key import (
     SCOPE_SHARE_LINKS_WRITE,
 )
 from ...models.assessment import Assessment
+from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...models.share_link import ShareLink
 from ...models.task import Task
 from ...platform.config import settings
 from ...platform.database import get_db
+from ...services.logical_role_application_authority import (
+    LogicalRoleApplicationAuthorizationError,
+    authorize_logical_role_application,
+)
 from ...services.pre_screening_snapshot import pre_screen_snapshot
+from ...services.related_role_pipeline import pipeline_counts_for_role
 from .schemas import (
     CreatePublicShareLink,
     PublicApplication,
@@ -162,12 +177,105 @@ def get_role(
 def _role_or_404(db: Session, role_id: int, organization_id: int) -> Role:
     role = (
         db.query(Role)
-        .filter(Role.id == role_id, Role.organization_id == organization_id)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+        )
         .first()
     )
     if role is None:
         raise HTTPException(status_code=404, detail="Role not found")
     return role
+
+
+def _public_related_application(application: Any) -> PublicApplication:
+    """Project one canonical related-role row into the frozen public schema."""
+
+    candidate = application.candidate
+    ats_context = application.ats_context
+    details = (
+        application.cv_match_details
+        if isinstance(application.cv_match_details, dict)
+        else {}
+    )
+    requirements_fit_score = details.get("requirements_match_score_100")
+    if not isinstance(requirements_fit_score, (int, float)):
+        # Match the canonical related-role projection for rolling data that
+        # predates the requirements component: the role-local fit score is the
+        # compatible fallback, never a score from the source/owner application.
+        requirements_fit_score = application.cv_match_score
+    return PublicApplication(
+        id=int(application.id),
+        # Related roles own their workflow state. The legacy ``status`` field
+        # therefore mirrors the canonical local pipeline stage instead of the
+        # storage/source application's unrelated status.
+        status=application.pipeline_stage,
+        pipeline_stage=application.pipeline_stage,
+        application_outcome=application.application_outcome,
+        candidate=PublicCandidate(
+            id=int(application.candidate_id),
+            full_name=(candidate.full_name if candidate else None),
+            email=(candidate.email if candidate else None),
+        ),
+        role_id=int(application.role_id),
+        role_name=(application.role.name if application.role else None),
+        cv_match_score=application.cv_match_score,
+        pre_screen_score_100=application.pre_screen_score_100,
+        requirements_fit_score_100=requirements_fit_score,
+        taali_score_100=application.taali_score_cache_100,
+        recommendation=None,
+        # The public schema predates provider-neutral ATS context. Preserve its
+        # Workable fields, but populate them only from the explicit linked ATS
+        # transport returned by the canonical logical-role reader.
+        workable_stage=(
+            ats_context.get("raw_stage")
+            if ats_context.get("provider") == "workable"
+            else None
+        ),
+        workable_disqualified=(
+            bool(ats_context.get("workable_disqualified"))
+            if "workable_disqualified" in ats_context
+            else None
+        ),
+        workable_score=None,
+        created_at=application.created_at,
+    )
+
+
+def _canonical_public_role_page(
+    db: Session,
+    principal: ApiKey,
+    *,
+    role: Role,
+    limit: int,
+    offset: int,
+    workable_stage: str | None,
+    pipeline_stage: str | None,
+) -> RoleCandidatePage:
+    """Read one public page through the shared logical-role storage boundary."""
+
+    return read_role_candidate_page(
+        db,
+        organization_id=int(principal.organization_id),
+        role_id=int(role.id),
+        score_field="taali_score_cache_100",
+        sort_field="created_at",
+        sort_order="desc",
+        min_score=None,
+        pipeline_stage=pipeline_stage,
+        application_outcome=None,
+        q=None,
+        ats_stage=None,
+        workable_stage=workable_stage,
+        has_pending_decision=None,
+        limit=limit,
+        offset=offset,
+        limit_ceiling=200,
+        # Frozen public-v1 ordering is pure created_at DESC. Agent surfaces
+        # may separately prioritize candidates a recruiter already advanced.
+        prioritize_advanced=False,
+    )
 
 
 @router.get("/roles/{role_id}/applications", response_model=PublicApplicationList)
@@ -182,33 +290,33 @@ def list_role_applications(
 ):
     """A role's candidate applications — each with Taali's signal + the synced
     Workable stage. Optional filters: ``workable_stage``, ``pipeline_stage``."""
-    _role_or_404(db, role_id, principal.organization_id)
-    q = (
-        db.query(CandidateApplication)
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
+    role = _role_or_404(db, role_id, principal.organization_id)
+    try:
+        page = _canonical_public_role_page(
+            db,
+            principal,
+            role=role,
+            limit=limit,
+            offset=offset,
+            workable_stage=workable_stage,
+            pipeline_stage=pipeline_stage,
         )
-        .filter(
-            CandidateApplication.organization_id == principal.organization_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-    )
-    if workable_stage:
-        q = q.filter(CandidateApplication.workable_stage == workable_stage)
-    if pipeline_stage:
-        q = q.filter(CandidateApplication.pipeline_stage == pipeline_stage)
-    total = q.count()
-    apps = (
-        q.order_by(CandidateApplication.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if page.scope.is_related:
+        applications = [
+            _public_related_application(application)
+            for application in page.applications
+        ]
+    else:
+        applications = [
+            _application_to_public(application)
+            for application in page.applications
+        ]
     return PublicApplicationList(
-        applications=[_application_to_public(a) for a in apps],
-        total=int(total or 0),
+        applications=applications,
+        total=page.total,
     )
 
 
@@ -221,41 +329,49 @@ def role_metrics(
     """Job metrics: total applications, the canonical Taali funnel
     (applied/scored/invited/completed/advanced/rejected), decision outcomes,
     and the Workable hiring-funnel stage distribution (synced from Workable)."""
-    _role_or_404(db, role_id, principal.organization_id)
-    org_id = principal.organization_id
-    base_filters = (
+    role = _role_or_404(db, role_id, principal.organization_id)
+    org_id = int(principal.organization_id)
+    scope = resolve_candidate_role_scope(
+        db,
+        organization_id=org_id,
+        role_id=int(role_id),
+    )
+    roster = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == org_id,
-        CandidateApplication.role_id == role_id,
-        CandidateApplication.deleted_at.is_(None),
     )
-    total = (
-        db.query(func.count(CandidateApplication.id)).filter(*base_filters).scalar()
-        or 0
+    roster = scope.scope_visible_roster(roster)
+    total = int(
+        roster.with_entities(func.count(CandidateApplication.id)).scalar() or 0
     )
+    outcome_expr = application_outcome_expression(scope)
     outcome_rows = (
-        db.query(
-            CandidateApplication.application_outcome,
+        roster.with_entities(
+            outcome_expr,
             func.count(CandidateApplication.id),
         )
-        .filter(*base_filters)
-        .group_by(CandidateApplication.application_outcome)
+        .group_by(outcome_expr)
         .all()
     )
     by_outcome = {str(k or "unknown"): int(v or 0) for k, v in outcome_rows}
+    ats_roster, transport = with_ats_transport(scope, roster)
     workable_rows = (
-        db.query(
-            CandidateApplication.workable_stage,
+        ats_roster.with_entities(
+            transport.workable_stage,
             func.count(CandidateApplication.id),
         )
-        .filter(*base_filters, CandidateApplication.workable_stage.isnot(None))
-        .group_by(CandidateApplication.workable_stage)
+        .filter(transport.workable_stage.isnot(None))
+        .group_by(transport.workable_stage)
         .all()
     )
     by_workable = {str(k): int(v or 0) for k, v in workable_rows if k}
     return RoleMetrics(
         role_id=role_id,
-        total_applications=int(total),
-        taali_funnel=role_pipeline_counts(db, organization_id=org_id, role_id=role_id),
+        total_applications=total,
+        taali_funnel=pipeline_counts_for_role(
+            db,
+            role,
+            organization_id=org_id,
+        ),
         by_application_outcome=by_outcome,
         by_workable_stage=by_workable,
     )
@@ -300,9 +416,34 @@ def _application_to_public(app: CandidateApplication) -> PublicApplication:
 @router.get("/applications/{application_id}", response_model=PublicApplication)
 def get_public_application(
     application_id: int,
+    view_role_id: Optional[int] = Query(
+        default=None,
+        description=(
+            "Logical role whose independent candidate state should be returned. "
+            "Required when following a related-role application list."
+        ),
+    ),
     principal: ApiKey = Depends(require_scope(SCOPE_APPLICATIONS_READ)),
     db: Session = Depends(get_db),
 ):
+    if view_role_id is not None:
+        role = _role_or_404(
+            db,
+            int(view_role_id),
+            int(principal.organization_id),
+        )
+        try:
+            context = authorize_logical_role_application(
+                db,
+                role=role,
+                application_id=int(application_id),
+            )
+        except LogicalRoleApplicationAuthorizationError as exc:
+            raise HTTPException(status_code=404, detail="Application not found") from exc
+        if context.is_related:
+            return _public_related_application(context.presented_application)
+        return _application_to_public(context.source_application)
+
     app = get_application(application_id, principal.organization_id, db)
     return _application_to_public(app)
 
@@ -314,14 +455,18 @@ def get_public_assessment(
     principal: ApiKey = Depends(require_scope(SCOPE_ASSESSMENTS_READ)),
     db: Session = Depends(get_db),
 ):
-    a = (
+    assessment_query = (
         db.query(Assessment)
+        .join(Candidate, Candidate.id == Assessment.candidate_id)
         .filter(
             Assessment.id == assessment_id,
             Assessment.organization_id == principal.organization_id,
         )
-        .first()
     )
+    a = apply_live_candidate_scope(
+        assessment_query,
+        organization_id=int(principal.organization_id),
+    ).first()
     if a is None:
         raise HTTPException(status_code=404, detail="Assessment not found")
     return PublicAssessment(
@@ -358,12 +503,36 @@ def create_public_share_link(
     if payload.expiry not in _SHARE_EXPIRY:
         raise HTTPException(status_code=400, detail="expiry must be '24h', '7d', or '30d'")
 
-    # 404s if the application isn't in the key's org — reuses the same
-    # org-safe fetch the JWT surface uses.
-    app = get_application(application_id, principal.organization_id, db)
+    # Role context is mandatory for a related-role report because one evidence
+    # or ATS row may participate in several independent logical roles. Omitted
+    # context retains the frozen physical-application behavior for ordinary
+    # API clients.
+    if payload.view_role_id is not None:
+        role = _role_or_404(
+            db,
+            int(payload.view_role_id),
+            int(principal.organization_id),
+        )
+        try:
+            context = authorize_logical_role_application(
+                db,
+                role=role,
+                application_id=int(application_id),
+            )
+        except LogicalRoleApplicationAuthorizationError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail="Candidate is not a live member of this role",
+            ) from exc
+        app = context.source_application
+    else:
+        # 404s if the application isn't in the key's org — reuses the same
+        # org-safe fetch the JWT surface uses.
+        app = get_application(application_id, principal.organization_id, db)
     link = ShareLink(
         organization_id=app.organization_id,
         application_id=app.id,
+        view_role_id=payload.view_role_id,
         created_by_user_id=None,
         token=f"shr_{secrets.token_urlsafe(24)}",
         mode=payload.mode,
@@ -378,6 +547,7 @@ def create_public_share_link(
     return PublicShareLink(
         id=link.id,
         application_id=link.application_id,
+        view_role_id=link.view_role_id,
         token=link.token,
         url=f"{base}/share/{link.token}",
         mode=link.mode,

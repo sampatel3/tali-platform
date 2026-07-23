@@ -5,7 +5,8 @@ from __future__ import annotations
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.services.auto_threshold_service import compute_recommended_threshold
 
 
@@ -96,6 +97,60 @@ def test_labelled_tier_anchors_on_advanced_median(db):
     assert rec.sample_size == 5
     # median(60,65,70,75,80) = 70; pstdev ≈ 7.07; 70 - 7 = 63.
     assert 55 <= rec.value <= 70
+
+
+def test_thresholds_use_independent_related_membership_scores_and_outcomes(db):
+    """Same physical candidates keep opposing owner/related calibration truth."""
+
+    org, owner = _make_world(db)
+    related = Role(
+        organization_id=org.id,
+        name="Independent related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add(related)
+    db.flush()
+    for index in range(5):
+        owner_score = float(90 + index)
+        related_score = float(35 + index)
+        app = _add_scored(
+            db,
+            org=org,
+            role=owner,
+            cv=owner_score,
+            pre=owner_score,
+            outcome="rejected",
+        )
+        db.add(
+            SisterRoleEvaluation(
+                organization_id=org.id,
+                role_id=related.id,
+                candidate_id=app.candidate_id,
+                source_application_id=app.id,
+                ats_application_id=app.id,
+                status="done",
+                pipeline_stage="advanced",
+                application_outcome="hired",
+                membership_source="ground_truth_eval",
+                spec_fingerprint=f"auto-threshold-related-{index}",
+                role_fit_score=related_score,
+            )
+        )
+    db.flush()
+
+    owner_recommendation = compute_recommended_threshold(db, role=owner)
+    related_recommendation = compute_recommended_threshold(db, role=related)
+    global_recommendation = compute_role_fit_send_threshold(db, role=related)
+
+    assert owner_recommendation.source == "distribution"
+    assert owner_recommendation.sample_size == 5
+    assert owner_recommendation.value == 75
+    assert related_recommendation.source == "labelled"
+    assert related_recommendation.sample_size == 5
+    assert 30 <= related_recommendation.value <= 40
+    assert global_recommendation.sample_size == 10
 
 
 # ---------------------------------------------------------------------------

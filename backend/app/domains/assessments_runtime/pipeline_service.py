@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
+from ...candidate_search.population import apply_searchable_candidate_scope
 from ...models.agent_decision import AgentDecision
 from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
@@ -15,6 +16,10 @@ from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
 from ...services.related_role_application_runtime import sync_shared_advance
 from ...services.sister_role_service import reconcile_related_roles_after_outcome
+from .pipeline_event_service import (
+    append_event as _append_event,
+    existing_idempotent_event as _existing_idempotent_event,
+)
 
 # An application is described by TWO independent axes:
 #
@@ -305,47 +310,6 @@ def status_from_pipeline(stage: str, outcome: str) -> str:
     return normalized_stage
 
 
-def _event_to_payload(event: CandidateApplicationEvent) -> dict[str, Any]:
-    return {
-        "id": event.id,
-        "application_id": event.application_id,
-        "organization_id": event.organization_id,
-        "event_type": event.event_type,
-        "from_stage": event.from_stage,
-        "to_stage": event.to_stage,
-        "from_outcome": event.from_outcome,
-        "to_outcome": event.to_outcome,
-        "actor_type": event.actor_type,
-        "actor_id": event.actor_id,
-        "reason": event.reason,
-        "metadata": event.event_metadata or {},
-        "idempotency_key": event.idempotency_key,
-        "created_at": event.created_at,
-    }
-
-
-def list_application_events(
-    db: Session,
-    *,
-    organization_id: int,
-    application_id: int,
-    limit: int = 100,
-    offset: int = 0,
-) -> list[dict[str, Any]]:
-    rows = (
-        db.query(CandidateApplicationEvent)
-        .filter(
-            CandidateApplicationEvent.organization_id == organization_id,
-            CandidateApplicationEvent.application_id == application_id,
-        )
-        .order_by(CandidateApplicationEvent.created_at.desc(), CandidateApplicationEvent.id.desc())
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
-    return [_event_to_payload(item) for item in rows]
-
-
 def stage_external_drift(app: CandidateApplication) -> bool:
     external = normalize_pipeline_key(app.external_stage_normalized or app.external_stage_raw or app.workable_stage)
     if not external:
@@ -453,58 +417,6 @@ def _legacy_compatibility_path(from_stage: str, to_stage: str) -> list[tuple[str
     return None
 
 
-def _existing_idempotent_event(
-    db: Session,
-    *,
-    application_id: int,
-    idempotency_key: str | None,
-) -> CandidateApplicationEvent | None:
-    token = str(idempotency_key or "").strip()
-    if not token:
-        return None
-    return (
-        db.query(CandidateApplicationEvent)
-        .filter(
-            CandidateApplicationEvent.application_id == application_id,
-            CandidateApplicationEvent.idempotency_key == token,
-        )
-        .first()
-    )
-
-
-def _append_event(
-    db: Session,
-    *,
-    app: CandidateApplication,
-    event_type: str,
-    actor_type: str,
-    actor_id: int | None = None,
-    from_stage: str | None = None,
-    to_stage: str | None = None,
-    from_outcome: str | None = None,
-    to_outcome: str | None = None,
-    reason: str | None = None,
-    metadata: dict[str, Any] | None = None,
-    idempotency_key: str | None = None,
-) -> CandidateApplicationEvent:
-    event = CandidateApplicationEvent(
-        application_id=app.id,
-        organization_id=app.organization_id,
-        event_type=event_type,
-        from_stage=from_stage,
-        to_stage=to_stage,
-        from_outcome=from_outcome,
-        to_outcome=to_outcome,
-        actor_type=actor_type,
-        actor_id=actor_id,
-        reason=(reason or "").strip() or None,
-        event_metadata=metadata or None,
-        idempotency_key=(str(idempotency_key or "").strip() or None),
-    )
-    db.add(event)
-    return event
-
-
 def initialize_pipeline_event_if_missing(
     db: Session,
     *,
@@ -551,11 +463,16 @@ def append_application_event(
     to_stage: str | None = None,
     from_outcome: str | None = None,
     to_outcome: str | None = None,
+    role_id: int | None = None,
+    agent_decision_id: int | None = None,
+    target_stage: str | None = None,
+    effect_status: str | None = None,
 ) -> CandidateApplicationEvent:
     ensure_pipeline_fields(app)
     existing_idempotent = _existing_idempotent_event(
         db,
         application_id=app.id,
+        role_id=int(role_id or (metadata or {}).get("acting_role_id") or app.role_id),
         idempotency_key=idempotency_key,
     )
     if existing_idempotent:
@@ -573,6 +490,10 @@ def append_application_event(
         reason=reason,
         metadata=metadata,
         idempotency_key=idempotency_key,
+        role_id=role_id,
+        agent_decision_id=agent_decision_id,
+        target_stage=target_stage,
+        effect_status=effect_status,
     )
 
 
@@ -580,6 +501,7 @@ def _discard_live_decisions_for_terminal_application(
     db: Session,
     *,
     application_id: int,
+    role_id: int,
     reason: str,
 ) -> int:
     """Supersede pending and already-claimed cards in the same transaction."""
@@ -591,6 +513,7 @@ def _discard_live_decisions_for_terminal_application(
     return discard_pending_decisions_for_app(
         db,
         application_id=int(application_id),
+        role_id=int(role_id),
         reason=reason,
         include_processing=True,
     )
@@ -624,6 +547,7 @@ def transition_stage(
     existing_idempotent = _existing_idempotent_event(
         db,
         application_id=app.id,
+        role_id=int((metadata or {}).get("acting_role_id") or app.role_id),
         idempotency_key=idempotency_key,
     )
     if existing_idempotent:
@@ -672,6 +596,7 @@ def transition_stage(
         _discard_live_decisions_for_terminal_application(
             db,
             application_id=int(app.id),
+            role_id=int((metadata or {}).get("acting_role_id") or app.role_id),
             reason="superseded: application advanced",
         )
     sync_shared_advance(db, app, target, source_key)
@@ -763,7 +688,9 @@ def reconcile_post_handover_advanced(
             db.query(AgentDecision.id)
             .filter(
                 AgentDecision.application_id == int(app.id),
-                AgentDecision.status.in_(("pending", "processing")),
+                AgentDecision.status.in_(
+                    ("pending", "processing", "reverted_for_feedback")
+                ),
                 AgentDecision.decision_type.in_(
                     ("reject", "skip_assessment_reject")
                 ),
@@ -832,6 +759,7 @@ def transition_outcome(
     existing_idempotent = _existing_idempotent_event(
         db,
         application_id=app.id,
+        role_id=int((metadata or {}).get("acting_role_id") or app.role_id),
         idempotency_key=idempotency_key,
     )
     if existing_idempotent:
@@ -888,6 +816,7 @@ def transition_outcome(
         _discard_live_decisions_for_terminal_application(
             db,
             application_id=int(app.id),
+            role_id=int((metadata or {}).get("acting_role_id") or app.role_id),
             reason=f"superseded: application closed ({target})",
         )
 
@@ -1045,7 +974,7 @@ def _invite_delivery_extra(
             Assessment.invite_opened_at.isnot(None),
         )
     )
-    rows = (
+    query = (
         db.query(
             CandidateApplication.role_id,
             func.count(func.distinct(CandidateApplication.id)),
@@ -1059,7 +988,13 @@ def _invite_delivery_extra(
                 Assessment.is_voided.is_(False),
             ),
         )
-        .filter(
+    )
+    query = apply_searchable_candidate_scope(
+        query,
+        organization_id=int(organization_id),
+    )
+    rows = (
+        query.filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id.in_(role_ids),
             CandidateApplication.deleted_at.is_(None),
@@ -1105,13 +1040,18 @@ def role_pipeline_counts(
     # shows in the funnel as 'advanced' for alignment — the furthest stage wins —
     # regardless of Tali's pipeline_stage (which stays 'applied' for the backend).
     ph_expr = _post_handover_sql()
+    open_query = db.query(
+        CandidateApplication.pipeline_stage,
+        scored_expr,
+        ph_expr,
+        func.count(CandidateApplication.id),
+    )
+    open_query = apply_searchable_candidate_scope(
+        open_query,
+        organization_id=int(organization_id),
+    )
     rows = (
-        db.query(
-            CandidateApplication.pipeline_stage,
-            scored_expr,
-            ph_expr,
-            func.count(CandidateApplication.id),
-        )
+        open_query
         .filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id == role_id,
@@ -1143,9 +1083,13 @@ def role_pipeline_counts(
             counts[bucket] += int(total or 0)
     # `rejected` is an application_outcome, orthogonal to pipeline_stage, so it is
     # counted across all stages rather than via the open-stage query above.
+    rejected_query = db.query(func.count(CandidateApplication.id))
+    rejected_query = apply_searchable_candidate_scope(
+        rejected_query,
+        organization_id=int(organization_id),
+    )
     rejected_total = (
-        db.query(func.count(CandidateApplication.id))
-        .filter(
+        rejected_query.filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id == role_id,
             CandidateApplication.deleted_at.is_(None),
@@ -1159,10 +1103,16 @@ def role_pipeline_counts(
     # chip — the frontend used to derive it as scored − pending, which
     # over-counted resolved candidates + the cv_match_scored_at basis (which
     # includes pre-screen-filtered candidates with no real score).
-    not_yet_decided = (
+    not_yet_decided_query = (
         db.query(func.count(CandidateApplication.id))
         .join(Role, Role.id == CandidateApplication.role_id)
-        .filter(
+    )
+    not_yet_decided_query = apply_searchable_candidate_scope(
+        not_yet_decided_query,
+        organization_id=int(organization_id),
+    )
+    not_yet_decided = (
+        not_yet_decided_query.filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id == role_id,
             CandidateApplication.deleted_at.is_(None),
@@ -1252,14 +1202,19 @@ def role_pipeline_counts_bulk(
     # Workable-advanced candidates display as 'advanced' (alignment) regardless of
     # Tali's pipeline_stage — see role_pipeline_counts().
     ph_expr = _post_handover_sql()
+    open_query = db.query(
+        CandidateApplication.role_id,
+        CandidateApplication.pipeline_stage,
+        scored_expr,
+        ph_expr,
+        func.count(CandidateApplication.id),
+    )
+    open_query = apply_searchable_candidate_scope(
+        open_query,
+        organization_id=int(organization_id),
+    )
     open_rows = (
-        db.query(
-            CandidateApplication.role_id,
-            CandidateApplication.pipeline_stage,
-            scored_expr,
-            ph_expr,
-            func.count(CandidateApplication.id),
-        )
+        open_query
         .filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id.in_(role_ids),
@@ -1294,11 +1249,16 @@ def role_pipeline_counts_bulk(
 
     # `rejected` is an application_outcome, orthogonal to pipeline_stage —
     # counted across all stages, mirroring role_pipeline_counts().
+    rejected_query = db.query(
+        CandidateApplication.role_id,
+        func.count(CandidateApplication.id),
+    )
+    rejected_query = apply_searchable_candidate_scope(
+        rejected_query,
+        organization_id=int(organization_id),
+    )
     rejected_rows = (
-        db.query(
-            CandidateApplication.role_id,
-            func.count(CandidateApplication.id),
-        )
+        rejected_query
         .filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id.in_(role_ids),
@@ -1316,10 +1276,19 @@ def role_pipeline_counts_bulk(
     # 'not_yet_decided' per role — scored, open candidates with NO agent decision
     # (pending OR resolved). The TRUE count for the funnel's chip (see the
     # single-role helper). One batched query, NOT EXISTS against AgentDecision.
-    nyd_rows = (
-        db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
+    nyd_query = (
+        db.query(
+            CandidateApplication.role_id,
+            func.count(CandidateApplication.id),
+        )
         .join(Role, Role.id == CandidateApplication.role_id)
-        .filter(
+    )
+    nyd_query = apply_searchable_candidate_scope(
+        nyd_query,
+        organization_id=int(organization_id),
+    )
+    nyd_rows = (
+        nyd_query.filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id.in_(role_ids),
             CandidateApplication.deleted_at.is_(None),

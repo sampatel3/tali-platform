@@ -25,6 +25,7 @@ from ..domains.assessments_runtime.pipeline_service import (
 )
 from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
+from .related_role_application_runtime import RelatedRoleAssessmentContext
 from .assessment_invite_workable_handoff import (
     HANDOFF_PENDING,
     HANDOFF_RETRY_WAIT,
@@ -50,6 +51,9 @@ def _append_pipeline_hold_event(
     assessment: Assessment,
     generation: int,
     reason: str,
+    role_id: int | None = None,
+    local_stage: str | None = None,
+    local_version: int | None = None,
 ) -> None:
     append_application_event(
         db,
@@ -60,10 +64,20 @@ def _append_pipeline_hold_event(
         metadata={
             "assessment_id": int(assessment.id),
             "send_generation": generation,
-            "current_stage": app.pipeline_stage,
-            "current_version": int(app.version or 0),
+            "current_stage": local_stage or app.pipeline_stage,
+            "current_version": (
+                int(local_version)
+                if local_version is not None
+                else int(app.version or 0)
+            ),
+            "acting_role_id": role_id,
         },
-        idempotency_key=f"assessment-invite-pipeline-held:{assessment.id}:{generation}",
+        role_id=role_id,
+        target_stage="invited",
+        effect_status="held",
+        idempotency_key=(
+            f"assessment-invite-pipeline-held:{assessment.id}:{generation}"
+        ),
     )
 
 
@@ -73,19 +87,23 @@ def _confirm_local_pipeline(
     assessment: Assessment,
     generation: int,
     email_id: str,
+    related_context: RelatedRoleAssessmentContext | None = None,
 ) -> None:
     """Apply the frozen pipeline intent inside the provider-success txn."""
     if not assessment.application_id:
         return
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(assessment.application_id),
-            CandidateApplication.organization_id == int(assessment.organization_id),
+    app = related_context.application if related_context is not None else None
+    if app is None and related_context is None:
+        app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == int(assessment.application_id),
+                CandidateApplication.organization_id
+                == int(assessment.organization_id),
+            )
+            .with_for_update()
+            .one_or_none()
         )
-        .with_for_update()
-        .one_or_none()
-    )
     if app is None:
         return
 
@@ -106,29 +124,73 @@ def _confirm_local_pipeline(
         }
     )
 
-    from .related_role_application_runtime import transition_related_role_assessment_stage
+    from .related_role_application_runtime import (
+        transition_related_role_assessment_stage,
+    )
 
-    if transition_related_role_assessment_stage(
+    related_transition = transition_related_role_assessment_stage(
         db,
         assessment=assessment,
         to_stage="invited",
         source=source,
-    ):
+        context=related_context,
+        idempotency_key=(
+            f"assessment-invite-stage:{assessment.id}:{generation}"
+        ),
+        reason=reason,
+    )
+    if related_transition.handled:
         # The assessment belongs to the related role even though its
-        # application_id points at the owner's one ATS application. Record the
-        # delivery event on that shared subject for audit, but keep the owner's
-        # Taali/ATS stage unchanged.
+        # application may link to another ATS application. Record the delivery
+        # event on its logical source row, under the acting role, while keeping
+        # the owner and every sibling role unchanged.
         metadata["related_role_id"] = int(assessment.role_id)
+        metadata["transition_changed"] = bool(related_transition.changed)
+        metadata["transition_hold_reason"] = related_transition.reason
         append_application_event(
             db,
             app=app,
+            role_id=int(assessment.role_id),
             event_type=event_type,
             actor_type=actor_type,
             actor_id=int(actor_id) if actor_id is not None else None,
             reason=reason,
             metadata=metadata,
-            idempotency_key=f"assessment-invite-confirmed:{assessment.id}:{generation}",
+            target_stage="invited",
+            effect_status=(
+                "confirmed" if related_transition.reason is None else "held"
+            ),
+            idempotency_key=(
+                f"assessment-invite-confirmed:{assessment.id}:{generation}"
+            ),
         )
+        if related_transition.reason is not None:
+            evaluation = (
+                related_context.evaluation
+                if related_context is not None
+                else None
+            )
+            _append_pipeline_hold_event(
+                db,
+                app=app,
+                assessment=assessment,
+                generation=generation,
+                role_id=int(assessment.role_id),
+                local_stage=(
+                    str(evaluation.pipeline_stage)
+                    if evaluation is not None
+                    else None
+                ),
+                local_version=(
+                    int(evaluation.version or 1)
+                    if evaluation is not None
+                    else None
+                ),
+                reason=(
+                    "Invite delivered, but the related-role pipeline was preserved: "
+                    f"{related_transition.reason}"
+                ),
+            )
         return
 
     ensure_pipeline_fields(app)
@@ -208,14 +270,37 @@ def confirm_assessment_invite_provider_success(
     expected_generation: int,
 ) -> dict:
     """Commit truthful local invite state after Resend accepted the email."""
-    row = (
+    locator = (
         db.query(Assessment)
         .filter(Assessment.id == int(assessment_id))
-        .with_for_update()
         .one_or_none()
     )
-    if row is None:
+    if locator is None:
         return {"confirmed": False, "reason": "missing"}
+    from .related_role_application_runtime import (
+        lock_related_role_assessment_context,
+    )
+
+    related_context = lock_related_role_assessment_context(
+        db,
+        assessment=locator,
+        lock_assessment=True,
+    )
+    if related_context.handled:
+        row = related_context.assessment
+        if row is None:
+            return {"confirmed": False, "reason": "missing"}
+    else:
+        row = (
+            db.query(Assessment)
+            .filter(Assessment.id == int(assessment_id))
+            .with_for_update()
+            .populate_existing()
+            .one_or_none()
+        )
+        if row is None:
+            return {"confirmed": False, "reason": "missing"}
+        related_context = None
     generation = int(row.invite_email_send_generation or 0)
     if generation != int(expected_generation):
         return {"confirmed": False, "reason": "superseded_generation"}
@@ -258,6 +343,7 @@ def confirm_assessment_invite_provider_success(
         assessment=row,
         generation=generation,
         email_id=provider_id,
+        related_context=related_context,
     )
 
     pipeline_intent = _pipeline_intent(row)

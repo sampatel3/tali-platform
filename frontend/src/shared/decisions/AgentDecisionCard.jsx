@@ -106,9 +106,13 @@ export const AgentDecisionCard = ({ decision, onApprove, onAlternative, onTeach,
   const isRejectType = isRejectDecisionType(decision.decision_type);
   const postHandoverWarn = isRejectType && Boolean(decision.candidate_post_handover);
   const spec = DECISION_ACTIONS[decision.decision_type] || DEFAULT_ACTIONS;
-  const rejectConsequenceCopy = buildRejectConsequenceCopy(decision.role_family);
+  const rejectConsequenceCopy = buildRejectConsequenceCopy(decision.role_family, decision.role_id);
   const alternatives = (spec.alternatives || [])
-    .map((alternative) => withRoleAwareRejectCopy(alternative, decision.role_family));
+    .map((alternative) => withRoleAwareRejectCopy(
+      alternative,
+      decision.role_family,
+      decision.role_id,
+    ));
   const recExplanation = decision.decision_explanation && typeof decision.decision_explanation === 'object'
     ? decision.decision_explanation
     : null;

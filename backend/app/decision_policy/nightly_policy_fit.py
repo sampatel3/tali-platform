@@ -26,8 +26,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from ..candidate_search.logical_policy_state import (
+    LogicalCandidatePolicyMetrics,
+    read_logical_candidate_policy_metrics,
+)
 from ..models.agent_decision import AgentDecision
-from ..models.candidate_application import CandidateApplication
 from ..models.decision_policy import DecisionPolicy
 from ..models.organization import Organization
 from ..models.policy_version import PolicyVersion
@@ -130,7 +133,7 @@ ORG_FIT_FLOOR = 50
 
 
 def _label_for_decision(
-    decision: AgentDecision, *, app: CandidateApplication | None
+    decision: AgentDecision, *, state: LogicalCandidatePolicyMetrics | None
 ) -> tuple[float | None, float]:
     """Map a resolved decision to a (label, weight) pair.
 
@@ -139,8 +142,7 @@ def _label_for_decision(
     """
     status = (decision.status or "").lower()
     # Realised outcome takes priority (weight 1.0).
-    outcome = (app.application_outcome if app else "") or ""
-    outcome = outcome.lower()
+    outcome = state.application_outcome if state is not None else ""
     if outcome == "hired":
         return 1.0, 1.0
     if outcome == "rejected":
@@ -232,24 +234,35 @@ def _collect_training_data(
         )
 
     decisions = (
-        db.query(AgentDecision, CandidateApplication)
-        .outerjoin(
-            CandidateApplication,
-            CandidateApplication.id == AgentDecision.application_id,
-        )
+        db.query(AgentDecision)
         .filter(
             AgentDecision.organization_id == organization_id,
             AgentDecision.created_at >= since,
         )
         .all()
     )
-    for decision, app in decisions:
+    states = read_logical_candidate_policy_metrics(
+        db,
+        organization_id=int(organization_id),
+        role_ids=(int(decision.role_id) for decision in decisions),
+        candidate_keys=(
+            (int(decision.role_id), int(decision.candidate_id))
+            for decision in decisions
+        ),
+    )
+    state_by_key = {state.candidate_key: state for state in states}
+    for decision in decisions:
         # Don't double-count: if Graphiti already gave us a strong
         # outcome label for this decision, skip the weaker Postgres
         # label for the same decision_id.
         if int(decision.id) in graph_seen_decision_ids:
             continue
-        label, weight = _label_for_decision(decision, app=app)
+        label, weight = _label_for_decision(
+            decision,
+            state=state_by_key.get(
+                (int(decision.role_id), int(decision.candidate_id))
+            ),
+        )
         if label is None or weight <= 0:
             continue
         feats = _features_for_decision(decision)

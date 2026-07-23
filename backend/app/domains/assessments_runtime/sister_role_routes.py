@@ -1,4 +1,4 @@
-"""Coupled Taali sister-role creation and scoring lifecycle."""
+"""Independent Taali related-role creation and scoring lifecycle."""
 
 from __future__ import annotations
 
@@ -41,7 +41,11 @@ from ...services.related_role_service import (
 )
 from ...services.ats_role_lifecycle import ats_job_lifecycle
 from ...services.job_page_lifecycle import role_paid_ats_work_block_reason
-from ...services.sister_role_service import ensure_sister_evaluations, project_sister_application
+from ...services.sister_role_service import (
+    ensure_sister_evaluations,
+    project_sister_application,
+    related_role_ats_owner,
+)
 from ...tasks.sister_role_tasks import score_sister_role
 from .roles_management_routes import _serialize_role_detail
 from .job_authorization import JobPermission, require_job_permission
@@ -75,8 +79,8 @@ def _sister_role(db: Session, *, role_id: int, organization_id: int) -> Role:
     )
     if role is None:
         raise HTTPException(status_code=404, detail="Role not found")
-    if str(role.role_kind or "") != ROLE_KIND_SISTER or not role.ats_owner_role_id:
-        raise HTTPException(status_code=409, detail="Role is not a coupled related role")
+    if str(role.role_kind or "") != ROLE_KIND_SISTER:
+        raise HTTPException(status_code=409, detail="Role is not a related role")
     return role
 
 
@@ -97,10 +101,13 @@ def preview_sister_role(
     return SisterRolePreview(
         source_role_id=source.id,
         source_role_name=source.name,
-        source_ats_provider=ats_job_lifecycle(source).provider or "",
+        source_ats_provider=(
+            ats_job_lifecycle(related_role_ats_owner(db, source)).provider
+        ),
         candidates_total=counts["total"],
         candidates_with_cv=counts["with_cv"],
         candidates_missing_cv=counts["missing_cv"],
+        source_snapshot_fingerprint=counts["snapshot_fingerprint"],
     )
 
 
@@ -132,6 +139,9 @@ def create_sister_role(
             creator_user_id=int(current_user.id),
             name=data.name,
             job_spec_text=data.job_spec_text,
+            expected_source_snapshot_fingerprint=(
+                data.source_snapshot_fingerprint
+            ),
         )
     except RelatedRoleError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -181,7 +191,10 @@ def rescore_sister_role(
 def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
     rows = (
         db.query(SisterRoleEvaluation.status, func.count(SisterRoleEvaluation.id))
-        .filter(SisterRoleEvaluation.role_id == role.id)
+        .filter(
+            SisterRoleEvaluation.role_id == role.id,
+            SisterRoleEvaluation.deleted_at.is_(None),
+        )
         .group_by(SisterRoleEvaluation.status)
         .all()
     )
@@ -207,6 +220,7 @@ def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
         db.query(func.count(SisterRoleEvaluation.id))
         .filter(
             SisterRoleEvaluation.role_id == role.id,
+            SisterRoleEvaluation.deleted_at.is_(None),
             SisterRoleEvaluation.status == SISTER_EVAL_RETRY_WAIT,
             SisterRoleEvaluation.last_error_code == "authority_blocked",
         )
@@ -247,6 +261,7 @@ def _scoring_status(db: Session, role: Role) -> SisterRoleScoringStatus:
         .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
         .filter(
             SisterRoleEvaluation.role_id == role.id,
+            SisterRoleEvaluation.deleted_at.is_(None),
             SisterRoleEvaluation.status == SISTER_EVAL_DONE,
         )
         .order_by(SisterRoleEvaluation.role_fit_score.desc().nullslast())
@@ -298,23 +313,44 @@ def update_related_role_application_stage(
 ):
     """Move one candidate inside this related role's Taali funnel."""
 
-    from .applications_routes import application_to_response, get_application
+    from .applications_routes import application_to_response
 
-    app = get_application(application_id, current_user.organization_id, db)
+    # Explicit membership survives evidence-row soft deletion; membership and
+    # role authorization below are the authority for this local mutation.
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(current_user.organization_id),
+        )
+        .one_or_none()
+    )
+    if app is None:
+        raise HTTPException(status_code=404, detail="Application not found")
     role, evaluation = move_related_role_application_stage(
         db,
         current_user=current_user,
         related_role_id=role_id,
         application=app,
         to_stage=data.pipeline_stage,
+        expected_version=data.expected_version,
+        idempotency_key=data.idempotency_key,
     )
     payload = application_to_response(
         app, use_cached_score_summary=True
     ).model_dump(mode="python")
-    return project_sister_application(
-        payload,
-        sister_role=role,
-        owner_role=db.get(Role, int(role.ats_owner_role_id)),
-        evaluation=evaluation,
-        db=db,
+    owner_role = (
+        db.get(Role, int(role.ats_owner_role_id))
+        if role.ats_owner_role_id is not None
+        else None
+    )
+    return ApplicationResponse(
+        **project_sister_application(
+            payload,
+            sister_role=role,
+            owner_role=owner_role,
+            evaluation=evaluation,
+            db=db,
+            application=app,
+        )
     )

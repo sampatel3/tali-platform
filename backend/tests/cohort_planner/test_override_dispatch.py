@@ -8,6 +8,7 @@ from app.actions import override_decision
 from app.actions.types import Actor
 from app.models.agent_decision import AgentDecision
 from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 
 from .conftest import make_world
@@ -316,6 +317,19 @@ def test_related_override_sends_assessment_for_decisions_exact_role(db):
     ]
     db.add_all(related_roles)
     db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=int(org.id),
+            role_id=int(related_roles[1].id),
+            candidate_id=int(app.candidate_id),
+            source_application_id=int(app.id),
+            ats_application_id=int(app.id),
+            status="done",
+            pipeline_stage="review",
+            application_outcome="open",
+            spec_fingerprint="related-override-role",
+        )
+    )
     decision = _make_decision(db, org, related_roles[1], app, "reject")
 
     fake_send_result = type("_R", (), {"status": "sent", "assessment_id": 9})()

@@ -20,6 +20,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from app.candidate_search.tool_failure_contract import (
     CANDIDATE_SEARCH_UNAVAILABLE_CODE,
     CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE,
@@ -33,6 +35,12 @@ from app.models.role import Role
 from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.taali_chat_message import TaaliChatMessage
 from app.models.user import User
+from app.mcp.provenance import (
+    ACTION_HISTORY_REQUIRED_MESSAGE,
+    DECISION_HISTORY_REQUIRED_MESSAGE,
+    QUALITATIVE_EVIDENCE_REQUIRED_MESSAGE,
+)
+from app.mcp.required_reads import ROLE_SCOPE_REQUIRED_MESSAGE
 from app.taali_chat.service import ChatTurnInput, run_chat_turn
 from app.taali_chat.search_context import population_context_for_search
 from app.taali_chat.stream_round import CHAT_ROUND_IDLE_TIMEOUT_SECONDS
@@ -107,27 +115,33 @@ def test_followup_search_carries_forward_the_last_explicit_occupation():
     messages = [
         {
             "role": "user",
-            "content": [{
-                "type": "text",
-                "text": "can you find a project manager with Treasury experience (Banking domain)",
-            }],
+            "content": [
+                {
+                    "type": "text",
+                    "text": "can you find a project manager with Treasury experience (Banking domain)",
+                }
+            ],
         },
         {
             "role": "assistant",
-            "content": [{
-                "type": "tool_use",
-                "name": "find_top_candidates",
-                "input": {
-                    "query": "project manager with Treasury experience (Banking domain)"
-                },
-            }],
+            "content": [
+                {
+                    "type": "tool_use",
+                    "name": "find_top_candidates",
+                    "input": {
+                        "query": "project manager with Treasury experience (Banking domain)"
+                    },
+                }
+            ],
         },
         {
             "role": "user",
-            "content": [{
-                "type": "text",
-                "text": "can you find me the top candidates with Treasury banking experience",
-            }],
+            "content": [
+                {
+                    "type": "text",
+                    "text": "can you find me the top candidates with Treasury banking experience",
+                }
+            ],
         },
     ]
 
@@ -140,24 +154,33 @@ def test_followup_search_carries_forward_the_last_explicit_occupation():
 
 
 def test_followup_search_can_explicitly_clear_the_occupation_scope():
-    messages = [{
-        "role": "user",
-        "content": [{
-            "type": "text",
-            "text": "search across all roles for Treasury banking experience",
-        }],
-    }]
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "search across all roles for Treasury banking experience",
+                }
+            ],
+        }
+    ]
 
-    assert population_context_for_search(
-        messages,
-        current_query="Treasury banking experience across all roles",
-    ) is None
+    assert (
+        population_context_for_search(
+            messages,
+            current_query="Treasury banking experience across all roles",
+        )
+        is None
+    )
 
 
 def test_followup_search_does_not_carry_forward_an_excluded_title():
     prior = {
         "role": "user",
-        "content": [{"type": "text", "text": "find project managers with Treasury experience"}],
+        "content": [
+            {"type": "text", "text": "find project managers with Treasury experience"}
+        ],
     }
     for latest in (
         "not project managers, find people with banking experience",
@@ -169,10 +192,13 @@ def test_followup_search_does_not_carry_forward_an_excluded_title():
             prior,
             {"role": "user", "content": [{"type": "text", "text": latest}]},
         ]
-        assert population_context_for_search(
-            messages,
-            current_query="banking experience",
-        ) is None
+        assert (
+            population_context_for_search(
+                messages,
+                current_query="banking experience",
+            )
+            is None
+        )
 
 
 def test_followup_title_exclusion_can_replace_the_population():
@@ -183,10 +209,12 @@ def test_followup_title_exclusion_can_replace_the_population():
         },
         {
             "role": "user",
-            "content": [{
-                "type": "text",
-                "text": "not project managers; find data engineers instead",
-            }],
+            "content": [
+                {
+                    "type": "text",
+                    "text": "not project managers; find data engineers instead",
+                }
+            ],
         },
     ]
 
@@ -249,20 +277,25 @@ def _text_only_plan(text: str):
 def test_insufficient_credits_does_not_persist_an_unanswered_turn(db):
     user, org = _seed_user(db)
 
-    with patch(
-        "app.taali_chat.service.reserve",
-        side_effect=InsufficientCreditsError(
-            organization_id=org.id,
-            required=10_000,
-            available=0,
+    with (
+        patch(
+            "app.taali_chat.service.reserve",
+            side_effect=InsufficientCreditsError(
+                organization_id=org.id,
+                required=10_000,
+                available=0,
+            ),
         ),
-    ), patch("app.taali_chat.service.routed_messages_client") as get_client:
+        patch("app.taali_chat.service.routed_messages_client") as get_client,
+    ):
         frames = _drain(
             run_chat_turn(
                 db=db,
                 user=user,
                 organization=org,
-                turn=ChatTurnInput(user_message="find candidates", conversation_id=None),
+                turn=ChatTurnInput(
+                    user_message="find candidates", conversation_id=None
+                ),
             )
         )
 
@@ -366,10 +399,11 @@ def test_text_only_turn_persists_and_streams(db):
         db.in_transaction()
     )
 
-    with patch(
-        "app.taali_chat.service.routed_messages_client", return_value=fake_client
-    ) as get_client, patch(
-        "app.taali_chat.service.record_event"
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client", return_value=fake_client
+        ) as get_client,
+        patch("app.taali_chat.service.record_event"),
     ):
         frames = _drain(
             run_chat_turn(
@@ -395,6 +429,12 @@ def test_text_only_turn_persists_and_streams(db):
     assert routed_call["model"] == "claude-haiku-4-5-20251001"
     assert routed_call["metering"]["feature"] == "taali_chat"
     assert routed_call["metering"]["metadata"]["round"] == 0
+    assert {
+        "search_role_candidates",
+        "get_role_candidate",
+        "list_candidate_actions",
+        "list_recent_agent_decisions",
+    } <= {str(tool["name"]) for tool in routed_call["tools"]}
     route = get_client.call_args.args[0]
     assert get_client.call_args.kwargs == {}
     assert route.decision.task is TaskKey.GENERAL_CHAT_ORCHESTRATION
@@ -483,7 +523,9 @@ def test_tool_call_dispatches_and_emits_result(db):
                 db=db,
                 user=user,
                 organization=org,
-                turn=ChatTurnInput(user_message="any candidates above 70?", conversation_id=None),
+                turn=ChatTurnInput(
+                    user_message="any candidates above 70?", conversation_id=None
+                ),
             )
         )
 
@@ -542,8 +584,11 @@ def test_sensitive_tool_result_is_available_live_but_not_persisted(db):
     ]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.routed_messages_client", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client", return_value=fake_client
+        ),
+        patch("app.taali_chat.service.record_event"),
     ):
         frames = _drain(
             run_chat_turn(
@@ -554,9 +599,13 @@ def test_sensitive_tool_result_is_available_live_but_not_persisted(db):
             )
         )
 
-    live_result = next(json.loads(frame[2:]) for frame in frames if frame.startswith("a:"))
+    live_result = next(
+        json.loads(frame[2:]) for frame in frames if frame.startswith("a:")
+    )
     assert live_result["result"]["cv_text"] == raw_cv
-    assert raw_cv in fake_client.messages.calls[1]["messages"][-1]["content"][0]["content"]
+    assert (
+        raw_cv in fake_client.messages.calls[1]["messages"][-1]["content"][0]["content"]
+    )
 
     stored_messages = db.query(TaaliChatMessage).all()
     serialized = json.dumps([message.content for message in stored_messages])
@@ -576,15 +625,20 @@ def test_tool_error_emits_is_error_frame(db):
     ]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.routed_messages_client", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client", return_value=fake_client
+        ),
+        patch("app.taali_chat.service.record_event"),
     ):
         frames = _drain(
             run_chat_turn(
                 db=db,
                 user=user,
                 organization=org,
-                turn=ChatTurnInput(user_message="show role 999999", conversation_id=None),
+                turn=ChatTurnInput(
+                    user_message="show role 999999", conversation_id=None
+                ),
             )
         )
 
@@ -621,7 +675,9 @@ def test_candidate_search_failure_recovers_and_ends_without_model_synthesis(db):
         raise AssertionError("duplicate organization flush should fail")
 
     with (
-        patch("app.taali_chat.service.routed_messages_client", return_value=fake_client),
+        patch(
+            "app.taali_chat.service.routed_messages_client", return_value=fake_client
+        ),
         patch("app.taali_chat.service.record_event"),
         patch("app.taali_chat.tool_execution.dispatch_tool", side_effect=fail_search),
         patch.object(db, "rollback", wraps=db.rollback) as rollback,
@@ -750,7 +806,9 @@ def test_verified_search_result_is_durable_before_later_tool_failure(db):
         raise AssertionError("duplicate organization flush should fail")
 
     with (
-        patch("app.taali_chat.service.routed_messages_client", return_value=fake_client),
+        patch(
+            "app.taali_chat.service.routed_messages_client", return_value=fake_client
+        ),
         patch("app.taali_chat.service.record_event"),
         patch("app.taali_chat.tool_execution.dispatch_tool", side_effect=dispatch),
     ):
@@ -779,15 +837,16 @@ def test_max_tool_rounds_guard(db):
     """A repeated identical tool plan should trip the no-progress breaker early."""
     user, org = _seed_user(db)
     plans = [
-        _tool_use_plan(
-            tool_id=f"toolu_{i}", tool_name="list_roles", args={}
-        )
+        _tool_use_plan(tool_id=f"toolu_{i}", tool_name="list_roles", args={})
         for i in range(20)  # generous; the no-progress breaker should stop it
     ]
     fake_client = _FakeClient(plans)
 
-    with patch("app.taali_chat.service.routed_messages_client", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client", return_value=fake_client
+        ),
+        patch("app.taali_chat.service.record_event"),
     ):
         frames = _drain(
             run_chat_turn(
@@ -809,7 +868,9 @@ def test_max_tool_rounds_guard(db):
 
 def test_continuing_conversation_loads_history(db):
     user, org = _seed_user(db)
-    convo = TaaliChatConversation(organization_id=org.id, user_id=user.id, title="Prior")
+    convo = TaaliChatConversation(
+        organization_id=org.id, user_id=user.id, title="Prior"
+    )
     db.add(convo)
     db.flush()
     db.add(
@@ -832,8 +893,11 @@ def test_continuing_conversation_loads_history(db):
 
     plans = [_text_only_plan("Continuing.")]
     fake_client = _FakeClient(plans)
-    with patch("app.taali_chat.service.routed_messages_client", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client", return_value=fake_client
+        ),
+        patch("app.taali_chat.service.record_event"),
     ):
         _drain(
             run_chat_turn(
@@ -855,8 +919,11 @@ def test_unknown_conversation_id_emits_error(db):
     user, org = _seed_user(db)
     plans: list[dict] = []  # no Anthropic call expected
     fake_client = _FakeClient(plans)
-    with patch("app.taali_chat.service.routed_messages_client", return_value=fake_client), patch(
-        "app.taali_chat.service.record_event"
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client", return_value=fake_client
+        ),
+        patch("app.taali_chat.service.record_event"),
     ):
         frames = _drain(
             run_chat_turn(
@@ -869,3 +936,496 @@ def test_unknown_conversation_id_emits_error(db):
     assert any(f.startswith("3:") and "999999" in f for f in frames)
     # Anthropic must not have been called.
     assert len(fake_client.messages.calls) == 0
+
+
+def test_historical_candidate_claim_is_withheld_without_action_history(db):
+    user, org = _seed_user(db)
+    role = Role(organization_id=org.id, name="AI Engineer", source="manual")
+    db.add(role)
+    db.commit()
+    unsupported = "Zero candidates were advanced last week."
+    fake_client = _FakeClient([_text_only_plan(unsupported)])
+
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client", return_value=fake_client
+        ),
+        patch("app.taali_chat.service.record_event"),
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message=(
+                        "Give me the candidates I advanced to technical "
+                        "interview last week"
+                    ),
+                    conversation_id=None,
+                    role_id=int(role.id),
+                ),
+            )
+        )
+
+    visible = "".join(
+        json.loads(frame[2:]) for frame in frames if frame.startswith("0:")
+    )
+    assert unsupported not in visible
+    assert ACTION_HISTORY_REQUIRED_MESSAGE in visible
+    assistant = (
+        db.query(TaaliChatMessage)
+        .filter(TaaliChatMessage.role == "assistant")
+        .order_by(TaaliChatMessage.id.desc())
+        .first()
+    )
+    assert assistant is not None
+    assert assistant.content == [
+        {"type": "text", "text": ACTION_HISTORY_REQUIRED_MESSAGE}
+    ]
+
+
+@pytest.mark.parametrize(
+    "user_message",
+    [
+        "Who did I advance last week?",
+        "List all candidates at Technical Interview",
+    ],
+)
+def test_global_exact_reads_ask_for_role_without_calling_a_provider(db, user_message):
+    user, org = _seed_user(db)
+
+    with (
+        patch("app.taali_chat.service.routed_messages_client") as get_client,
+        patch("app.taali_chat.service.record_event"),
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message=user_message,
+                    conversation_id=None,
+                ),
+            )
+        )
+
+    visible = "".join(
+        json.loads(frame[2:]) for frame in frames if frame.startswith("0:")
+    )
+    assert visible == ROLE_SCOPE_REQUIRED_MESSAGE
+    get_client.assert_not_called()
+
+
+def test_global_pool_question_forces_global_application_search(db):
+    user, org = _seed_user(db)
+    fake_client = _FakeClient(
+        [
+            _tool_use_plan(
+                tool_id="global-pool",
+                tool_name="get_role",
+                args={"role_id": 999_999},
+            ),
+            _text_only_plan("Avery is currently in review."),
+        ]
+    )
+    dispatched: list[tuple[str, dict]] = []
+
+    def global_result(name, arguments, **_kwargs):
+        dispatched.append((name, dict(arguments)))
+        return [{"application_id": 1, "candidate_name": "Avery"}]
+
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client",
+            return_value=fake_client,
+        ),
+        patch("app.taali_chat.service.record_event"),
+        patch(
+            "app.taali_chat.tool_execution.dispatch_tool",
+            side_effect=global_result,
+        ),
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message="Who is currently in review?",
+                    conversation_id=None,
+                ),
+            )
+        )
+
+    visible = "".join(
+        json.loads(frame[2:]) for frame in frames if frame.startswith("0:")
+    )
+    assert visible == "Avery is currently in review."
+    assert dispatched == [
+        (
+            "search_applications",
+            {"limit": 100, "offset": 0, "pipeline_stage": "review"},
+        )
+    ]
+    assert fake_client.messages.calls[0]["tool_choice"]["name"] == (
+        "search_applications"
+    )
+
+
+@pytest.mark.parametrize(
+    ("user_message", "unsupported", "expected"),
+    [
+        (
+            "Hello",
+            "Zero candidates have PySpark experience in this pool.",
+            QUALITATIVE_EVIDENCE_REQUIRED_MESSAGE,
+        ),
+        (
+            "Show the pending agent decisions",
+            "There are no pending agent recommendations.",
+            DECISION_HISTORY_REQUIRED_MESSAGE,
+        ),
+    ],
+)
+def test_candidate_pool_and_decision_claims_require_canonical_reads(
+    db, user_message, unsupported, expected
+):
+    user, org = _seed_user(db)
+    fake_client = _FakeClient([_text_only_plan(unsupported)])
+
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client", return_value=fake_client
+        ),
+        patch("app.taali_chat.service.record_event"),
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message=user_message,
+                    conversation_id=None,
+                ),
+            )
+        )
+
+    visible = "".join(
+        json.loads(frame[2:]) for frame in frames if frame.startswith("0:")
+    )
+    assert unsupported not in visible
+    assert expected in visible
+    assistant = (
+        db.query(TaaliChatMessage)
+        .filter(TaaliChatMessage.role == "assistant")
+        .order_by(TaaliChatMessage.id.desc())
+        .first()
+    )
+    assert assistant is not None
+    assert assistant.content == [{"type": "text", "text": expected}]
+
+
+def test_identity_only_role_search_cannot_ground_pyspark_zero(db):
+    """Regression: exact identity-text zero is not exact CV-evidence zero."""
+
+    user, org = _seed_user(db)
+    fake_client = _FakeClient(
+        [
+            _tool_use_plan(
+                tool_id="identity-search",
+                tool_name="search_role_candidates",
+                args={"role_id": 1, "q": "PySpark"},
+            ),
+            _text_only_plan("Zero candidates have PySpark experience in this pool."),
+        ]
+    )
+
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client",
+            return_value=fake_client,
+        ),
+        patch("app.taali_chat.service.record_event"),
+        patch(
+            "app.taali_chat.tool_execution.dispatch_tool",
+            return_value={
+                "items": [],
+                "total": 0,
+                "total_is_exact": True,
+                "has_more": False,
+                "filters": {"q": "PySpark"},
+            },
+        ),
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message="Show PySpark candidates",
+                    conversation_id=None,
+                ),
+            )
+        )
+
+    visible = "".join(
+        json.loads(frame[2:]) for frame in frames if frame.startswith("0:")
+    )
+    assert "Zero candidates have PySpark" not in visible
+    assert QUALITATIVE_EVIDENCE_REQUIRED_MESSAGE in visible
+
+
+def test_cited_pyspark_result_can_ground_taali_chat_answer(db):
+    user, org = _seed_user(db)
+    supported_text = "Avery has PySpark experience, supported by the cited CV evidence."
+    fake_client = _FakeClient(
+        [
+            _tool_use_plan(
+                tool_id="evidence-search",
+                tool_name="find_top_candidates",
+                args={"query": "PySpark experience"},
+            ),
+            _text_only_plan(supported_text),
+        ]
+    )
+    evidence_result = {
+        "criteria_requested": ["PySpark experience"],
+        "required_criteria": ["PySpark experience"],
+        "criteria_unchecked": [],
+        "candidates": [
+            {
+                "application_id": 1,
+                "candidate_name": "Avery",
+                "criteria": [
+                    {
+                        "criterion": "PySpark experience",
+                        "status": "met",
+                        "grounded": True,
+                        "evidence": [
+                            {
+                                "quote": "Built streaming services with PySpark.",
+                                "source": "cv",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        "returned": 1,
+        "deep_checked": 1,
+        "evidence_succeeded": 1,
+        "search_status": "matches_found",
+        "capped": False,
+        "exhaustive": True,
+        "is_exact_empty": False,
+        "warnings": [],
+    }
+
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client",
+            return_value=fake_client,
+        ),
+        patch("app.taali_chat.service.record_event"),
+        patch(
+            "app.taali_chat.tool_execution.dispatch_tool",
+            return_value=evidence_result,
+        ),
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message="Show PySpark candidates",
+                    conversation_id=None,
+                ),
+            )
+        )
+
+    visible = "".join(
+        json.loads(frame[2:]) for frame in frames if frame.startswith("0:")
+    )
+    assert visible == supported_text
+
+
+@pytest.mark.parametrize(
+    ("user_message", "expected_tool", "supported_text"),
+    [
+        (
+            "Give me the candidates I advanced to technical interview last week",
+            "list_candidate_actions",
+            "Avery was advanced to technical interview last week.",
+        ),
+        (
+            "Show PySpark candidates",
+            "find_top_candidates",
+            "Avery has PySpark experience supported by cited CV evidence.",
+        ),
+        (
+            "Who is currently in technical interview?",
+            "search_role_candidates",
+            "Avery is currently in technical interview.",
+        ),
+        (
+            "Show the pending agent decisions",
+            "list_recent_agent_decisions",
+            "There is one pending agent decision.",
+        ),
+    ],
+)
+def test_taali_chat_forces_canonical_grounded_reads_with_bound_filters(
+    db,
+    user_message,
+    expected_tool,
+    supported_text,
+):
+    """Offline runtime matrix: the model chooses neither tool nor filters."""
+
+    user, org = _seed_user(db)
+    role = Role(organization_id=org.id, name="AI Engineer", source="manual")
+    db.add(role)
+    db.commit()
+    fake_client = _FakeClient(
+        [
+            _tool_use_plan(
+                tool_id="forced-read",
+                tool_name="get_role",
+                args={"role_id": 999_999},
+            ),
+            _text_only_plan(supported_text),
+        ]
+    )
+    dispatched: list[tuple[str, dict]] = []
+
+    def grounded_result(name, arguments, **_kwargs):
+        dispatched.append((name, dict(arguments)))
+        filters = {
+            key: value
+            for key, value in arguments.items()
+            if key not in {"limit", "offset", "role_id"}
+        }
+        if name == "list_candidate_actions":
+            return {
+                "role": {"id": int(role.id), "name": role.name},
+                "items": [
+                    {
+                        "event_id": 1,
+                        "candidate_name": "Avery",
+                        "action": "advanced",
+                        "target_stage": "Technical Interview",
+                    }
+                ],
+                "total": 1,
+                "limit": arguments["limit"],
+                "offset": arguments["offset"],
+                "total_is_exact": True,
+                "has_more": False,
+                "filters": filters,
+            }
+        if name == "search_role_candidates":
+            return {
+                "role": {"id": int(role.id), "name": role.name},
+                "items": [{"application_id": 1, "candidate_name": "Avery"}],
+                "total": 1,
+                "limit": arguments["limit"],
+                "offset": arguments["offset"],
+                "total_is_exact": True,
+                "has_more": False,
+                "filters": filters,
+            }
+        if name == "list_recent_agent_decisions":
+            return {
+                "items": [{"id": 1, "candidate_name": "Avery"}],
+                "total": 1,
+                "limit": arguments["limit"],
+                "offset": arguments["offset"],
+                "total_is_exact": True,
+                "has_more": False,
+                "filters": {"role_id": int(role.id), **filters},
+            }
+        assert name == "find_top_candidates"
+        return {
+            "criteria_requested": ["PySpark experience"],
+            "required_criteria": ["PySpark experience"],
+            "criteria_unchecked": [],
+            "candidates": [
+                {
+                    "application_id": 1,
+                    "candidate_name": "Avery",
+                    "criteria": [
+                        {
+                            "criterion": "PySpark experience",
+                            "status": "met",
+                            "grounded": True,
+                            "evidence": [
+                                {
+                                    "quote": "Built production pipelines in PySpark.",
+                                    "source": "cv",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "qualified_total": 1,
+            "search_status": "matches_found",
+            "capped": False,
+            "exhaustive": True,
+            "is_exact_empty": False,
+            "warnings": [],
+        }
+
+    with (
+        patch(
+            "app.taali_chat.service.routed_messages_client",
+            return_value=fake_client,
+        ),
+        patch("app.taali_chat.service.record_event"),
+        patch(
+            "app.taali_chat.tool_execution.dispatch_tool",
+            side_effect=grounded_result,
+        ),
+    ):
+        frames = _drain(
+            run_chat_turn(
+                db=db,
+                user=user,
+                organization=org,
+                turn=ChatTurnInput(
+                    user_message=user_message,
+                    conversation_id=None,
+                    role_id=int(role.id),
+                ),
+            )
+        )
+
+    visible = "".join(
+        json.loads(frame[2:]) for frame in frames if frame.startswith("0:")
+    )
+    assert visible == supported_text
+    assert [name for name, _ in dispatched] == [expected_tool]
+    sent = dispatched[0][1]
+    assert sent["role_id"] == int(role.id)
+    assert sent["limit"] in {10, 100}
+    if expected_tool == "list_candidate_actions":
+        assert sent["action"] == "advanced"
+        assert sent["target_stage"] == "technical interview"
+        assert sent["status"] == "confirmed"
+        assert sent["occurred_after"] < sent["occurred_before"]
+    elif expected_tool == "find_top_candidates":
+        assert sent["query"] == user_message
+    elif expected_tool == "search_role_candidates":
+        assert sent["ats_stage"] == "technical interview"
+    else:
+        assert sent["status"] == "pending"
+    assert fake_client.messages.calls[0]["tool_choice"] == {
+        "type": "tool",
+        "name": expected_tool,
+        "disable_parallel_tool_use": True,
+    }

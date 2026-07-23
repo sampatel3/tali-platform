@@ -25,7 +25,6 @@ import {
   roleExternalJobState,
 } from './atsType';
 import { MotionList, MotionListItem, PresenceSwap } from '../../shared/motion';
-import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { FocusedSectionLayout, SegmentedControl } from '../../shared/ui/TaaliPrimitives';
 
 const AGENT_SETTING_SECTIONS = ['overview', 'guidance', 'decisions', 'budget', 'history'];
@@ -63,7 +62,9 @@ const RoleAgentSettingsTab = ({
   onSave,
   onScrollToReview,
   onSaveBudget,
+  savingBudget = false,
   onAutonomyChange,
+  savingAutonomy = false,
   thresholdMode,
   onThresholdModeChange,
   suggestedThreshold,
@@ -93,16 +94,7 @@ const RoleAgentSettingsTab = ({
   );
 
   const controlsReadOnly = !canControlAgent;
-  const hasSharedApplication = role?.role_kind === 'sister'
-    || Number(role?.sister_role_count || 0) > 0
-    || (Array.isArray(role?.role_family?.related) && role.role_family.related.length > 0);
-  const roleLabel = `${String(role?.name || 'Related role').trim()}${role?.id != null ? ` #${role.id}` : ''}`;
-  const sharedRejectReason = hasSharedApplication
-    ? 'Automatic rejection is unavailable for linked roles because rejection closes the shared ATS application across the original role and every related role.'
-    : null;
-  const sharedAdvanceReason = hasSharedApplication
-    ? `Turning this on for ${roleLabel} advances qualified candidates in the original role and every related role because they share one ATS application.`
-    : null;
+  const isRelatedRole = role?.role_kind === 'sister';
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
   const thresholdDisplay = Math.max(0, Math.min(100, sliderValue));
   const effectiveThreshold = thresholdMode === 'auto'
@@ -172,23 +164,34 @@ const RoleAgentSettingsTab = ({
   const externalProviderLabel = atsProviderLabel(externalProvider);
   const externalJobLive = roleExternalJobLive(role);
   const externalJobState = roleExternalJobState(role);
-  // A switch save is one shared-role mutation. Keep exactly one in flight so
+  // A switch save is one role-local mutation. Keep exactly one in flight so
   // impatient/rapid clicks cannot dispatch the same rendered role version
   // twice (the second request would truthfully conflict with the first). The
   // local pending value paints immediately; the parent replaces it with the
   // authoritative response, or the freshly-refetched role after a real 409.
   const autonomySaveInFlightRef = React.useRef(false);
+  const autonomyChangeSequenceRef = React.useRef(0);
+  const settingsRoleIdRef = React.useRef(role?.id);
+  settingsRoleIdRef.current = role?.id;
   const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
-  const [sharedActionToConfirm, setSharedActionToConfirm] = React.useState(null);
   const handleAutonomyToggle = async (key, value) => {
-    if (controlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+    if (controlsReadOnly || savingAutonomy || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+    const actionRoleId = role?.id;
+    const requestSequence = autonomyChangeSequenceRef.current + 1;
+    autonomyChangeSequenceRef.current = requestSequence;
+    const isCurrentRequest = () => (
+      settingsRoleIdRef.current === actionRoleId
+      && autonomyChangeSequenceRef.current === requestSequence
+    );
     autonomySaveInFlightRef.current = true;
     setPendingAutonomy({ key, value: Boolean(value) });
     try {
       await onAutonomyChange(key, Boolean(value));
     } finally {
-      autonomySaveInFlightRef.current = false;
-      setPendingAutonomy(null);
+      if (isCurrentRequest()) {
+        autonomySaveInFlightRef.current = false;
+        setPendingAutonomy(null);
+      }
     }
   };
   const visibleAutonomyValue = (key, savedValue) => (
@@ -196,10 +199,6 @@ const RoleAgentSettingsTab = ({
   );
   const requestAutonomyToggle = (rule) => {
     const nextValue = !rule.value;
-    if (rule.confirmSharedApplicationOnEnable && nextValue) {
-      setSharedActionToConfirm({ key: rule.key, value: nextValue });
-      return;
-    }
     void handleAutonomyToggle(rule.key, nextValue);
   };
 
@@ -222,10 +221,15 @@ const RoleAgentSettingsTab = ({
   const [selectedAssessmentTaskIds, setSelectedAssessmentTaskIds] = React.useState(assignedTaskIdsFromProps);
   const [assessmentTaskSearch, setAssessmentTaskSearch] = React.useState('');
   const [assessmentChangePending, setAssessmentChangePending] = React.useState(false);
+  const assessmentChangeSequenceRef = React.useRef(0);
+  const assessmentRoleIdRef = React.useRef(role?.id);
+  assessmentRoleIdRef.current = role?.id;
 
   React.useEffect(() => {
+    assessmentChangeSequenceRef.current += 1;
     setSelectedAssessmentTaskIds(assignedTaskIdsFromProps);
     setAssessmentTaskSearch('');
+    setAssessmentChangePending(false);
     // The signature is deliberately stable when a parent reload returns new
     // task objects with the same IDs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -257,6 +261,13 @@ const RoleAgentSettingsTab = ({
   const assessmentBusy = savingAssessmentTask || assessmentChangePending;
   const handleAssessmentToggle = async (taskId) => {
     if (controlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
+    const actionRoleId = role?.id;
+    const requestSequence = assessmentChangeSequenceRef.current + 1;
+    assessmentChangeSequenceRef.current = requestSequence;
+    const isCurrentRequest = () => (
+      assessmentRoleIdRef.current === actionRoleId
+      && assessmentChangeSequenceRef.current === requestSequence
+    );
     const id = Number(taskId);
     if (!Number.isFinite(id)) return;
     const previous = selectedAssessmentTaskIds;
@@ -270,9 +281,9 @@ const RoleAgentSettingsTab = ({
     } catch {
       // The parent owns the error toast. Restore the visible selection so the
       // manager never claims a failed change was saved.
-      setSelectedAssessmentTaskIds(previous);
+      if (isCurrentRequest()) setSelectedAssessmentTaskIds(previous);
     } finally {
-      setAssessmentChangePending(false);
+      if (isCurrentRequest()) setAssessmentChangePending(false);
     }
   };
 
@@ -282,6 +293,7 @@ const RoleAgentSettingsTab = ({
   const [budgetEditing, setBudgetEditing] = React.useState(false);
   const [budgetDraftDollars, setBudgetDraftDollars] = React.useState('');
   const [budgetSaving, setBudgetSaving] = React.useState(false);
+  const budgetChangeSequenceRef = React.useRef(0);
   const monthlyBudgetDollars = Math.round(monthlyBudgetCents / 100);
   const startBudgetEdit = () => {
     if (controlsReadOnly) return;
@@ -293,22 +305,39 @@ const RoleAgentSettingsTab = ({
     setBudgetDraftDollars('');
   };
   const submitBudgetEdit = async () => {
-    if (controlsReadOnly || !onSaveBudget) {
+    if (controlsReadOnly || savingBudget || !onSaveBudget) {
       setBudgetEditing(false);
       return;
     }
     const parsed = Number(budgetDraftDollars);
     if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const actionRoleId = role?.id;
+    const requestSequence = budgetChangeSequenceRef.current + 1;
+    budgetChangeSequenceRef.current = requestSequence;
+    const isCurrentRequest = () => (
+      settingsRoleIdRef.current === actionRoleId
+      && budgetChangeSequenceRef.current === requestSequence
+    );
     setBudgetSaving(true);
     try {
       await onSaveBudget(parsed);
-      setBudgetEditing(false);
+      if (isCurrentRequest()) setBudgetEditing(false);
     } catch {
       // onSaveBudget already toasted; keep the editor open for a retry.
     } finally {
-      setBudgetSaving(false);
+      if (isCurrentRequest()) setBudgetSaving(false);
     }
   };
+
+  React.useEffect(() => {
+    autonomyChangeSequenceRef.current += 1;
+    budgetChangeSequenceRef.current += 1;
+    autonomySaveInFlightRef.current = false;
+    setPendingAutonomy(null);
+    setBudgetEditing(false);
+    setBudgetDraftDollars('');
+    setBudgetSaving(false);
+  }, [role?.id]);
 
   const hrefForSection = (sectionId) => {
     const params = new URLSearchParams(location.search);
@@ -730,7 +759,7 @@ const RoleAgentSettingsTab = ({
               </p>
             </div>
             <span className="mc-kicker is-mute" role="status" aria-live="polite">
-              {pendingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
+              {pendingAutonomy || savingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
             </span>
           </div>
           {externalProvider && externalJobLive === false && (
@@ -759,32 +788,22 @@ const RoleAgentSettingsTab = ({
               </div>
             </div>
           )}
-          {hasSharedApplication ? (
-            <div className="mc-agent-settings-callout" role="note">
-              <span className="mc-agent-settings-callout-tag">Linked roles</span>
-              <span>{sharedRejectReason}</span>
-            </div>
-          ) : null}
           {[
             {
               key: 'auto_reject_pre_screen',
-              value: hasSharedApplication
-                ? false
-                : visibleAutonomyValue('auto_reject_pre_screen', autoRejectPreScreen),
+              value: visibleAutonomyValue('auto_reject_pre_screen', autoRejectPreScreen),
               title: 'Auto-reject pre-screen failures',
-              disabled: hasSharedApplication,
-              disabledReason: sharedRejectReason,
-              sub: 'Reject candidates who fail a required screening question or the cheap pre-screen gate before full scoring.',
+              sub: isRelatedRole
+                ? 'Reject candidates only in this role when they fail a required screening question or pre-screen gate. The linked ATS application is unchanged.'
+                : 'Reject candidates who fail a required screening question or the cheap pre-screen gate before full scoring.',
             },
             {
               key: 'auto_reject',
-              value: hasSharedApplication
-                ? false
-                : visibleAutonomyValue('auto_reject', autoReject),
+              value: visibleAutonomyValue('auto_reject', autoReject),
               title: 'Auto-reject after scoring',
-              disabled: hasSharedApplication,
-              disabledReason: sharedRejectReason,
-              sub: 'Reject candidates when completed CV and role-fit scoring produces an on-policy deterministic reject. Assessment-stage and LLM-only rejects still need approval.',
+              sub: isRelatedRole
+                ? 'Reject candidates only in this role when completed scoring produces an on-policy deterministic reject. Assessment-stage and LLM-only rejects still need approval.'
+                : 'Reject candidates when completed CV and role-fit scoring produces an on-policy deterministic reject. Assessment-stage and LLM-only rejects still need approval.',
             },
             {
               key: 'auto_send_assessment',
@@ -811,16 +830,15 @@ const RoleAgentSettingsTab = ({
               key: 'auto_advance',
               value: visibleAutonomyValue('auto_advance', autoAdvance),
               title: 'Auto-advance qualified candidates',
-              confirmSharedApplicationOnEnable: hasSharedApplication,
-              sub: hasSharedApplication
-                ? `${sharedAdvanceReason} You will confirm before turning this on.`
+              sub: isRelatedRole
+                ? 'Move qualified candidates forward in this role. The ATS link is write-back transport only; other roles keep their own pipeline state.'
                 : 'Move qualified candidates to recruiter handoff. Interviews, offers, and hiring remain human decisions.',
             },
           ].map((rule, idx) => (
             <label
               key={rule.key}
               className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}
-              aria-busy={pendingAutonomy?.key === rule.key ? 'true' : undefined}
+              aria-busy={pendingAutonomy?.key === rule.key || savingAutonomy ? 'true' : undefined}
             >
               <button
                 type="button"
@@ -828,7 +846,7 @@ const RoleAgentSettingsTab = ({
                 onClick={() => {
                   if (!rule.disabled) requestAutonomyToggle(rule);
                 }}
-                disabled={Boolean(controlsReadOnly || rule.disabled || pendingAutonomy)}
+                disabled={Boolean(controlsReadOnly || rule.disabled || pendingAutonomy || savingAutonomy)}
                 aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
                 title={rule.disabledReason || undefined}
@@ -919,7 +937,7 @@ const RoleAgentSettingsTab = ({
                   type="button"
                   className="btn btn-outline btn-xs"
                   onClick={cancelBudgetEdit}
-                  disabled={budgetSaving}
+                  disabled={budgetSaving || savingBudget}
                 >
                   <X size={11} />
                   Cancel
@@ -931,13 +949,14 @@ const RoleAgentSettingsTab = ({
                   disabled={
                     controlsReadOnly
                     || budgetSaving
+                    || savingBudget
                     || budgetDraftDollars === ''
                     || !Number.isFinite(Number(budgetDraftDollars))
                     || Number(budgetDraftDollars) <= 0
                   }
                 >
                   <Check size={11} />
-                  {budgetSaving ? 'Saving…' : 'Save cap'}
+                  {budgetSaving || savingBudget ? 'Saving…' : 'Save cap'}
                 </button>
               </div>
             </div>
@@ -975,18 +994,6 @@ const RoleAgentSettingsTab = ({
       </aside>
       ) : null}
 
-      <ConfirmActionDialog
-        open={sharedActionToConfirm?.key === 'auto_advance'}
-        title="Turn on auto-advance across linked roles?"
-        description={`${sharedAdvanceReason || ''} Each automatic advancement updates the one shared ATS application, so it appears in every linked role.`}
-        confirmLabel="Turn on auto-advance"
-        onClose={() => setSharedActionToConfirm(null)}
-        onConfirm={() => {
-          const action = sharedActionToConfirm;
-          setSharedActionToConfirm(null);
-          if (action) void handleAutonomyToggle(action.key, action.value);
-        }}
-      />
     </FocusedSectionLayout>
   );
 };

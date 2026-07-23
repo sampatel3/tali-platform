@@ -160,8 +160,8 @@ export const applicationFunnelBucket = (application) => {
   if (outcome === 'rejected') return 'rejected';
   // A recruiter advance in Workable wins — the furthest stage the candidate has
   // reached — regardless of Tali's own pipeline_stage.
-  // Related roles own an independent Taali funnel. The shared ATS stage stays
-  // visible as context, but must not overwrite this role's local progress.
+  // Related roles own an independent Taali funnel. The linked ATS evidence
+  // stage stays visible as context, but must not overwrite local progress.
   if (!application?.sister_role_id && isPostHandoverWorkableStage(application?.workable_stage)) return 'advanced';
   const stage = String(application?.pipeline_stage || '').toLowerCase();
   // A `sourced` prospect is pre-applied and un-scored — its OWN bucket, never

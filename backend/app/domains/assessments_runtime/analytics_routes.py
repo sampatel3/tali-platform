@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, desc, func, or_
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy import desc, func, or_
+from sqlalchemy.orm import Session, selectinload
 
 from ...agent_runtime import budget_guard
 from ...platform.database import get_db
@@ -19,7 +19,6 @@ from ...components.scoring.assessment_metrics import (
     completed_assessment_filter as _completed_assessment_filter,
     is_completed as _is_completed,
     percentile_rank as _percentile_rank,
-    status_value as _status_value,
     score_100 as _score_100,
     score_10 as _score_10,
     extract_category_scores as _extract_category_scores,
@@ -31,11 +30,21 @@ from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
 from ...models.usage_event import UsageEvent
 from ...models.user import User
+from ...services.decision_membership import (
+    resolve_live_logical_decision_scope,
+)
+from ...services.needs_input_membership import (
+    resolve_live_logical_needs_input_scope,
+)
+from .logical_analytics_service import (
+    APPROVED_DECISION_STATUSES,
+    empty_conversion_bucket,
+    logical_advance_conversion_aggregates,
+    logical_current_state_aggregates,
+    reporting_funnel_counts,
+)
 from .pipeline_service import (
     FUNNEL_BUCKETS,
-    funnel_bucket_for,
-    normalize_pipeline_key,
-    _post_handover_sql,
 )
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
@@ -638,57 +647,14 @@ def get_reporting_summary(
             top_role_name = top[0].name
 
     # ── Funnel counts (org-wide or role-scoped) ────────────────────────
-    # One GROUP BY over pipeline_stage + a single hired count, instead of
-    # hydrating every CandidateApplication row (cv_text etc.) just to bucket
-    # them in Python. total_applied is every application in scope.
-    # Canonical bucketing: mirror role_pipeline_counts so Analytics agrees with
-    # Home/Jobs. "Scored" = evaluated (real cv_match score OR a genuine
-    # pre-screen run); post-handover candidates (advanced in Workable) roll into
-    # "advanced"; "rejected" is an application_outcome counted separately.
-    scored_expr = or_(
-        CandidateApplication.cv_match_score.isnot(None),
-        and_(
-            CandidateApplication.pre_screen_score_100.isnot(None),
-            CandidateApplication.pre_screen_run_at.isnot(None),
-        ),
+    # Count logical memberships, not physical application rows. Related roles
+    # use their own score/stage/outcome state even when evidence is shared with
+    # an ATS-owner role; a direct related application + evaluation counts once.
+    bucket_counts = reporting_funnel_counts(
+        db,
+        organization_id=org_id,
+        role_id=role_id,
     )
-    ph_expr = _post_handover_sql()
-    funnel_base = db.query(CandidateApplication).filter(
-        CandidateApplication.organization_id == org_id,
-        CandidateApplication.deleted_at.is_(None),
-        CandidateApplication.application_outcome == "open",
-    )
-    if role_id is not None:
-        funnel_base = funnel_base.filter(CandidateApplication.role_id == role_id)
-    bucket_rows = (
-        funnel_base.with_entities(
-            CandidateApplication.pipeline_stage,
-            scored_expr,
-            ph_expr,
-            func.count(CandidateApplication.id),
-        )
-        .group_by(CandidateApplication.pipeline_stage, scored_expr, ph_expr)
-        .all()
-    )
-    bucket_counts = {bucket: 0 for bucket in FUNNEL_BUCKETS}
-    for stage, is_scored, is_post_handover, total in bucket_rows:
-        n = int(total or 0)
-        if is_post_handover:
-            bucket_counts["advanced"] += n
-            continue
-        bucket = funnel_bucket_for(normalize_pipeline_key(stage), bool(is_scored))
-        if bucket:
-            bucket_counts[bucket] += n
-    # rejected is orthogonal to pipeline_stage (an outcome), counted across all
-    # stages — same as role_pipeline_counts.
-    rejected_base = db.query(func.count(CandidateApplication.id)).filter(
-        CandidateApplication.organization_id == org_id,
-        CandidateApplication.deleted_at.is_(None),
-        CandidateApplication.application_outcome == "rejected",
-    )
-    if role_id is not None:
-        rejected_base = rejected_base.filter(CandidateApplication.role_id == role_id)
-    bucket_counts["rejected"] = int(rejected_base.scalar() or 0)
 
     # Percentage is share-of-applied-cohort; "applied" here is the total across
     # active buckets (everyone who entered the pipeline).
@@ -985,29 +951,36 @@ def get_cost_per_outcome(
     score_n = feat_entities.get("score", 0)
 
     # ── Fully-loaded outcomes — timestamped transitions in-window ──────────
-    # Distinct application_id on the transition events (a candidate that flips to
-    # 'advanced' twice counts once). Constant two queries — never per-role N+1.
-    def _transition_count(event_type: str, column, value: str) -> int:
+    # The event's role_id is the logical-role authority. One shared evidence
+    # application can transition independently in an owner and related role, so
+    # org totals dedupe by (role_id, application_id), not physical app alone.
+    def _transition_count(event_types: tuple[str, ...], column, value: str) -> int:
         q = db.query(
-            func.count(func.distinct(CandidateApplicationEvent.application_id))
+            CandidateApplicationEvent.role_id,
+            CandidateApplicationEvent.application_id,
         ).filter(
             CandidateApplicationEvent.organization_id == org_id,
-            CandidateApplicationEvent.event_type == event_type,
+            CandidateApplicationEvent.event_type.in_(event_types),
             column == value,
         )
         if role_id is not None:
-            q = q.join(
-                CandidateApplication,
-                CandidateApplication.id == CandidateApplicationEvent.application_id,
-            ).filter(CandidateApplication.role_id == role_id)
+            q = q.filter(CandidateApplicationEvent.role_id == role_id)
         if parsed_from is not None:
             q = q.filter(CandidateApplicationEvent.created_at >= parsed_from)
         if parsed_to is not None:
             q = q.filter(CandidateApplicationEvent.created_at <= parsed_to)
-        return int(q.scalar() or 0)
+        return int(db.query(func.count()).select_from(q.distinct().subquery()).scalar() or 0)
 
-    advanced = _transition_count("pipeline_stage_changed", CandidateApplicationEvent.to_stage, "advanced")
-    hired = _transition_count("application_outcome_changed", CandidateApplicationEvent.to_outcome, "hired")
+    advanced = _transition_count(
+        ("pipeline_stage_changed", "role_pipeline_stage_changed"),
+        CandidateApplicationEvent.to_stage,
+        "advanced",
+    )
+    hired = _transition_count(
+        ("application_outcome_changed", "role_application_outcome_changed"),
+        CandidateApplicationEvent.to_outcome,
+        "hired",
+    )
 
     return {
         "window": window,
@@ -1035,7 +1008,8 @@ def get_cost_per_outcome(
 # inside the "Score distribution & funnel" accordion. All-time (cumulative),
 # because the questions it answers are conversion questions:
 #   a) what decisions were made + approved, per role
-#   b) where the candidates Tali advanced now sit in Workable (live snapshot)
+#   b) where advanced candidates now sit (external stage for ordinary roles,
+#      role-local stage for related roles)
 #   c) how many advance decisions reached final interview / offer / hired
 # Workable-stage placement is always a *current* snapshot regardless of when
 # the decision was made. "Reached X or beyond" is computed monotonically off
@@ -1043,35 +1017,8 @@ def get_cost_per_outcome(
 # candidate now at "offer" also counts toward "reached final interview".
 # ----------------------------------------------------------------------------
 
-# Only the explicit "advance" verdict feeds the conversion view.
-_ADVANCE_DECISION_TYPES = {"advance_to_interview"}
-# Statuses that mean the recruiter accepted the agent's recommendation and it
-# was carried out. ``processing`` is the brief in-flight state right after an
-# approve while the Workable writeback dispatches.
-_APPROVED_DECISION_STATUSES = {"approved", "processing"}
-# Normalized Workable stages (see pipeline_service.POST_HANDOVER_WORKABLE_STAGES).
-_FINAL_INTERVIEW_NORM_STAGES = {"final_interview"}
-_OFFER_NORM_STAGES = {"offer", "offer_extended", "offer_accepted"}
-_HIRED_NORM_STAGES = {"hired"}
-_REJECT_OUTCOMES = {"rejected", "withdrawn"}
-
-
 def _empty_decisions_bucket() -> Dict[str, Any]:
     return {"total": 0, "approved": 0, "by_type": {}}
-
-
-def _empty_conversion_bucket() -> Dict[str, Any]:
-    return {
-        "advanced_total": 0,
-        "reached_final_interview": 0,
-        "reached_offer": 0,
-        "hired": 0,
-        "rejected": 0,
-        # Current Workable stage of the advanced cohort — lets the UI explain
-        # an "Advanced 40 / reached final 0" gap (e.g. "36 still at technical
-        # interview") instead of looking like a bug.
-        "by_stage": {},
-    }
 
 
 def _score_summary(values: Sequence[float]) -> Dict[str, Any]:
@@ -1098,12 +1045,12 @@ def get_decisions_breakdown(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Decisions + Workable-stage outcomes grouped by role.
+    """Decisions + current-stage outcomes grouped by logical role.
 
     Decision counts and the advance cohort honour the optional role/time
-    window; the Workable-stage mix and score stats stay a *current* snapshot
-    (scoped to the role when given) — "decisions made in this window, where
-    those candidates sit now".
+    window. Stage and score stats stay a *current* snapshot: ordinary roles use
+    external ATS placement while related roles use their independent local
+    membership state.
     """
     org_id = current_user.organization_id
     parsed_from = _parse_filter_datetime(date_from, end_of_day=False)
@@ -1125,7 +1072,7 @@ def get_decisions_breakdown(
         "totals": {
             "decisions": _empty_decisions_bucket(),
             "workable_stages": {},
-            "advance_conversion": _empty_conversion_bucket(),
+            "advance_conversion": empty_conversion_bucket(),
             "score_stats": _score_summary([]),
         },
         "roles": [],
@@ -1141,15 +1088,6 @@ def get_decisions_breakdown(
             q = q.filter(AgentDecision.created_at >= parsed_from)
         if parsed_to is not None:
             q = q.filter(AgentDecision.created_at <= parsed_to)
-        return q
-
-    def _scope_apps(q):
-        q = q.filter(
-            CandidateApplication.organization_id == org_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        if role_id is not None:
-            q = q.filter(CandidateApplication.role_id == role_id)
         return q
 
     # ── a) Decisions grouped by role × type × status ───────────────────
@@ -1168,7 +1106,7 @@ def get_decisions_breakdown(
             continue
         count = int(count or 0)
         type_key = str(dtype or "unknown")
-        is_approved = str(status or "").lower() in _APPROVED_DECISION_STATUSES
+        is_approved = str(status or "").lower() in APPROVED_DECISION_STATUSES
         for bucket in (decisions_by_role.setdefault(rid, _empty_decisions_bucket()), totals_decisions):
             bucket["total"] += count
             type_bucket = bucket["by_type"].setdefault(type_key, {"total": 0, "approved": 0})
@@ -1177,96 +1115,23 @@ def get_decisions_breakdown(
                 bucket["approved"] += count
                 type_bucket["approved"] += count
 
-    # ── Simple Workable-stage counts per role (all live applications) ───
-    stage_rows = _scope_apps(
-        db.query(
-            CandidateApplication.role_id,
-            CandidateApplication.external_stage_normalized,
-            CandidateApplication.workable_stage,
-            func.count(CandidateApplication.id),
-        )
-    ).group_by(
-        CandidateApplication.role_id,
-        CandidateApplication.external_stage_normalized,
-        CandidateApplication.workable_stage,
-    ).all()
-    stages_by_role: Dict[int, Dict[str, int]] = {}
-    totals_stages: Dict[str, int] = {}
-    for rid, norm_stage, raw_stage, count in stage_rows:
-        if rid is None:
-            continue
-        count = int(count or 0)
-        key = normalize_pipeline_key(norm_stage or raw_stage) or "unstaged"
-        role_stages = stages_by_role.setdefault(rid, {})
-        role_stages[key] = role_stages.get(key, 0) + count
-        totals_stages[key] = totals_stages.get(key, 0) + count
-
-    # ── b/c) Advance conversion — current stage of advanced candidates ──
-    # Join (not subquery) and select only application columns + id, then
-    # ``distinct`` collapses an application that has several approved advance
-    # decisions down to a single row (id keeps distinct apps separate).
-    advance_q = (
-        db.query(
-            CandidateApplication.id,
-            CandidateApplication.role_id,
-            CandidateApplication.external_stage_normalized,
-            CandidateApplication.workable_stage,
-            CandidateApplication.application_outcome,
-            CandidateApplication.workable_disqualified,
-        )
-        .join(AgentDecision, AgentDecision.application_id == CandidateApplication.id)
-        .filter(
-            CandidateApplication.organization_id == org_id,
-            AgentDecision.decision_type.in_(_ADVANCE_DECISION_TYPES),
-            AgentDecision.status.in_(_APPROVED_DECISION_STATUSES),
-        )
+    # ── Current logical-role stage/score state and advance conversion ──
+    state = logical_current_state_aggregates(
+        db,
+        organization_id=org_id,
+        role_id=role_id,
     )
-    if role_id is not None:
-        advance_q = advance_q.filter(AgentDecision.role_id == role_id)
-    if parsed_from is not None:
-        advance_q = advance_q.filter(AgentDecision.created_at >= parsed_from)
-    if parsed_to is not None:
-        advance_q = advance_q.filter(AgentDecision.created_at <= parsed_to)
-    advance_apps = advance_q.distinct().all()
-    conversion_by_role: Dict[int, Dict[str, int]] = {}
-    totals_conversion = _empty_conversion_bucket()
-    for _app_id, rid, norm_stage, raw_stage, outcome, disqualified in advance_apps:
-        if rid is None:
-            continue
-        stage = normalize_pipeline_key(norm_stage or raw_stage)
-        oc = str(outcome or "").lower()
-        is_hired = oc == "hired" or stage in _HIRED_NORM_STAGES
-        reached_offer = is_hired or stage in _OFFER_NORM_STAGES
-        reached_final = reached_offer or stage in _FINAL_INTERVIEW_NORM_STAGES
-        is_rejected = oc in _REJECT_OUTCOMES or bool(disqualified)
-        stage_key = stage or "unstaged"
-        for bucket in (conversion_by_role.setdefault(rid, _empty_conversion_bucket()), totals_conversion):
-            bucket["advanced_total"] += 1
-            if reached_final:
-                bucket["reached_final_interview"] += 1
-            if reached_offer:
-                bucket["reached_offer"] += 1
-            if is_hired:
-                bucket["hired"] += 1
-            if is_rejected:
-                bucket["rejected"] += 1
-            bucket["by_stage"][stage_key] = bucket["by_stage"].get(stage_key, 0) + 1
-
-    # ── Headline score values (taali cache, falling back to cv_match) ──
-    headline_score = func.coalesce(
-        CandidateApplication.taali_score_cache_100,
-        CandidateApplication.cv_match_score,
+    stages_by_role = state["stages_by_role"]
+    totals_stages = state["totals_stages"]
+    scores_by_role = state["scores_by_role"]
+    all_scores = state["all_scores"]
+    conversion_by_role, totals_conversion = logical_advance_conversion_aggregates(
+        db,
+        organization_id=org_id,
+        role_id=role_id,
+        parsed_from=parsed_from,
+        parsed_to=parsed_to,
     )
-    score_rows = _scope_apps(
-        db.query(CandidateApplication.role_id, headline_score)
-    ).filter(headline_score.isnot(None)).all()
-    scores_by_role: Dict[int, List[float]] = {}
-    all_scores: List[float] = []
-    for rid, score in score_rows:
-        if rid is None or score is None:
-            continue
-        scores_by_role.setdefault(rid, []).append(float(score))
-        all_scores.append(float(score))
 
     # ── Assemble — one row per role that has made at least one decision ─
     role_names = {
@@ -1285,7 +1150,7 @@ def get_decisions_breakdown(
             "role_name": role_names.get(rid) or f"Role #{rid}",
             "decisions": decisions_by_role.get(rid, _empty_decisions_bucket()),
             "workable_stages": stages_by_role.get(rid, {}),
-            "advance_conversion": conversion_by_role.get(rid, _empty_conversion_bucket()),
+            "advance_conversion": conversion_by_role.get(rid, empty_conversion_bucket()),
             "score_stats": _score_summary(scores_by_role.get(rid, [])),
         })
 
@@ -1358,6 +1223,14 @@ def get_activity_timeseries(
         }
 
     now = datetime.now(timezone.utc)
+    decision_scope = resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(org_id),
+    )
+    needs_input_scope = resolve_live_logical_needs_input_scope(
+        db,
+        organization_id=int(org_id),
+    )
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_starts = [today_start - timedelta(days=days - 1 - i) for i in range(days)]
     day_ends = [ds + timedelta(days=1) for ds in day_starts]
@@ -1372,22 +1245,24 @@ def get_activity_timeseries(
         return idx if 0 <= idx < days else None
 
     # ── Decisions (role-scoped): created/resolved timestamps + type/status ──
-    dq = db.query(
+    dq = decision_scope.query(
+        db,
         AgentDecision.created_at,
         AgentDecision.resolved_at,
         AgentDecision.status,
         AgentDecision.decision_type,
-    ).filter(AgentDecision.organization_id == org_id)
+    )
     if role_id is not None:
         dq = dq.filter(AgentDecision.role_id == role_id)
     decision_rows = dq.all()
 
     # ── Agent questions (role-scoped) — the other half of the badge count ──
-    nq = db.query(
+    nq = needs_input_scope.query(
+        db,
         AgentNeedsInput.created_at,
         AgentNeedsInput.resolved_at,
         AgentNeedsInput.dismissed_at,
-    ).filter(AgentNeedsInput.organization_id == org_id)
+    )
     if role_id is not None:
         nq = nq.filter(AgentNeedsInput.role_id == role_id)
     needs_rows = nq.all()
@@ -1440,16 +1315,16 @@ def get_activity_timeseries(
 
     # ── Current pending (reconciles with the Home tab badge) ───────────────
     pending_decisions = (
-        db.query(func.count(AgentDecision.id))
-        .filter(AgentDecision.organization_id == org_id, pending_filter(now))
+        decision_scope.query(db, func.count(AgentDecision.id))
+        .filter(pending_filter(now))
     )
     if role_id is not None:
         pending_decisions = pending_decisions.filter(AgentDecision.role_id == role_id)
     pending_decisions_count = int(pending_decisions.scalar() or 0)
 
     pending_questions = (
-        db.query(func.count(AgentNeedsInput.id))
-        .filter(AgentNeedsInput.organization_id == org_id, open_needs_input_filter())
+        needs_input_scope.query(db, func.count(AgentNeedsInput.id))
+        .filter(open_needs_input_filter())
     )
     if role_id is not None:
         pending_questions = pending_questions.filter(AgentNeedsInput.role_id == role_id)
@@ -1458,8 +1333,12 @@ def get_activity_timeseries(
     # Pending decisions split by type — backs the "Pending now · by type"
     # summary chips in the same Hub section (role-aware via the same filter).
     pending_by_type_q = (
-        db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
-        .filter(AgentDecision.organization_id == org_id, pending_filter(now))
+        decision_scope.query(
+            db,
+            AgentDecision.decision_type,
+            func.count(AgentDecision.id),
+        )
+        .filter(pending_filter(now))
     )
     if role_id is not None:
         pending_by_type_q = pending_by_type_q.filter(AgentDecision.role_id == role_id)
@@ -1470,9 +1349,12 @@ def get_activity_timeseries(
 
     # ── Workable-error callout: decisions bounced back to the queue ────────
     err_q = (
-        db.query(AgentDecision.role_id, AgentDecision.resolution_note)
+        decision_scope.query(
+            db,
+            AgentDecision.role_id,
+            AgentDecision.resolution_note,
+        )
         .filter(
-            AgentDecision.organization_id == org_id,
             AgentDecision.status == "pending",
             AgentDecision.resolution_note.ilike(f"{_WORKABLE_REQUEUE_NOTE_PREFIX}%"),
         )

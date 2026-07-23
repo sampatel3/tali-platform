@@ -13,7 +13,8 @@ These tests exercise the task body with three application states:
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from datetime import datetime, timezone
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import create_engine
@@ -28,7 +29,7 @@ from app.models import (
 )
 from app.platform.config import settings
 from app.platform.database import Base
-from app.tasks.scoring_tasks import batch_score_role
+from app.tasks.scoring_tasks import batch_score_role, score_application_job
 
 
 @pytest.fixture(autouse=True)
@@ -224,3 +225,119 @@ def test_batch_score_role_skips_when_cv_unfetchable(session_factory, monkeypatch
     assert result["count"] == 2, result
     assert result["fetched"] == 1, result  # candidate-level promotion only
     assert result["fetch_failures"] == 1, result  # app3 Workable fetch failed
+
+
+def test_batch_score_role_never_fetches_or_enqueues_erased_candidates(
+    session_factory,
+    monkeypatch,
+):
+    """The live-person boundary applies even without an applied-after filter."""
+
+    role_id, app_ids = _seed_role_with_apps(session_factory)
+    db = session_factory()
+    try:
+        candidates = (
+            db.query(Candidate)
+            .join(
+                CandidateApplication,
+                CandidateApplication.candidate_id == Candidate.id,
+            )
+            .filter(CandidateApplication.id.in_(app_ids))
+            .all()
+        )
+        for candidate in candidates:
+            candidate.deleted_at = datetime.now(timezone.utc)
+        db.commit()
+    finally:
+        db.close()
+
+    workable_fetch = Mock(side_effect=AssertionError("provider fetch must not run"))
+    provider_score = Mock(side_effect=AssertionError("provider score must not run"))
+    monkeypatch.setattr(
+        "app.domains.assessments_runtime.applications_routes._try_fetch_cv_from_workable",
+        workable_fetch,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.services.cv_score_orchestrator._execute_scoring",
+        provider_score,
+    )
+
+    result = batch_score_role(
+        role_id,
+        include_scored=True,
+        applied_after=None,
+    )
+
+    assert result == {
+        "status": "enqueued",
+        "role_id": role_id,
+        "count": 0,
+        "fetched": 0,
+        "fetch_failures": 0,
+        "pre_screened_out": 0,
+    }
+    workable_fetch.assert_not_called()
+    provider_score.assert_not_called()
+
+    db = session_factory()
+    try:
+        assert (
+            db.query(CvScoreJob)
+            .filter(CvScoreJob.application_id.in_(app_ids))
+            .count()
+            == 0
+        )
+    finally:
+        db.close()
+
+
+def test_queued_score_job_stops_before_provider_when_candidate_is_erased(
+    session_factory,
+    monkeypatch,
+):
+    """Erasure after enqueue still fences the actual paid worker boundary."""
+
+    _role_id, app_ids = _seed_role_with_apps(session_factory)
+    db = session_factory()
+    try:
+        application = db.get(CandidateApplication, app_ids[0])
+        assert application is not None
+        job = CvScoreJob(
+            application_id=int(application.id),
+            role_id=int(application.role_id),
+            status="pending",
+            requires_active_agent=False,
+            queued_at=datetime.now(timezone.utc),
+        )
+        application.candidate.deleted_at = datetime.now(timezone.utc)
+        db.add(job)
+        db.commit()
+        job_id = int(job.id)
+    finally:
+        db.close()
+
+    provider_score = Mock(side_effect=AssertionError("provider score must not run"))
+    monkeypatch.setattr(
+        "app.services.cv_score_orchestrator._execute_scoring",
+        provider_score,
+    )
+
+    result = score_application_job.run(
+        int(app_ids[0]),
+        job_id=job_id,
+    )
+
+    assert result == {
+        "status": "candidate_deleted",
+        "application_id": int(app_ids[0]),
+    }
+    provider_score.assert_not_called()
+    db = session_factory()
+    try:
+        terminal = db.get(CvScoreJob, job_id)
+        assert terminal is not None
+        assert terminal.status == "error"
+        assert terminal.error_message == "candidate_deleted_before_scoring"
+    finally:
+        db.close()

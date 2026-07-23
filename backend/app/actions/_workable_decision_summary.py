@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
@@ -47,6 +47,14 @@ from .types import ACTOR_RECRUITER, Actor
 logger = logging.getLogger("taali.actions.workable_decision_summary")
 
 _NOTE_BODY_CAP = 1200  # Workable accepts more, but keep the activity feed legible.
+
+
+def _event_decision_id(metadata: Optional[dict[str, Any]]) -> int | None:
+    try:
+        value = (metadata or {}).get("agent_decision_id")
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _workable_writeback_ready(
@@ -76,8 +84,11 @@ def _try_bullhorn_advance(
     actor: Actor,
     *,
     app: CandidateApplication,
+    event_app: CandidateApplication | None = None,
+    event_role_id: int | None = None,
     org: Optional[Organization],
     reason: Optional[str],
+    event_metadata: Optional[dict[str, Any]] = None,
 ) -> Optional[bool]:
     """Advance via the Bullhorn provider when the org routes to Bullhorn.
 
@@ -127,17 +138,23 @@ def _try_bullhorn_advance(
     if not result.get("success"):
         append_application_event(
             db,
-            app=app,
+            app=event_app or app,
+            role_id=event_role_id,
+            agent_decision_id=_event_decision_id(event_metadata),
             event_type="bullhorn_writeback_failed",
             actor_type=actor.type,
             actor_id=actor.event_actor_id,
             reason=result.get("message") or "Bullhorn move failed",
             metadata={
+                **(event_metadata or {}),
                 "action": result.get("action"),
                 "code": result.get("code"),
                 "bullhorn_job_submission_id": submission_id,
                 "source": "decision_summary",
             },
+            target_stage=(event_metadata or {}).get("workable_target_stage")
+            or "advanced",
+            effect_status="failed",
         )
         logger.warning(
             "bullhorn advance failed application_id=%s code=%s message=%s",
@@ -148,16 +165,22 @@ def _try_bullhorn_advance(
         return False
     append_application_event(
         db,
-        app=app,
+        app=event_app or app,
+        role_id=event_role_id,
+        agent_decision_id=_event_decision_id(event_metadata),
         event_type="bullhorn_moved",
         actor_type=actor.type,
         actor_id=actor.event_actor_id,
         reason=reason or "Advanced by recruiter (decision resolution)",
         metadata={
+            **(event_metadata or {}),
             "bullhorn_status": result.get("config", {}).get("remote_status"),
             "bullhorn_job_submission_id": submission_id,
             "source": "decision_summary",
         },
+        target_stage=(event_metadata or {}).get("workable_target_stage")
+        or "advanced",
+        effect_status="confirmed",
     )
     return True
 
@@ -167,10 +190,13 @@ def try_workable_advance(
     actor: Actor,
     *,
     app: CandidateApplication,
+    event_app: CandidateApplication | None = None,
+    event_role_id: int | None = None,
     org: Optional[Organization],
     role: Optional[Role],
     target_stage: Optional[str],
     reason: Optional[str] = None,
+    event_metadata: Optional[dict[str, Any]] = None,
 ) -> bool:
     """Move the candidate in Workable to ``target_stage``.
 
@@ -182,7 +208,16 @@ def try_workable_advance(
     # org's advanced-mapped JobSubmission status). Same gating contract as the
     # Workable move (strict mode raises so a failed batch re-queues). A no-op for
     # non-Bullhorn orgs (returns None → fall through to the Workable path).
-    bullhorn = _try_bullhorn_advance(db, actor, app=app, org=org, reason=reason)
+    bullhorn = _try_bullhorn_advance(
+        db,
+        actor,
+        app=app,
+        event_app=event_app,
+        event_role_id=event_role_id,
+        org=org,
+        reason=reason,
+        event_metadata=event_metadata,
+    )
     if bullhorn is not None:
         return bullhorn
 
@@ -215,7 +250,9 @@ def try_workable_advance(
     if is_post_handover_workable_stage(getattr(app, "workable_stage", None)):
         append_application_event(
             db,
-            app=app,
+            app=event_app or app,
+            role_id=event_role_id,
+            agent_decision_id=_event_decision_id(event_metadata),
             event_type="workable_move_skipped",
             actor_type=actor.type,
             actor_id=actor.event_actor_id,
@@ -224,10 +261,13 @@ def try_workable_advance(
                 "advance stage-move skipped as a no-op; no ATS message posted."
             ),
             metadata={
+                **(event_metadata or {}),
                 "current_stage": app.workable_stage,
                 "target_stage": target,
                 "source": "decision_summary",
             },
+            target_stage=target,
+            effect_status="skipped",
         )
         return False
 
@@ -260,35 +300,45 @@ def try_workable_advance(
         # _workable_writeback_ready gate normally prevents reaching here.)
         append_application_event(
             db,
-            app=app,
+            app=event_app or app,
+            role_id=event_role_id,
+            agent_decision_id=_event_decision_id(event_metadata),
             event_type="workable_writeback_skipped",
             actor_type=actor.type,
             actor_id=actor.event_actor_id,
             reason="read-only mode — resolved in Taali only",
             metadata={
+                **(event_metadata or {}),
                 "action": result.get("action"),
                 "code": result.get("code"),
                 "workable_candidate_id": app.workable_candidate_id,
                 "target_stage": target,
                 "source": "decision_summary",
             },
+            target_stage=target,
+            effect_status="skipped",
         )
         return False
     if not result.get("success"):
         append_application_event(
             db,
-            app=app,
+            app=event_app or app,
+            role_id=event_role_id,
+            agent_decision_id=_event_decision_id(event_metadata),
             event_type="workable_writeback_failed",
             actor_type=actor.type,
             actor_id=actor.event_actor_id,
             reason=result.get("message") or "Workable move failed",
             metadata={
+                **(event_metadata or {}),
                 "action": result.get("action"),
                 "code": result.get("code"),
                 "workable_candidate_id": app.workable_candidate_id,
                 "target_stage": target,
                 "source": "decision_summary",
             },
+            target_stage=target,
+            effect_status="failed",
         )
         logger.warning(
             "workable advance failed application_id=%s code=%s message=%s",
@@ -304,17 +354,22 @@ def try_workable_advance(
     app.workable_stage_local_write_at = datetime.now(timezone.utc)
     append_application_event(
         db,
-        app=app,
+        app=event_app or app,
+        role_id=event_role_id,
+        agent_decision_id=_event_decision_id(event_metadata),
         event_type="workable_moved",
         actor_type=actor.type,
         actor_id=actor.event_actor_id,
         reason=reason or "Advanced by recruiter (decision resolution)",
         metadata={
+            **(event_metadata or {}),
             "target_stage": target,
             "workable_candidate_id": app.workable_candidate_id,
             "workable_actor_member_id": config.get("actor_member_id"),
             "source": "decision_summary",
         },
+        target_stage=target,
+        effect_status="confirmed",
     )
     return True
 
@@ -686,6 +741,8 @@ def post_decision_summary_to_workable(
     actor: Actor,
     *,
     app: CandidateApplication,
+    event_app: CandidateApplication | None = None,
+    event_role_id: int | None = None,
     org: Optional[Organization],
     decision: AgentDecision,
     verdict: str,
@@ -762,7 +819,9 @@ def post_decision_summary_to_workable(
         if not result.get("success"):
             append_application_event(
                 db,
-                app=app,
+                app=event_app or app,
+                role_id=event_role_id,
+                agent_decision_id=int(decision.id),
                 event_type="bullhorn_writeback_failed",
                 actor_type=actor.type,
                 actor_id=actor.event_actor_id,
@@ -778,6 +837,8 @@ def post_decision_summary_to_workable(
                     "source": "decision_summary",
                     "ats": "bullhorn",
                 },
+                target_stage=moved_to,
+                effect_status="failed",
             )
             logger.warning(
                 "bullhorn decision-summary post failed application_id=%s "
@@ -789,7 +850,9 @@ def post_decision_summary_to_workable(
             return False
         append_application_event(
             db,
-            app=app,
+            app=event_app or app,
+            role_id=event_role_id,
+            agent_decision_id=int(decision.id),
             event_type="bullhorn_decision_note_posted",
             actor_type=actor.type,
             actor_id=actor.event_actor_id,
@@ -801,6 +864,8 @@ def post_decision_summary_to_workable(
                 "body_preview": body[:240],
                 "bullhorn_candidate_id": candidate_id,
             },
+            target_stage=moved_to,
+            effect_status="confirmed",
         )
         return True
 
@@ -848,7 +913,9 @@ def post_decision_summary_to_workable(
     if not result.get("success"):
         append_application_event(
             db,
-            app=app,
+            app=event_app or app,
+            role_id=event_role_id,
+            agent_decision_id=int(decision.id),
             event_type="workable_writeback_failed",
             actor_type=actor.type,
             actor_id=actor.event_actor_id,
@@ -860,6 +927,8 @@ def post_decision_summary_to_workable(
                 "error": str(result.get("error") or ""),
                 "source": "decision_summary",
             },
+            target_stage=moved_to,
+            effect_status="failed",
         )
         logger.warning(
             "workable decision-summary post failed application_id=%s decision_id=%s err=%s",
@@ -871,7 +940,9 @@ def post_decision_summary_to_workable(
 
     append_application_event(
         db,
-        app=app,
+        app=event_app or app,
+        role_id=event_role_id,
+        agent_decision_id=int(decision.id),
         event_type="workable_decision_note_posted",
         actor_type=actor.type,
         actor_id=actor.event_actor_id,
@@ -882,5 +953,7 @@ def post_decision_summary_to_workable(
             "override_action": override_action,
             "body_preview": body[:240],
         },
+        target_stage=moved_to,
+        effect_status="confirmed",
     )
     return True

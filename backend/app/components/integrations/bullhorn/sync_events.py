@@ -208,6 +208,7 @@ def import_notes(
         row = CandidateApplicationEvent(
             application_id=app.id,
             organization_id=app.organization_id,
+            role_id=int(app.role_id),
             event_type=RECRUITER_NOTE_EVENT,
             actor_type="recruiter",
             reason=sanitize_text_for_storage(comments),

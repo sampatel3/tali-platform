@@ -1793,28 +1793,12 @@ def test_transition_outcome_discards_pending_decisions(db):
 
     org, role, app = _seed(db, score=15.0, threshold=30.0)
     d = _direct_card(db, org, role, app, 30.0)
-    processing_sibling = AgentDecision(
-        organization_id=int(org.id),
-        role_id=int(role.id),
-        application_id=int(app.id),
-        decision_type="advance_to_interview",
-        recommendation="advance_to_interview",
-        status="processing",
-        reasoning="claimed sibling",
-        model_version="m",
-        prompt_version="p",
-        idempotency_key=f"processing-sibling:{int(app.id)}",
-        active_capabilities={},
-        token_spend={},
-    )
-    db.add(processing_sibling)
+    d.status = "processing"
     db.flush()
     transition_outcome(db, app=app, to_outcome="rejected", actor_type="system")
     db.flush()
     db.refresh(d)
-    db.refresh(processing_sibling)
     assert d.status == "discarded"
-    assert processing_sibling.status == "discarded"
 
 
 def test_transition_to_advanced_discards_processing_decision(db):
@@ -1956,7 +1940,26 @@ def test_discard_pending_decisions_for_role_keeps_pre_screen_rejects(db):
     (pre-screen) cards — those are policy, not agent decisions."""
     org, role, app = _seed(db, score=15.0, threshold=30.0)
     pre_screen = _direct_card(db, org, role, app, 30.0)  # skip_assessment_reject
-    agent_card = _agent_card(db, org, role, app)         # advance_to_interview
+    second_candidate = Candidate(
+        organization_id=org.id,
+        email="agent-card@x.test",
+        full_name="Agent Card",
+    )
+    db.add(second_candidate)
+    db.flush()
+    second_app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=second_candidate.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    db.add(second_app)
+    db.flush()
+    agent_card = _agent_card(db, org, role, second_app)
 
     n = discard_pending_decisions_for_role(
         db, role_id=int(role.id), reason="agent disabled"

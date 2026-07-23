@@ -114,7 +114,9 @@ def application_summary(
     """
     candidate = app.candidate
     role = app.role
-    ats_context = application_ats_context(app)
+    ats_context = getattr(app, "ats_context", None)
+    if not isinstance(ats_context, dict):
+        ats_context = application_ats_context(app)
     return {
         "application_id": app.id,
         "candidate_id": app.candidate_id,
@@ -129,6 +131,7 @@ def application_summary(
         "pipeline_stage_updated_at": _isoformat(app.pipeline_stage_updated_at),
         "workable_stage": app.workable_stage,
         "bullhorn_status": getattr(app, "bullhorn_status", None),
+        "external_stage_raw": app.external_stage_raw,
         "external_stage_normalized": app.external_stage_normalized,
         "ats_context": ats_context,
         "taali_score": app.taali_score_cache_100,
@@ -143,6 +146,7 @@ def application_summary(
         ),
         "assessment_score": getattr(app, "assessment_score_cache_100", None),
         "role_fit_score": getattr(app, "role_fit_score_cache_100", None),
+        "score_mode": getattr(app, "score_mode_cache", None),
         "auto_reject_state": app.auto_reject_state,
         "created_at": _isoformat(app.created_at),
         "frontend_url": application_url(app.id, role_id=app.role_id),
@@ -194,8 +198,46 @@ def application_detail(
     return payload
 
 
-def candidate_detail(candidate: Candidate) -> dict[str, Any]:
+def _candidate_membership_summary(application: Any) -> dict[str, Any]:
+    ats_context = getattr(application, "ats_context", None)
+    if not isinstance(ats_context, dict):
+        ats_context = application_ats_context(application)
+    assessment_score = getattr(application, "assessment_score_cache_100", None)
+    return {
+        "application_id": application.id,
+        "role_id": application.role_id,
+        "role_name": application.role.name if application.role else None,
+        "pipeline_stage": application.pipeline_stage,
+        "application_outcome": application.application_outcome,
+        "workable_stage": application.workable_stage,
+        "bullhorn_status": getattr(application, "bullhorn_status", None),
+        "ats_context": ats_context,
+        "taali_score": application.taali_score_cache_100,
+        "assessment_score": assessment_score,
+        "assessment_score_cache_100": assessment_score,
+        "pre_screen_score": application.pre_screen_score_100,
+        "frontend_url": application_url(
+            application.id,
+            role_id=application.role_id,
+        ),
+    }
+
+
+def candidate_detail(
+    candidate: Candidate,
+    *,
+    applications: list[Any] | None = None,
+) -> dict[str, Any]:
     """Cross-role view of a single candidate."""
+    logical_applications = (
+        [
+            application
+            for application in (candidate.applications or [])
+            if getattr(application, "deleted_at", None) is None
+        ]
+        if applications is None
+        else list(applications)
+    )
     return {
         "candidate_id": candidate.id,
         "full_name": candidate.full_name,
@@ -213,21 +255,8 @@ def candidate_detail(candidate: Candidate) -> dict[str, Any]:
         "created_at": _isoformat(candidate.created_at),
         "frontend_url": candidate_url(candidate.id),
         "applications": [
-            {
-                "application_id": a.id,
-                "role_id": a.role_id,
-                "role_name": a.role.name if a.role else None,
-                "pipeline_stage": a.pipeline_stage,
-                "application_outcome": a.application_outcome,
-                "workable_stage": a.workable_stage,
-                "bullhorn_status": getattr(a, "bullhorn_status", None),
-                "ats_context": application_ats_context(a),
-                "taali_score": a.taali_score_cache_100,
-                "pre_screen_score": a.pre_screen_score_100,
-                "frontend_url": application_url(a.id, role_id=a.role_id),
-            }
-            for a in (candidate.applications or [])
-            if getattr(a, "deleted_at", None) is None
+            _candidate_membership_summary(application)
+            for application in logical_applications
         ],
     }
 
@@ -256,6 +285,7 @@ def comparison_row(app: CandidateApplication) -> dict[str, Any]:
             "assessment": app.assessment_score_cache_100,
             "role_fit": app.role_fit_score_cache_100,
         },
+        "score_mode": getattr(app, "score_mode_cache", None),
         "pre_screen_recommendation": app.pre_screen_recommendation,
         "frontend_url": application_url(app.id, role_id=app.role_id),
     }

@@ -48,7 +48,7 @@ def assessment_role_for_application(
     ) is None:
         raise HTTPException(
             status_code=422,
-            detail="Application is not in this role's shared candidate pool",
+            detail="Candidate is not a member of this role's candidate pool",
         )
     return role
 

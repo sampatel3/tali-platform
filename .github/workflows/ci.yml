@@ -145,6 +145,7 @@ jobs:
           CLAUDE_API_KEY: ""
           OPENAI_API_KEY: ""
           VOYAGE_API_KEY: ""
+          LANGSMITH_API_KEY: ""
           E2B_API_KEY: ""
         run: |
           mapfile -t AI_EVAL_TESTS < <(python scripts/check_ai_eval_coverage.py --list-tests)
@@ -154,6 +155,8 @@ jobs:
         # handler chain. Provider/model/GraphDB boundaries are local fakes.
         run: |
           python -m pytest -q \
+            tests/postgres/test_agent_decision_dedupe_concurrency.py \
+            tests/postgres/test_candidate_capability_migrations.py \
             tests/postgres/test_candidate_search_runtime_matrix.py \
             tests/postgres/test_production_search_canary.py
       - name: Targeted backend regression tests
@@ -188,6 +191,7 @@ jobs:
             tests/test_candidate_search_runner_hybrid.py \
             tests/test_candidate_search_tool_failure_contract.py \
             tests/test_grounded_top_candidates.py \
+            tests/test_top_reports_service.py \
             tests/test_llm_gateway.py \
             tests/test_metered_async_anthropic.py \
             tests/test_metered_provider_admission.py \
@@ -229,17 +233,32 @@ jobs:
         run: npm run check:architecture
       - name: Targeted frontend regression tests
         # Guards merge-prone role dimming, optimistic decision reconciliation,
-        # and immutable asset caching/404 routing.
+        # immutable asset caching/404 routing, and the registered candidate
+        # capability surfaces. These files are exact bindings in the offline AI
+        # eval registry; removing one from CI makes the backend coverage gate fail.
         run: |
           npm test -- \
+            src/app/pageNavigation.test.js \
             src/features/jobs/JobsPage.test.jsx \
+            src/features/jobs/JobPipelinePage.test.jsx \
             src/features/home/HomeNow.optimistic.test.jsx \
+            src/features/home/RecentDecisions.test.jsx \
             src/features/chat/Thread.test.jsx \
-            src/features/chat/useChatStream.session.test.jsx
+            src/features/chat/useChatStream.session.test.jsx \
+            src/features/candidates/CandidateAuditTimeline.test.jsx \
+            src/features/candidates/DecisionRail.test.jsx \
+            src/features/candidates/useReportInFlight.test.jsx \
+            src/features/jobs/useCandidateTriage.test.jsx \
+            src/features/jobs/useRoleAgentControls.test.jsx \
+            src/features/jobs/useRoleAssessmentTasks.test.jsx \
+            src/features/jobs/useRoleOperationScope.test.jsx \
+            src/shared/layout/GlobalSearch.test.jsx \
+            src/test/CandidateBackLink.test.jsx
           npm test -- src/features/candidates/candidatesUiUtils.test.js
           npm test -- src/test/vercelCaching.test.js
       - name: Build frontend
-        # Vite build will fail on import errors, type errors (where
-        # tsc is wired), and missing modules — the cheap regression
-        # net we keep while pre-pilot.
-        run: npm run build
+        # Keep the strict TypeScript/JS checking separate from Vite's bundling;
+        # Vite transpiles without proving the project type-checks.
+        run: |
+          npm run typecheck
+          npm run build

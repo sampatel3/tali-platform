@@ -11,6 +11,7 @@ from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
+from app.services.role_candidate_metrics import load_role_candidate_metrics
 from app.services.sister_role_service import related_role_pipeline_counts_bulk
 from tests.conftest import auth_headers
 
@@ -70,20 +71,27 @@ def _evaluation(
     application_id: int,
     status: str,
     pipeline_stage: str = "applied",
+    application_outcome: str = "open",
 ) -> None:
+    application = db.get(CandidateApplication, application_id)
+    assert application is not None
     db.add(
         SisterRoleEvaluation(
             organization_id=organization_id,
             role_id=role_id,
+            candidate_id=application.candidate_id,
             source_application_id=application_id,
+            ats_application_id=application_id,
             status=status,
             pipeline_stage=pipeline_stage,
+            application_outcome=application_outcome,
+            membership_source="test_explicit",
             spec_fingerprint=f"spec-{role_id}-{application_id}",
         )
     )
 
 
-def test_related_counts_use_full_owner_roster_when_evaluations_are_missing(db):
+def test_related_counts_use_only_explicit_live_memberships(db):
     organization = Organization(name="Related count parity")
     db.add(organization)
     db.flush()
@@ -184,42 +192,26 @@ def test_related_counts_use_full_owner_roster_when_evaluations_are_missing(db):
 
     partial = related_counts[related_with_partial_evaluations.id]
     assert partial["sourced"] == 0
-    assert partial["applied"] == 2
+    assert partial["applied"] == 0
     assert partial["scored"] == 1
     assert partial["invited"] == 1
     assert partial["in_assessment"] == 1
     assert partial["completed"] == 1
-    assert partial["advanced"] == 1
-    assert partial["rejected"] == owner_counts["rejected"] == 1
+    assert partial["advanced"] == 0
+    assert partial["rejected"] == 0
 
     missing = related_counts[related_without_evaluations.id]
-    assert missing["sourced"] == 0
-    assert missing["applied"] == 5
-    assert missing["scored"] == 0
-    assert missing["invited"] == 0
-    assert missing["in_assessment"] == 0
-    assert missing["completed"] == 0
-    assert missing["advanced"] == 1
-    assert missing["rejected"] == owner_counts["rejected"] == 1
+    assert all(value == 0 for value in missing.values())
 
     assert owner_counts["sourced"] == 1
-    owner_open = sum(
-        owner_counts[key]
-        for key in ("sourced", "applied", "scored", "invited", "completed", "advanced")
-    )
-    related_open_keys = (
-        "sourced",
-        "applied",
-        "scored",
-        "invited",
-        "completed",
-        "advanced",
-    )
-    assert sum(partial[key] for key in related_open_keys) == owner_open == 6
-    assert sum(missing[key] for key in related_open_keys) == owner_open
+    assert owner_counts["rejected"] == 1
+    assert partial["invited_delivered"] == 1
+    assert partial["invited_opened"] == 1
 
 
-def test_related_rejected_matches_owner_semantics_and_skips_deleted_sources(db):
+def test_related_counts_use_local_outcomes_and_keep_explicit_deleted_source_membership(
+    db,
+):
     organization = Organization(name="Related outcome semantics")
     db.add(organization)
     db.flush()
@@ -271,30 +263,89 @@ def test_related_rejected_matches_owner_semantics_and_skips_deleted_sources(db):
         suffix="open-disqualified",
         workable_disqualified=True,
     )
-    for application in (rejected, hired, deleted_rejected, open_disqualified):
-        _evaluation(
-            db,
-            organization_id=organization.id,
-            role_id=related.id,
-            application_id=application.id,
-            status="pending",
-        )
+    erased_person = _application(
+        db,
+        organization_id=organization.id,
+        role_id=owner.id,
+        suffix="erased-person",
+        pipeline_stage="advanced",
+    )
+    erased_person.candidate.deleted_at = datetime.now(timezone.utc)
+    _evaluation(
+        db,
+        organization_id=organization.id,
+        role_id=related.id,
+        application_id=rejected.id,
+        status="pending",
+    )
+    _evaluation(
+        db,
+        organization_id=organization.id,
+        role_id=related.id,
+        application_id=hired.id,
+        status="pending",
+        application_outcome="rejected",
+    )
+    _evaluation(
+        db,
+        organization_id=organization.id,
+        role_id=related.id,
+        application_id=deleted_rejected.id,
+        status="pending",
+        pipeline_stage="review",
+    )
+    _evaluation(
+        db,
+        organization_id=organization.id,
+        role_id=related.id,
+        application_id=open_disqualified.id,
+        status="pending",
+        pipeline_stage="advanced",
+    )
+    _evaluation(
+        db,
+        organization_id=organization.id,
+        role_id=related.id,
+        application_id=erased_person.id,
+        status="done",
+        pipeline_stage="advanced",
+    )
     db.commit()
 
     owner_counts = role_pipeline_counts(
         db, organization_id=organization.id, role_id=owner.id
     )
-    counts = related_role_pipeline_counts_bulk(db, [related.id])[related.id]
+    counts = related_role_pipeline_counts_bulk(
+        db,
+        [related.id],
+        organization_id=int(organization.id),
+    )[related.id]
 
-    assert counts["rejected"] == owner_counts["rejected"] == 1
-    assert counts["applied"] == owner_counts["applied"] == 1
-    assert sum(
-        counts[key]
-        for key in ("applied", "scored", "invited", "completed", "advanced", "rejected")
-    ) == 2
+    assert owner_counts["rejected"] == 1
+    assert counts["applied"] == 1
+    assert counts["completed"] == 1
+    assert counts["advanced"] == 1
+    assert counts["rejected"] == 1
+    assert sum(counts.values()) == 4
+
+    metrics = load_role_candidate_metrics(
+        db,
+        roles=[owner, related],
+        organization_id=int(organization.id),
+        include_pipeline_stats=True,
+    )
+    # Ordinary membership is the live application, so the soft-deleted source
+    # is absent there; the related role keeps that evidence row as long as the
+    # person is live. The erased person is absent from both.
+    assert metrics.application_counts[int(owner.id)] == 4
+    assert metrics.active_counts[int(owner.id)] == 1
+    assert metrics.application_counts[int(related.id)] == 4
+    assert metrics.active_counts[int(related.id)] == 3
+    assert metrics.stage_counts[int(owner.id)] == owner_counts
+    assert metrics.stage_counts[int(related.id)] == counts
 
 
-def test_role_list_and_detail_expose_the_same_reconciled_related_counts(client, db):
+def test_role_list_and_detail_expose_the_same_explicit_local_counts(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).one()
     owner = Role(
@@ -338,6 +389,28 @@ def test_role_list_and_detail_expose_the_same_reconciled_related_counts(client, 
         suffix="api-hired-without-evaluation",
         outcome="hired",
     )
+    _evaluation(
+        db,
+        organization_id=user.organization_id,
+        role_id=related.id,
+        application_id=open_disqualified.id,
+        status="pending",
+    )
+    _evaluation(
+        db,
+        organization_id=user.organization_id,
+        role_id=related.id,
+        application_id=rejected.id,
+        status="pending",
+    )
+    _evaluation(
+        db,
+        organization_id=user.organization_id,
+        role_id=related.id,
+        application_id=hired.id,
+        status="pending",
+        application_outcome="rejected",
+    )
     db.commit()
 
     listing = client.get(
@@ -349,12 +422,16 @@ def test_role_list_and_detail_expose_the_same_reconciled_related_counts(client, 
 
     assert listing.status_code == 200, listing.text
     assert detail.status_code == 200, detail.text
-    listed_counts = next(
-        role["stage_counts"]
-        for role in listing.json()
-        if role["id"] == related.id
+    listed_role = next(
+        role for role in listing.json() if role["id"] == related.id
     )
-    detail_counts = detail.json()["stage_counts"]
+    detail_role = detail.json()
+    listed_counts = listed_role["stage_counts"]
+    detail_counts = detail_role["stage_counts"]
+    assert listed_role["applications_count"] == 3
+    assert listed_role["active_candidates_count"] == 2
+    assert listed_role["last_candidate_activity_at"] is not None
+    assert detail_role["applications_count"] == 3
     assert listed_counts == detail_counts
     assert listed_counts["applied"] == 2
     assert listed_counts["rejected"] == 1
@@ -378,20 +455,18 @@ def test_role_list_and_detail_expose_the_same_reconciled_related_counts(client, 
     assert rejected_rows.status_code == 200, rejected_rows.text
     assert hired_rows.status_code == 200, hired_rows.text
     open_by_id = {row["id"]: row for row in open_rows.json()}
-    assert set(open_by_id) == {open_without_evaluation.id, open_disqualified.id}
+    assert set(open_by_id) == {open_disqualified.id, rejected.id}
     assert open_by_id[open_disqualified.id]["application_outcome"] == "open"
-    assert (
-        open_by_id[open_disqualified.id]["related_role_availability"]
-        == "disqualified"
-    )
-    assert [row["id"] for row in rejected_rows.json()] == [rejected.id]
+    assert open_by_id[open_disqualified.id]["related_role_availability"] == "disqualified"
+    assert open_by_id[rejected.id]["application_outcome"] == "open"
+    assert open_without_evaluation.id not in open_by_id
+    assert [row["id"] for row in rejected_rows.json()] == [hired.id]
     assert rejected_rows.json()[0]["application_outcome"] == "rejected"
-    assert [row["id"] for row in hired_rows.json()] == [hired.id]
-    assert hired_rows.json()[0]["application_outcome"] == "hired"
-    assert hired_rows.json()[0]["related_role_availability"] == "disqualified"
+    assert rejected_rows.json()[0]["related_role_availability"] == "disqualified"
+    assert hired_rows.json() == []
 
 
-def test_related_pipeline_endpoint_uses_local_stages_and_missing_fallback(client, db):
+def test_related_pipeline_endpoint_uses_explicit_membership_and_local_stages(client, db):
     headers, email = auth_headers(client)
     user = db.query(User).filter(User.email == email).one()
     owner = Role(
@@ -461,12 +536,12 @@ def test_related_pipeline_endpoint_uses_local_stages_and_missing_fallback(client
         "review": 1,
     }
     assert {row["id"]: row["pipeline_stage"] for row in payload["items"]} == {
-        missing_applied.id: "applied",
         local_apps["invited"].id: "invited",
         local_apps["in_assessment"].id: "in_assessment",
         local_apps["review"].id: "review",
-        source_advanced.id: "advanced",
+        source_advanced.id: "applied",
     }
+    assert missing_applied.id not in {row["id"] for row in payload["items"]}
 
     filtered_pipeline = client.get(
         f"/api/v1/roles/{related.id}/pipeline",
@@ -481,6 +556,6 @@ def test_related_pipeline_endpoint_uses_local_stages_and_missing_fallback(client
     assert filtered_pipeline.status_code == 200, filtered_pipeline.text
     assert filtered_list.status_code == 200, filtered_list.text
     assert [row["id"] for row in filtered_pipeline.json()["items"]] == [
-        missing_applied.id
+        source_advanced.id
     ]
-    assert [row["id"] for row in filtered_list.json()] == [missing_applied.id]
+    assert [row["id"] for row in filtered_list.json()] == [source_advanced.id]

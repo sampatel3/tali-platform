@@ -348,10 +348,30 @@ def test_compute_kpis_pending_by_type_groups_and_reconciles(db):
     seq = iter(range(1, 1000))
 
     def _add(decision_type, *, status="pending", snoozed_minutes=None):
+        item = next(seq)
+        candidate = Candidate(
+            organization_id=s.org.id,
+            email=f"kpi-{item}@x.test",
+            full_name=f"KPI Candidate {item}",
+        )
+        db.add(candidate)
+        db.flush()
+        application = CandidateApplication(
+            organization_id=s.org.id,
+            candidate_id=candidate.id,
+            role_id=s.role.id,
+            status="applied",
+            pipeline_stage="review",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            source="manual",
+        )
+        db.add(application)
+        db.flush()
         d = AgentDecision(
             organization_id=s.org.id,
             role_id=s.role.id,
-            application_id=s.application.id,
+            application_id=application.id,
             decision_type=decision_type,
             recommendation=decision_type,
             status=status,
@@ -359,7 +379,9 @@ def test_compute_kpis_pending_by_type_groups_and_reconciles(db):
             confidence=0.9,
             model_version="m",
             prompt_version="p",
-            idempotency_key=f"t:{s.application.id}:{decision_type}:{status}:{next(seq)}",
+            idempotency_key=(
+                f"t:{application.id}:{decision_type}:{status}:{item}"
+            ),
         )
         if snoozed_minutes is not None:
             d.snoozed_until = datetime.now(timezone.utc) + timedelta(minutes=snoozed_minutes)

@@ -13,6 +13,29 @@ import {
   buildBullhornAtsStageOptions,
   useCandidateTriage,
 } from './useCandidateTriage';
+import { useRoleOperationScope } from './useRoleOperationScope';
+
+const useScopedCandidateTriage = (props) => {
+  const roleId = props.roleId ?? props.role?.id;
+  const roleScope = useRoleOperationScope(roleId);
+  return useCandidateTriage({ ...props, ...roleScope, roleId });
+};
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((settle) => { resolve = settle; });
+  return { promise, resolve };
+};
+
+const rowClick = () => ({
+  defaultPrevented: false,
+  metaKey: false,
+  ctrlKey: false,
+  shiftKey: false,
+  altKey: false,
+  button: 0,
+  preventDefault: vi.fn(),
+});
 
 describe('buildBullhornAtsStageOptions', () => {
   it('uses the server-resolved remote label while keeping Taali intent as the value', () => {
@@ -69,7 +92,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
       owner: { id: 31, name: 'Data Platform Lead' },
       related: [{ id: 47, name: 'AI Engineer' }],
     };
-    const { result } = renderHook(() => useCandidateTriage({
+    const { result } = renderHook(() => useScopedCandidateTriage({
       role: {
         id: 47,
         role_kind: 'sister',
@@ -92,6 +115,71 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     }));
   });
 
+  it('isolates the drawer and an in-flight action across A -> B -> A role switches', async () => {
+    const roleA = { id: 9, name: 'Role A' };
+    const roleB = { id: 10, name: 'Role B' };
+    const applicationA = {
+      id: 41,
+      candidate_name: 'Candidate in A',
+      application_outcome: 'open',
+    };
+    const applicationB = {
+      id: 41,
+      candidate_name: 'Candidate in B',
+      application_outcome: 'open',
+    };
+    const outcome = deferred();
+    const rolesApi = { updateApplicationOutcome: vi.fn(() => outcome.promise) };
+    const patchApplicationRow = vi.fn();
+    const showToast = vi.fn();
+    const shared = {
+      roleTasks: [],
+      loadRoleWorkspace: vi.fn(),
+      patchApplicationRow,
+      showToast,
+      rolesApi,
+      viewCandidateReport: vi.fn(),
+    };
+    const { result, rerender } = renderHook(
+      ({ role, application }) => useScopedCandidateTriage({
+        ...shared,
+        role,
+        roleApplications: [application],
+      }),
+      { initialProps: { role: roleA, application: applicationA } },
+    );
+
+    act(() => result.current.handleRowClick(rowClick(), applicationA));
+    expect(result.current.triageApplication?.candidate_name).toBe('Candidate in A');
+
+    let rejection;
+    await act(async () => {
+      rejection = result.current.drawerProps.onReject(applicationA);
+      await Promise.resolve();
+    });
+    expect(result.current.drawerProps.rejectBusy).toBe(true);
+
+    rerender({ role: roleB, application: applicationB });
+    expect(result.current.triageApplication).toBeNull();
+    expect(result.current.drawerProps.rejectBusy).toBe(false);
+
+    act(() => result.current.handleRowClick(rowClick(), applicationB));
+    expect(result.current.triageApplication?.candidate_name).toBe('Candidate in B');
+
+    await act(async () => {
+      outcome.resolve({ data: { ...applicationA, application_outcome: 'rejected' } });
+      await rejection;
+    });
+
+    expect(result.current.triageApplication?.candidate_name).toBe('Candidate in B');
+    expect(showToast).not.toHaveBeenCalled();
+    expect(patchApplicationRow).not.toHaveBeenCalled();
+
+    rerender({ role: roleA, application: applicationA });
+    expect(result.current.triageApplication).toBeNull();
+    expect(result.current.drawerProps.rejectBusy).toBe(false);
+  });
+
   it('posts the selected Taali intent rather than Bullhorn free text', async () => {
     const application = { id: 41, source: 'bullhorn' };
     const rolesApi = {
@@ -108,7 +196,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     };
     const patchApplicationRow = vi.fn().mockResolvedValue(undefined);
     const showToast = vi.fn();
-    const { result } = renderHook(() => useCandidateTriage({
+    const { result } = renderHook(() => useScopedCandidateTriage({
       role: { id: 9, ats_provider: 'bullhorn', external_job_id: 'BH-900' },
       roleApplications: [application],
       roleTasks: [],
@@ -165,7 +253,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
       }),
     };
     const patchApplicationRow = vi.fn().mockResolvedValue(undefined);
-    const { result } = renderHook(() => useCandidateTriage({
+    const { result } = renderHook(() => useScopedCandidateTriage({
       role: {
         id: 17,
         role_kind: 'sister',
@@ -208,7 +296,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     };
     const patchApplicationRow = vi.fn();
     const showToast = vi.fn();
-    const { result } = renderHook(() => useCandidateTriage({
+    const { result } = renderHook(() => useScopedCandidateTriage({
       role: { id: 9, ats_provider: 'bullhorn', external_job_id: 'BH-900' },
       roleApplications: [application],
       roleTasks: [],
@@ -240,7 +328,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     };
     const patchApplicationRow = vi.fn();
     const showToast = vi.fn();
-    const { result } = renderHook(() => useCandidateTriage({
+    const { result } = renderHook(() => useScopedCandidateTriage({
       role: { id: 9, ats_provider: 'bullhorn', external_job_id: 'BH-900' },
       roleApplications: [application],
       roleTasks: [],
@@ -280,7 +368,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
     };
     const patchApplicationRow = vi.fn().mockResolvedValue(undefined);
     const showToast = vi.fn();
-    const { result } = renderHook(() => useCandidateTriage({
+    const { result } = renderHook(() => useScopedCandidateTriage({
       role: { id: 9, ats_provider: 'bullhorn', external_job_id: 'BH-900' },
       roleApplications: [application],
       roleTasks: [],
@@ -320,7 +408,7 @@ describe('useCandidateTriage Bullhorn hand-back', () => {
         data: { ...application, application_outcome: 'rejected' },
       }),
     };
-    const { result } = renderHook(() => useCandidateTriage({
+    const { result } = renderHook(() => useScopedCandidateTriage({
       role: {
         id: 17,
         role_kind: 'sister',

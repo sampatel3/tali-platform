@@ -16,6 +16,8 @@ from app.actions import ask_recruiter
 from app.actions.types import Actor
 from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
 
@@ -47,8 +49,33 @@ def _make_world(db):
     return org, role
 
 
+def _subject_application(db, *, org, role, label: str) -> CandidateApplication:
+    candidate = Candidate(
+        organization_id=int(org.id),
+        email=f"{label}@subject.test",
+        full_name=label,
+    )
+    db.add(candidate)
+    db.flush()
+    application = CandidateApplication(
+        organization_id=int(org.id),
+        candidate_id=int(candidate.id),
+        role_id=int(role.id),
+        source="manual",
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+    )
+    db.add(application)
+    db.flush()
+    return application
+
+
 def test_different_subject_ids_create_separate_rows(db):
     org, role = _make_world(db)
+    app_a = _subject_application(db, org=org, role=role, label="subject-a")
+    app_b = _subject_application(db, org=org, role=role, label="subject-b")
     run = AgentRun(
         organization_id=org.id,
         role_id=role.id,
@@ -67,7 +94,7 @@ def test_different_subject_ids_create_separate_rows(db):
         role_id=role.id,
         kind="candidate_tie_break",
         prompt="Approve send for app 1?",
-        subject_id=1,
+        subject_id=int(app_a.id),
     )
     row_b = ask_recruiter.open(
         db,
@@ -76,11 +103,11 @@ def test_different_subject_ids_create_separate_rows(db):
         role_id=role.id,
         kind="candidate_tie_break",
         prompt="Approve send for app 2?",
-        subject_id=2,
+        subject_id=int(app_b.id),
     )
     assert row_a.id != row_b.id
-    assert row_a.subject_id == 1
-    assert row_b.subject_id == 2
+    assert row_a.subject_id == int(app_a.id)
+    assert row_b.subject_id == int(app_b.id)
 
     open_rows = (
         db.query(AgentNeedsInput)
@@ -97,6 +124,12 @@ def test_different_subject_ids_create_separate_rows(db):
 
 def test_same_subject_id_returns_existing_row_with_refreshed_prompt(db):
     org, role = _make_world(db)
+    application = _subject_application(
+        db,
+        org=org,
+        role=role,
+        label="same-subject",
+    )
     run = AgentRun(
         organization_id=org.id,
         role_id=role.id,
@@ -115,7 +148,7 @@ def test_same_subject_id_returns_existing_row_with_refreshed_prompt(db):
         role_id=role.id,
         kind="candidate_tie_break",
         prompt="First framing.",
-        subject_id=42,
+        subject_id=int(application.id),
     )
     row_b = ask_recruiter.open(
         db,
@@ -124,7 +157,7 @@ def test_same_subject_id_returns_existing_row_with_refreshed_prompt(db):
         role_id=role.id,
         kind="candidate_tie_break",
         prompt="Refined framing.",
-        subject_id=42,
+        subject_id=int(application.id),
     )
     assert row_a.id == row_b.id
     assert row_b.prompt == "Refined framing."

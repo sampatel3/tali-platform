@@ -52,7 +52,7 @@ def _source_role_reference(brief: RoleBrief) -> str:
         source = None
     name = str(getattr(source, "name", "") or "").strip()
     role_id = int(getattr(source, "id", 0) or getattr(brief, "source_role_id", 0) or 0)
-    return f"{name} #{role_id}" if name and role_id else "the original ATS role"
+    return f"{name} #{role_id}" if name and role_id else "the selected source role"
 
 
 def ground_assistant_reply(
@@ -122,14 +122,14 @@ def ground_assistant_reply(
         if getattr(brief, "source_role_id", None):
             lead = (
                 "I've replaced the role content in this related-role draft. "
-                f"{_source_role_reference(brief)} and its shared candidate pool are unchanged."
+                f"{_source_role_reference(brief)} and this draft's initial roster snapshot are unchanged."
             )
         else:
             lead = "I've made the new specification canonical for this draft."
     elif changed_keys and getattr(brief, "source_role_id", None):
         lead = (
             "I've amended this related-role draft; "
-            f"{_source_role_reference(brief)} and its shared candidate pool are unchanged."
+            f"{_source_role_reference(brief)} and this draft's initial roster snapshot are unchanged."
         )
     elif changed_keys:
         lead = "I've amended the draft."

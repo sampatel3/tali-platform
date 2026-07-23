@@ -66,13 +66,20 @@ const successMessage = (key, value) => {
 };
 
 export const useRoleAutonomyChange = ({
+  beginRoleOperation,
+  captureRoleScope,
+  commitRoleScope,
+  finishRoleOperation,
+  isCurrentRoleScope,
   numericRoleId,
   role,
   rolesApi,
   setRole,
   showToast,
 }) => useCallback(async (key, value) => {
-  if (!Number.isFinite(numericRoleId) || !SUPPORTED_KEYS.has(key)) return;
+  const actionScope = captureRoleScope?.(numericRoleId);
+  if (!actionScope || !SUPPORTED_KEYS.has(key)) return;
+  if (!beginRoleOperation?.(actionScope, 'autonomy')) return;
   const isGranular = GRANULAR_AUTOMATION_KEYS.includes(key);
   const payload = buildPayload(role, key, value);
 
@@ -81,29 +88,32 @@ export const useRoleAutonomyChange = ({
       numericRoleId,
       versionedRolePayload(role, payload),
     );
-    setRole((current) => {
-      if (!current) return response?.data || current;
-      const effectivePatch = isGranular
-          ? Object.fromEntries(
-            GRANULAR_AUTOMATION_KEYS.map((automationKey) => [
-              automationKey,
-              payload[automationKey],
-            ]),
-          )
-          : { [key]: value };
-      return {
-        ...current,
-        ...payload,
-        ...(response?.data || {}),
-        agent_effective_policy: {
-          ...(current.agent_effective_policy || {}),
-          ...effectivePatch,
-          ...(response?.data?.agent_effective_policy || {}),
-        },
-      };
+    commitRoleScope?.(actionScope, () => {
+      setRole((current) => {
+        if (!current) return response?.data || current;
+        const effectivePatch = isGranular
+            ? Object.fromEntries(
+              GRANULAR_AUTOMATION_KEYS.map((automationKey) => [
+                automationKey,
+                payload[automationKey],
+              ]),
+            )
+            : { [key]: value };
+        return {
+          ...current,
+          ...payload,
+          ...(response?.data || {}),
+          agent_effective_policy: {
+            ...(current.agent_effective_policy || {}),
+            ...effectivePatch,
+            ...(response?.data?.agent_effective_policy || {}),
+          },
+        };
+      });
+      showToast(successMessage(key, value), 'success');
     });
-    showToast(successMessage(key, value), 'success');
   } catch (error) {
+    if (!isCurrentRoleScope?.(actionScope)) return;
     const conflict = roleVersionConflict(error);
     if (!conflict) {
       showToast(getErrorMessage(error, 'Failed to update autonomy setting.'), 'error');
@@ -117,7 +127,7 @@ export const useRoleAutonomyChange = ({
     let refreshed = false;
     try {
       const latest = await rolesApi.get(numericRoleId);
-      if (latest?.data) {
+      if (isCurrentRoleScope?.(actionScope) && latest?.data) {
         setRole(latest.data);
         refreshed = true;
       }
@@ -126,13 +136,15 @@ export const useRoleAutonomyChange = ({
     }
     const changedBy = conflictActorLabel(conflict.changedBy);
     const actorCopy = changedBy ? ` ${changedBy} saved a newer version.` : '';
-    showToast(
+    commitRoleScope?.(actionScope, () => showToast(
       `${conflict.message || 'This job changed before your update was saved.'}${actorCopy} ${refreshed
         ? 'Latest settings are shown; review them and try again.'
         : 'Reload the job to review the latest settings before trying again.'}`,
       'error',
-    );
+    ));
+  } finally {
+    finishRoleOperation?.(actionScope, 'autonomy');
   }
-}, [numericRoleId, role, rolesApi, setRole, showToast]);
+}, [beginRoleOperation, captureRoleScope, commitRoleScope, finishRoleOperation, isCurrentRoleScope, numericRoleId, role, rolesApi, setRole, showToast]);
 
 export default useRoleAutonomyChange;

@@ -1,4 +1,4 @@
-"""Workable context changes invalidate scores without paid re-scoring.
+"""Workable context changes invalidate owner scores without paid re-scoring.
 
 Policy: a Workable sync stores fresh data (answers, comments, activities,
 profile fields) and marks an existing score stale only when the exact rendered
@@ -9,7 +9,9 @@ The old auto-rescore-on-context-change trigger looped forever on
 candidates with applications on multiple agent-on roles (each role's
 sync overwrote the shared candidate row, so the context "changed" on
 every alternate sync) and silently burned API credits. Per-application rendered
-context digests prevent that oscillation while preserving honest staleness.
+context digests prevent that oscillation while preserving honest owner-score
+staleness. Independent related-role scores consume CV evidence, not this
+owner-job context.
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ import pytest
 
 from app.components.integrations.workable.service import WorkableService
 from app.components.integrations.workable.sync_service import WorkableSyncService
+from app.models.agent_decision import AgentDecision
+from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.cv_score_job import CvScoreJob
@@ -364,16 +368,16 @@ def test_agent_on_role_marks_material_context_change_stale_without_rescore(db):
     assert app.cv_match_score is not None
 
 
-def test_context_change_resets_related_score_without_owner_score_or_sync_spend(db):
-    """Related roles consume Workable context even when the owner was unscored."""
+def test_owner_context_resync_preserves_independent_related_score_and_decision(db):
+    """Owner questionnaires/comments/activity are not related-role inputs."""
 
     org, owner, _candidate, app = _build_org_role_candidate_app(
         db,
-        org_slug="related-context-no-owner-score",
+        org_slug="related-context-isolation",
         agentic=True,
         starred=True,
-        pre_screen_score=None,
-        cv_match_score=None,
+        pre_screen_score=72.0,
+        cv_match_score=85.0,
     )
     related = Role(
         organization_id=org.id,
@@ -403,16 +407,44 @@ def test_context_change_resets_related_score_without_owner_score_or_sync_spend(d
         scored_at=datetime.now(timezone.utc),
     )
     db.add(evaluation)
+    run = AgentRun(
+        id=910_001,
+        organization_id=org.id,
+        role_id=related.id,
+        trigger="manual",
+        status="succeeded",
+        model_version="old-model",
+        prompt_version="old-prompt",
+    )
+    db.add(run)
+    db.flush()
+    decision = AgentDecision(
+        id=910_001,
+        organization_id=org.id,
+        role_id=related.id,
+        application_id=app.id,
+        agent_run_id=run.id,
+        decision_type="send_assessment",
+        recommendation="send_assessment",
+        status="pending",
+        reasoning="Independent related-role recommendation.",
+        evidence={"score": 84},
+        model_version="old-model",
+        prompt_version="old-prompt",
+        idempotency_key=f"owner-context-isolation:{related.id}:{app.id}",
+    )
+    db.add(decision)
     db.commit()
 
     with (
         patch(
-            "app.services.cv_score_orchestrator.mark_application_scores_stale"
-        ) as owner_invalidation,
-        patch(
             "app.tasks.sister_role_tasks.score_sister_evaluation.apply_async"
         ) as score_dispatch,
         patch("app.cv_matching.holistic.run_holistic_match") as paid_provider,
+        patch(
+            "app.tasks.automation_tasks.parse_application_cv_sections.apply_async",
+            return_value=None,
+        ),
     ):
         _run_one_candidate_sync(
             db,
@@ -420,24 +452,33 @@ def test_context_change_resets_related_score_without_owner_score_or_sync_spend(d
             role=owner,
             new_comment_body="Availability changed to a twelve-week notice period.",
         )
-
-    db.commit()
+        db.commit()
     db.expire_all()
     saved = db.get(SisterRoleEvaluation, int(evaluation.id))
-    owner_invalidation.assert_not_called()
     score_dispatch.assert_not_called()
     paid_provider.assert_not_called()
-    assert saved.status == "stale_held"
-    assert saved.role_fit_score is None
-    assert saved.summary is None
-    assert saved.details is None
-    assert saved.attempts == 0
+    assert saved.status == "done"
+    assert saved.role_fit_score == 84.0
+    assert saved.summary == "Strong fit before the new recruiter comment."
+    assert saved.details == {"role_fit_score": 84.0}
     assert saved.dispatch_attempted_at is None
     assert saved.started_at is None
-    assert saved.model_version is None
-    assert saved.prompt_version is None
-    assert saved.trace_id is None
-    assert saved.history[-1]["role_fit_score"] == 84.0
+    assert saved.model_version == "old-model"
+    assert saved.prompt_version == "old-prompt"
+    assert saved.trace_id == "old-trace"
+    assert saved.history is None
+    saved_decision = db.get(AgentDecision, int(decision.id))
+    assert saved_decision.status == "pending"
+    assert saved_decision.reasoning == "Independent related-role recommendation."
+    owner_stale = (
+        db.query(CvScoreJob)
+        .filter(
+            CvScoreJob.application_id == int(app.id),
+            CvScoreJob.status == "stale",
+        )
+        .one()
+    )
+    assert owner_stale.error_message == "workable_context_changed"
 
     # The every-minute recovery sweep is transport recovery, not recruiter
     # authority. It must never turn this passive sync into a paid score.

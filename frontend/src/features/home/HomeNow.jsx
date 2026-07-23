@@ -28,6 +28,11 @@ import {
 } from 'lucide-react';
 
 import { agent as agentApi, organizations as orgsApi, roles as rolesApi } from '../../shared/api';
+import {
+  applicationLogicalMembershipId,
+  applicationLogicalRoleId,
+  applicationPhysicalId,
+} from '../../shared/applicationMembership';
 import { AssessmentWorkflowStepper } from '../candidates/AssessmentWorkflow';
 import { invitedStageValue, PIPELINE_FUNNEL_STAGES } from '../../shared/metrics';
 import { FunnelBoard } from '../../shared/ui/FunnelBoard';
@@ -63,7 +68,7 @@ import { hasApprovalReceiptCausalTransition } from '../../shared/decisions/appro
 import {
   DECISION_ACTIONS,
   DEFAULT_ACTIONS,
-  formatRoleFamilyReferences,
+  buildRejectConsequenceCopy,
   isRejectDecisionType,
 } from '../../shared/decisions/decisionActions';
 import { MotionLoop, MotionStagger, PresenceSwap, Reveal } from '../../shared/motion';
@@ -508,22 +513,24 @@ const InvitedPanel = ({ candidates, loading, selectedId, onSelect, roleNameById 
       {candidates.map((c) => {
         const ss = c.score_summary || {};
         const tracking = ss.invite_tracking || {};
-        const roleName = c.role?.name || roleNameById?.(c.role_id) || null;
+        const membershipId = applicationLogicalMembershipId(c);
+        const roleId = applicationLogicalRoleId(c);
+        const roleName = c.role?.name || roleNameById?.(roleId) || null;
         return (
           <div
-            key={c.id}
+            key={membershipId}
             role="button"
-            aria-pressed={selectedId === c.id}
+            aria-pressed={selectedId === membershipId}
             tabIndex={0}
-            className={`rq-split-row rq-invited-row ${selectedId === c.id ? 'on' : ''}`.trim()}
-            onClick={() => onSelect(c.id)}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(c.id); } }}
+            className={`rq-split-row rq-invited-row ${selectedId === membershipId ? 'on' : ''}`.trim()}
+            onClick={() => onSelect(membershipId)}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(membershipId); } }}
           >
             <Avatar initials={initialsFrom(c.candidate_name || c.candidate_email)} size={34} />
             <div className="rq-invited-main">
               <div className="rq-invited-name">{c.candidate_name || c.candidate_email}</div>
               <div className="rq-invited-meta">
-                <RolePill roleName={roleName} roleId={c.role_id} />
+                <RolePill roleName={roleName} roleId={roleId} />
                 <ScoreChip score={ss.taali_score} size="sm" />
               </div>
               <div className="rq-invited-chips">
@@ -556,7 +563,9 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
   }
   const ss = candidate.score_summary || {};
   const t = ss.invite_tracking || {};
-  const roleName = candidate.role?.name || roleNameById?.(candidate.role_id) || null;
+  const applicationId = applicationPhysicalId(candidate);
+  const roleId = applicationLogicalRoleId(candidate);
+  const roleName = candidate.role?.name || roleNameById?.(roleId) || null;
   const fmt = (ts) => { try { return new Date(ts).toLocaleString(); } catch { return ''; } };
   const timeline = [
     ['Invited', t.invite_sent_at],
@@ -580,8 +589,8 @@ const InvitedDetail = ({ candidate, roleNameById, onNavigate }) => {
   // provenance, integrity flags and requirement bars. A non-pending status
   // means no recommendation slab and no action bar render.
   const subject = {
-    application_id: candidate.id,
-    role_id: candidate.role_id,
+    application_id: applicationId,
+    role_id: roleId,
     candidate_name: candidate.candidate_name,
     candidate_email: candidate.candidate_email,
     role_name: roleName,
@@ -678,7 +687,7 @@ const SourcedPanel = ({ candidates, loading, roleNameById }) => {
   const order = [];
   const byRole = new Map();
   for (const c of candidates) {
-    const key = String(c.role_id ?? 'none');
+    const key = String(applicationLogicalRoleId(c) ?? 'none');
     if (!byRole.has(key)) { byRole.set(key, []); order.push(key); }
     byRole.get(key).push(c);
   }
@@ -696,37 +705,42 @@ const SourcedPanel = ({ candidates, loading, roleNameById }) => {
       <div className="rq-split-list-body">
         {order.map((key) => {
           const rows = byRole.get(key);
-          const roleName = rows[0].role_name || roleNameById?.(rows[0].role_id)
+          const roleId = applicationLogicalRoleId(rows[0]);
+          const roleName = rows[0].role_name || roleNameById?.(roleId)
             || (key === 'none' ? 'No role' : `Role #${key}`);
           return (
             <div key={key} className="rq-sourced-group">
               <div className="rq-sourced-grouphdr">
-                <RolePill roleName={roleName} roleId={rows[0].role_id} />
+                <RolePill roleName={roleName} roleId={roleId} />
                 <span className="rq-sourced-groupcount">{rows.length}</span>
               </div>
-              {rows.map((c) => (
-                <div key={c.id} className="rq-split-row rq-sourced-row">
-                  <Avatar initials={initialsFrom(c.candidate_name || c.candidate_email || `#${c.id}`)} size={30} />
-                  <div className="rq-sourced-main">
-                    <a
-                      href={pathForPage('candidate-report', {
-                        candidateApplicationId: c.id,
-                        fromHome: true,
-                        viewRoleId: c.role_id,
-                      })}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="rq-sourced-name rq-inline-link"
-                      title="Open candidate report in a new tab"
-                    >
-                      {c.candidate_name || c.candidate_email || `Application #${c.id}`}
-                    </a>
-                    <div className="rq-sourced-sub">
-                      Sourced {formatRelativeAge(c.created_at)} ago · {sourcedChannelLabel(c)}
+              {rows.map((c) => {
+                const applicationId = applicationPhysicalId(c);
+                const logicalRoleId = applicationLogicalRoleId(c);
+                return (
+                  <div key={applicationLogicalMembershipId(c)} className="rq-split-row rq-sourced-row">
+                    <Avatar initials={initialsFrom(c.candidate_name || c.candidate_email || `#${applicationId}`)} size={30} />
+                    <div className="rq-sourced-main">
+                      <a
+                        href={pathForPage('candidate-report', {
+                          candidateApplicationId: applicationId,
+                          fromHome: true,
+                          viewRoleId: logicalRoleId,
+                        })}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="rq-sourced-name rq-inline-link"
+                        title="Open candidate report in a new tab"
+                      >
+                        {c.candidate_name || c.candidate_email || `Application #${applicationId}`}
+                      </a>
+                      <div className="rq-sourced-sub">
+                        Sourced {formatRelativeAge(c.created_at)} ago · {sourcedChannelLabel(c)}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           );
         })}
@@ -805,7 +819,9 @@ export const HomeNow = ({
         // Keep the current selection if it's still in the list, else focus the
         // first row so the detail card is never empty on load.
         setSelectedInvitedId((prev) => (
-          prev && items.some((i) => i.id === prev) ? prev : (items[0]?.id ?? null)
+          prev && items.some((i) => applicationLogicalMembershipId(i) === prev)
+            ? prev
+            : applicationLogicalMembershipId(items[0])
         ));
       })
       .catch((err) => {
@@ -818,7 +834,9 @@ export const HomeNow = ({
       });
     return () => { cancelled = true; };
   }, [invitedView, filters.role_id, showToast]);
-  const selectedInvited = invited.find((c) => c.id === selectedInvitedId) || invited[0] || null;
+  const selectedInvited = invited.find(
+    (c) => applicationLogicalMembershipId(c) === selectedInvitedId,
+  ) || invited[0] || null;
 
   // Sourced tracker ("Sourced" view). Same on-demand fetch as the invited
   // tracker, filtered to pipeline_stage=sourced — un-scored prospects that never
@@ -1371,10 +1389,13 @@ export const HomeNow = ({
         name: d.candidate_name || `#${d.id}`,
         stage: d.candidate_workable_stage || 'a live interview stage',
       }));
-    const linkedRejectFamilies = [...new Set(
+    const linkedRejectConsequences = [...new Set(
       visiblePending
         .filter((decision) => isRejectDecisionType(decision.decision_type))
-        .map((decision) => formatRoleFamilyReferences(decision.role_family))
+        .map((decision) => buildRejectConsequenceCopy(
+          decision.role_family,
+          decision.role_id,
+        ))
         .filter(Boolean),
     )];
     setBulkStages({});
@@ -1388,7 +1409,7 @@ export const HomeNow = ({
       decisions: visiblePending,
       advanceRoles,
       postHandoverRejects,
-      linkedRejectFamilies,
+      linkedRejectConsequences,
     });
   };
 
@@ -1632,12 +1653,12 @@ export const HomeNow = ({
             <InvitedPanel
               candidates={invited}
               loading={invitedLoading}
-              selectedId={selectedInvited?.id}
+              selectedId={applicationLogicalMembershipId(selectedInvited)}
               onSelect={setSelectedInvitedId}
               roleNameById={roleNameById}
             />
             <div className="rq-hybrid-right">
-              <PresenceSwap presenceKey={selectedInvited?.id || 'invited-empty'}>
+              <PresenceSwap presenceKey={applicationLogicalMembershipId(selectedInvited) || 'invited-empty'}>
                 <InvitedDetail
                   candidate={selectedInvited}
                   roleNameById={roleNameById}
@@ -1781,12 +1802,12 @@ export const HomeNow = ({
             </div>
 
             <div className="rq-modal-body">
-              {(bulkConfirm.linkedRejectFamilies || []).length > 0 ? (
+              {(bulkConfirm.linkedRejectConsequences || []).length > 0 ? (
                 <div className="rq-modal-section" role="alert" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 12px', borderRadius: 8, background: 'var(--amber-soft)', color: 'var(--ink-2)', fontSize: 'var(--fs-body)', fontWeight: 500, lineHeight: 1.5 }}>
                   <AlertTriangle size={14} strokeWidth={2} aria-hidden="true" style={{ marginTop: 2, flexShrink: 0 }} />
                   <span>
-                    <strong>Shared-pool rejection —</strong> approving this batch rejects the ATS application across all linked roles:{' '}
-                    {bulkConfirm.linkedRejectFamilies.join(' · ')}.
+                    <strong>Role-specific rejections —</strong>{' '}
+                    {bulkConfirm.linkedRejectConsequences.join(' · ')}
                   </span>
                 </div>
               ) : null}

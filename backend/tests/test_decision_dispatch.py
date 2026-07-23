@@ -28,6 +28,7 @@ from app.models.cv_score_job import CvScoreJob
 from app.models.job_hiring_team import TEAM_ROLE_RECRUITER, JobHiringTeam
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.services import background_job_runs
 from app.services.background_job_runs import SCOPE_KIND_ORG
@@ -1069,6 +1070,19 @@ def test_approve_worker_locks_owner_and_acting_roles_before_freshness(db):
     )
     db.add(acting_role)
     db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=int(org.id),
+            role_id=int(acting_role.id),
+            candidate_id=int(app.candidate_id),
+            source_application_id=int(app.id),
+            ats_application_id=int(app.id),
+            status="done",
+            pipeline_stage="review",
+            application_outcome="open",
+            spec_fingerprint="related-lock-order",
+        )
+    )
     decision.role_id = int(acting_role.id)
     db.commit()
     events: list[str] = []

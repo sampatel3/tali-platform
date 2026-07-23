@@ -15,11 +15,18 @@ from typing import Any
 from sqlalchemy import and_, case, distinct, func, not_, or_
 from sqlalchemy.orm import Session
 
+from ..candidate_search.application_role_scope import (
+    application_outcome_expression,
+    pipeline_stage_expression,
+)
+from ..candidate_search.population import apply_searchable_candidate_scope
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..components.scoring.assessment_metrics import score_100 as assessment_score_100
 from ..models.assessment import Assessment, AssessmentStatus
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
-from ..models.role import Role
+from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.sister_role_evaluation import SisterRoleEvaluation
 from ..models.task import Task
 from ..models.user import User
 from ..shared.utils import ensure_utc, utcnow
@@ -355,6 +362,31 @@ def _count_if(predicate: Any) -> Any:
     return func.coalesce(func.sum(case((predicate, 1), else_=0)), 0)
 
 
+def _application_aggregate(
+    query: Any,
+    *,
+    id_expression: Any,
+    candidate_expression: Any,
+    stage_expression: Any,
+    outcome_expression: Any,
+) -> Any:
+    return (
+        query.with_entities(
+            func.count(id_expression).label("total"),
+            func.count(distinct(candidate_expression)).label("candidates"),
+            *[
+                _count_if(stage_expression == value).label(f"stage_{value}")
+                for value in _PIPELINE_STAGES
+            ],
+            *[
+                _count_if(outcome_expression == value).label(f"outcome_{value}")
+                for value in _APPLICATION_OUTCOMES
+            ],
+        )
+        .one()
+    )
+
+
 def get_recruiting_overview(
     db: Session,
     user: User,
@@ -390,32 +422,85 @@ def get_recruiting_overview(
             or 0
         )
 
-    application_filters: list[Any] = [
-        CandidateApplication.organization_id == organization_id,
-        CandidateApplication.deleted_at.is_(None),
-    ]
+    application_aggregate_rows: list[Any]
     if normalized_role_id is not None:
-        application_filters.append(CandidateApplication.role_id == normalized_role_id)
-    application_aggregates = (
-        db.query(
-            func.count(CandidateApplication.id).label("total"),
-            func.count(distinct(CandidateApplication.candidate_id)).label("candidates"),
-            *[
-                _count_if(CandidateApplication.pipeline_stage == value).label(
-                    f"stage_{value}"
-                )
-                for value in _PIPELINE_STAGES
-            ],
-            *[
-                _count_if(CandidateApplication.application_outcome == value).label(
-                    f"outcome_{value}"
-                )
-                for value in _APPLICATION_OUTCOMES
-            ],
+        application_query = db.query(CandidateApplication).filter(
+            CandidateApplication.organization_id == organization_id,
         )
-        .filter(*application_filters)
-        .one()
-    )
+        role_scope = resolve_candidate_role_scope(
+            db,
+            organization_id=organization_id,
+            role_id=normalized_role_id,
+        )
+        application_query = role_scope.scope_visible_roster(application_query)
+        stage_expression = pipeline_stage_expression(role_scope)
+        outcome_expression = application_outcome_expression(role_scope)
+        application_aggregate_rows = [
+            _application_aggregate(
+                application_query,
+                id_expression=CandidateApplication.id,
+                candidate_expression=CandidateApplication.candidate_id,
+                stage_expression=stage_expression,
+                outcome_expression=outcome_expression,
+            )
+        ]
+    else:
+        # Organisation totals count independent logical memberships. A live
+        # owner application and a live related membership are two role
+        # lifecycles; a direct related application is represented once by its
+        # SRE membership rather than again as a physical application row.
+        ordinary_query = (
+            db.query(CandidateApplication)
+            .join(Role, Role.id == CandidateApplication.role_id)
+            .filter(
+                CandidateApplication.organization_id == organization_id,
+                CandidateApplication.deleted_at.is_(None),
+                Role.organization_id == organization_id,
+                Role.deleted_at.is_(None),
+                Role.role_kind != ROLE_KIND_SISTER,
+                Role.ats_owner_role_id.is_(None),
+            )
+        )
+        ordinary_query = apply_searchable_candidate_scope(
+            ordinary_query,
+            organization_id=organization_id,
+        )
+        related_query = (
+            db.query(SisterRoleEvaluation)
+            .join(Role, Role.id == SisterRoleEvaluation.role_id)
+            .join(
+                CandidateApplication,
+                CandidateApplication.id
+                == SisterRoleEvaluation.source_application_id,
+            )
+            .filter(
+                SisterRoleEvaluation.organization_id == organization_id,
+                SisterRoleEvaluation.deleted_at.is_(None),
+                CandidateApplication.organization_id == organization_id,
+                Role.organization_id == organization_id,
+                Role.deleted_at.is_(None),
+            )
+        )
+        related_query = apply_searchable_candidate_scope(
+            related_query,
+            organization_id=organization_id,
+        )
+        application_aggregate_rows = [
+            _application_aggregate(
+                ordinary_query,
+                id_expression=CandidateApplication.id,
+                candidate_expression=CandidateApplication.candidate_id,
+                stage_expression=CandidateApplication.pipeline_stage,
+                outcome_expression=CandidateApplication.application_outcome,
+            ),
+            _application_aggregate(
+                related_query,
+                id_expression=SisterRoleEvaluation.id,
+                candidate_expression=CandidateApplication.candidate_id,
+                stage_expression=SisterRoleEvaluation.pipeline_stage,
+                outcome_expression=SisterRoleEvaluation.application_outcome,
+            ),
+        ]
 
     if normalized_role_id is None:
         candidate_total = int(
@@ -428,7 +513,7 @@ def get_recruiting_overview(
             or 0
         )
     else:
-        candidate_total = int(application_aggregates.candidates or 0)
+        candidate_total = int(application_aggregate_rows[0].candidates or 0)
 
     now = utcnow()
     attention_exprs = _attention_expressions(now)
@@ -456,17 +541,30 @@ def get_recruiting_overview(
                 )
             ],
         )
+        .join(Candidate, Candidate.id == Assessment.candidate_id)
         .filter(*assessment_filters)
+        .filter(
+            Candidate.organization_id == organization_id,
+            Candidate.deleted_at.is_(None),
+        )
         .one()
     )
 
-    application_total = int(application_aggregates.total or 0)
+    application_total = sum(
+        int(row.total or 0) for row in application_aggregate_rows
+    )
     pipeline = {
-        value: int(getattr(application_aggregates, f"stage_{value}") or 0)
+        value: sum(
+            int(getattr(row, f"stage_{value}") or 0)
+            for row in application_aggregate_rows
+        )
         for value in _PIPELINE_STAGES
     }
     outcomes = {
-        value: int(getattr(application_aggregates, f"outcome_{value}") or 0)
+        value: sum(
+            int(getattr(row, f"outcome_{value}") or 0)
+            for row in application_aggregate_rows
+        )
         for value in _APPLICATION_OUTCOMES
     }
     known_stage_total = sum(pipeline.values())

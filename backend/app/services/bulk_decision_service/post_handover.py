@@ -173,7 +173,9 @@ def decide_post_handover(
             .filter(
                 AgentDecision.role_id == int(role.id),
                 AgentDecision.application_id == int(app.id),
-                AgentDecision.status.in_(("pending", "processing")),
+                AgentDecision.status.in_(
+                    ("pending", "processing", "reverted_for_feedback")
+                ),
             )
             .populate_existing()
             .with_for_update()
@@ -267,7 +269,8 @@ def decide_post_handover(
                 and int(matching.role_id) == int(role.id)
                 and int(matching.application_id) == int(app.id)
                 and str(matching.decision_type) == str(decision_type)
-                and str(matching.status) in ("pending", "processing")
+                and str(matching.status)
+                in ("pending", "processing", "reverted_for_feedback")
             ):
                 reject_unit.rollback()
                 return None

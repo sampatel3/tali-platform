@@ -131,7 +131,12 @@ def dispatch_sister_evaluation(
     now = _now()
     evaluation = (
         db.query(SisterRoleEvaluation)
-        .filter(SisterRoleEvaluation.id == int(evaluation_id))
+        .filter(
+            SisterRoleEvaluation.id == int(evaluation_id),
+            SisterRoleEvaluation.deleted_at.is_(None),
+            SisterRoleEvaluation.application_outcome == "open",
+            SisterRoleEvaluation.pipeline_stage != "advanced",
+        )
         .with_for_update(skip_locked=True)
         .first()
     )
@@ -213,8 +218,6 @@ def _claim_sister_score_generation(
     """Claim one paid attempt under the canonical generation-lock order."""
 
     from ..models.sister_role_evaluation import (
-        SISTER_EVAL_DONE,
-        SISTER_EVAL_EXCLUDED,
         SISTER_EVAL_PENDING,
         SISTER_EVAL_RUNNING,
         SISTER_EVAL_UNSCORABLE,
@@ -225,12 +228,6 @@ def _claim_sister_score_generation(
         locate_sister_score,
         lock_sister_score_rows,
     )
-    from ..services.sister_role_service import (
-        source_application_is_globally_advanced,
-        source_application_is_globally_closed,
-        transition_related_role_stage,
-    )
-
     locator = locate_sister_score(db, evaluation_id=int(evaluation_id))
     if locator is None:
         db.rollback()
@@ -257,41 +254,15 @@ def _claim_sister_score_generation(
         }
     role = locked.role
     application = locked.application
-    # This is immediately before the paid-call claim. Pause, Turn off, role
-    # closure, or ATS closure therefore revokes queued work.
+    # This is immediately before the paid-call claim. Pause, Turn off, or role
+    # closure revokes queued work. Shared ATS state is only a write restriction;
+    # it never changes this role's membership or scoring authority.
     authority_hold = _hold_sister_score_if_authority_blocked(
         db,
         locked=locked,
     )
     if authority_hold is not None:
         return None, None, authority_hold
-    if source_application_is_globally_closed(application):
-        evaluation.status = SISTER_EVAL_EXCLUDED
-        evaluation.error_message = "Shared ATS application is disqualified or closed"
-        evaluation.last_error_code = "shared_application_closed"
-        evaluation.next_attempt_at = None
-        evaluation.dispatch_attempted_at = None
-        evaluation.started_at = None
-        evaluation.scored_at = _now()
-        db.commit()
-        return None, None, {
-            "status": SISTER_EVAL_EXCLUDED,
-            "evaluation_id": int(evaluation_id),
-        }
-    if source_application_is_globally_advanced(application):
-        evaluation.status = SISTER_EVAL_DONE
-        evaluation.next_attempt_at = None
-        evaluation.dispatch_attempted_at = None
-        evaluation.started_at = None
-        transition_related_role_stage(
-            evaluation, to_stage="advanced", source="system"
-        )
-        db.commit()
-        return None, None, {
-            "status": SISTER_EVAL_DONE,
-            "reason": "shared_application_advanced",
-            "evaluation_id": int(evaluation_id),
-        }
     cv_text = (
         str(application.cv_text or "").strip()
         or str(locked.candidate.cv_text or "").strip()
@@ -348,20 +319,13 @@ def _supersede_sister_score_generation(
     """Leave recruiter generation B intact or queue changed inputs afresh."""
 
     from ..models.sister_role_evaluation import (
-        SISTER_EVAL_DONE,
-        SISTER_EVAL_EXCLUDED,
         SISTER_EVAL_PENDING,
+        SISTER_EVAL_STALE_HELD,
         SISTER_EVAL_UNSCORABLE,
     )
     from ..services.sister_role_scoring_generation import (
         sister_score_attempt_is_current,
     )
-    from ..services.sister_role_service import (
-        source_application_is_globally_advanced,
-        source_application_is_globally_closed,
-        transition_related_role_stage,
-    )
-
     evaluation = locked.evaluation
     if not sister_score_attempt_is_current(locked, expected=expected):
         # A reset/new worker owns this row now. Never mutate its state.
@@ -376,18 +340,7 @@ def _supersede_sister_score_generation(
             expected.locator.evaluation_id,
             reason="current_inputs_unavailable",
         )
-    application = locked.application
-    if source_application_is_globally_closed(application):
-        evaluation.status = SISTER_EVAL_EXCLUDED
-        evaluation.error_message = "Shared ATS application is disqualified or closed"
-        evaluation.last_error_code = "shared_application_closed"
-        evaluation.scored_at = _now()
-    elif source_application_is_globally_advanced(application):
-        evaluation.status = SISTER_EVAL_DONE
-        transition_related_role_stage(
-            evaluation, to_stage="advanced", source="system"
-        )
-    elif current_inputs is not None and (
+    if current_inputs is not None and (
         not current_inputs.cv_text or not current_inputs.job_spec
     ):
         evaluation.status = SISTER_EVAL_UNSCORABLE
@@ -403,14 +356,29 @@ def _supersede_sister_score_generation(
         )
         evaluation.scored_at = _now()
     else:
-        evaluation.status = SISTER_EVAL_PENDING
+        shared_cv_changed = bool(
+            current_inputs.cv_fingerprint != expected.cv_fingerprint
+        )
+        evaluation.status = (
+            SISTER_EVAL_STALE_HELD
+            if shared_cv_changed
+            else SISTER_EVAL_PENDING
+        )
         evaluation.spec_fingerprint = current_inputs.spec_fingerprint
         evaluation.cv_fingerprint = current_inputs.cv_fingerprint
         evaluation.role_fit_score = None
         evaluation.summary = None
         evaluation.details = None
-        evaluation.error_message = "Inputs changed while scoring; queued a fresh attempt"
-        evaluation.last_error_code = "inputs_superseded"
+        evaluation.error_message = (
+            "Candidate CV changed while scoring; recruiter re-evaluation is required"
+            if shared_cv_changed
+            else "Role inputs changed while scoring; queued a fresh attempt"
+        )
+        evaluation.last_error_code = (
+            "shared_inputs_changed"
+            if shared_cv_changed
+            else "inputs_superseded"
+        )
         evaluation.queued_at = _now()
         evaluation.scored_at = None
     evaluation.next_attempt_at = None
@@ -629,23 +597,20 @@ def score_sister_evaluation(evaluation_id: int) -> dict:
 )
 def score_sister_role(role_id: int) -> dict:
     from ..models.sister_role_evaluation import (
-        SISTER_EVAL_DONE,
         SISTER_EVAL_PENDING,
         SISTER_EVAL_RETRY_WAIT,
         SisterRoleEvaluation,
     )
     from ..platform.database import SessionLocal
-    from ..services.sister_role_service import (
-        source_application_is_globally_advanced,
-        transition_related_role_stage,
-    )
-
     with SessionLocal() as db:
         evaluations = (
             db.query(SisterRoleEvaluation)
             .options(joinedload(SisterRoleEvaluation.source_application))
             .filter(
                 SisterRoleEvaluation.role_id == int(role_id),
+                SisterRoleEvaluation.deleted_at.is_(None),
+                SisterRoleEvaluation.application_outcome == "open",
+                SisterRoleEvaluation.pipeline_stage != "advanced",
                 SisterRoleEvaluation.status.in_(
                     (SISTER_EVAL_PENDING, SISTER_EVAL_RETRY_WAIT)
                 ),
@@ -660,20 +625,6 @@ def score_sister_role(role_id: int) -> dict:
         dispatchable = []
         now = _now()
         for evaluation in evaluations:
-            if source_application_is_globally_advanced(
-                evaluation.source_application
-            ):
-                # A hand-off that races a queued/retry score is terminal for
-                # the full related-role family. Preserve any prior score, stamp
-                # the local projection, and never dispatch another paid call.
-                evaluation.status = SISTER_EVAL_DONE
-                evaluation.next_attempt_at = None
-                evaluation.dispatch_attempted_at = None
-                evaluation.started_at = None
-                transition_related_role_stage(
-                    evaluation, to_stage="advanced", source="system"
-                )
-                continue
             pending_due = evaluation.status == SISTER_EVAL_PENDING and (
                 evaluation.dispatch_attempted_at is None
                 or _at_or_before(
@@ -781,6 +732,9 @@ def recover_sister_role_evaluations(*, limit: int = 200) -> dict:
             int(row_id)
             for (row_id,) in db.query(SisterRoleEvaluation.id)
             .filter(
+                SisterRoleEvaluation.deleted_at.is_(None),
+                SisterRoleEvaluation.application_outcome == "open",
+                SisterRoleEvaluation.pipeline_stage != "advanced",
                 or_(
                     (SisterRoleEvaluation.status == SISTER_EVAL_PENDING)
                     & (

@@ -10,17 +10,31 @@ import { agent as agentApi } from '../../shared/api';
 import { Avatar, formatRelativeAge, initialsFrom } from './atoms';
 import { pathForPage } from '../../app/routing';
 
-// Map a resolved decision to the plain-English outcome the recruiter landed on.
-// On an override the recruiter chose differently, so read the override action;
-// otherwise the agent's recommendation (decision_type) is what they approved.
-const outcomeFor = (row) => {
+const actionNoun = (action) => {
+  if (action === 'advance') return 'Advance';
+  if (action === 'reject') return 'Rejection';
+  if (action === 'assessment_send') return 'Assessment';
+  return 'Decision';
+};
+
+// Completion language is reserved for a confirmed, role-matched action-event
+// from the API. An approved AgentDecision proves intent only.
+export const outcomeFor = (row) => {
   const status = String(row?.status || '').toLowerCase();
-  const overrideAction = String(row?.override_action || '').toLowerCase();
-  const basis = status === 'overridden' && overrideAction ? overrideAction : String(row?.decision_type || '').toLowerCase();
-  if (basis.includes('reject') || basis.includes('skip')) return { label: 'Rejected', tone: 'mute' };
-  if (basis.includes('advance')) return { label: 'Advanced', tone: 'purple' };
-  if (basis.includes('send') || basis.includes('assessment') || basis.includes('invite')) return { label: 'Assessment sent', tone: 'purple' };
-  return { label: status === 'overridden' ? 'Overridden' : 'Decided', tone: 'mute' };
+  const effect = row?.resolution_effect || {};
+  const effectStatus = String(effect.status || 'unknown').toLowerCase();
+  const action = String(effect.action || 'unknown').toLowerCase();
+
+  if (effectStatus === 'confirmed') {
+    if (action === 'reject') return { label: 'Rejected', tone: 'mute' };
+    if (action === 'advance') return { label: 'Advanced', tone: 'purple' };
+    if (action === 'assessment_send') return { label: 'Assessment sent', tone: 'purple' };
+  }
+  const noun = actionNoun(action);
+  if (effectStatus === 'failed') return { label: `${noun} failed`, tone: 'mute' };
+  if (effectStatus === 'pending') return { label: `${noun} queued`, tone: 'mute' };
+  if (action !== 'unknown') return { label: `${noun} approved`, tone: 'mute' };
+  return { label: status === 'overridden' ? 'Overridden' : 'Approved', tone: 'mute' };
 };
 
 export const RecentDecisions = ({ roleId = null, collapsedCount = 5, refreshKey = 0 }) => {
@@ -69,7 +83,7 @@ export const RecentDecisions = ({ roleId = null, collapsedCount = 5, refreshKey 
         <div>
           <span className="kicker">RECENT DECISIONS</span>
           <p className="home-section-sub" style={{ marginTop: 4 }}>
-            Calls you&apos;ve made — find a candidate again after they&apos;ve moved on.
+            Approved calls and their verified delivery status.
           </p>
         </div>
       </div>
@@ -93,7 +107,13 @@ export const RecentDecisions = ({ roleId = null, collapsedCount = 5, refreshKey 
                 {row.candidate_name || `Application #${row.application_id}`}
               </a>
               <span className={`rq-recent-outcome rq-recent-outcome--${outcome.tone}`}>{outcome.label}</span>
-              <span className="rq-recent-age">{formatRelativeAge(row.resolved_at || row.created_at)} ago</span>
+              <span className="rq-recent-age">
+                {formatRelativeAge(
+                  row.resolution_effect?.status === 'confirmed'
+                    ? row.resolution_effect?.occurred_at || row.resolved_at || row.created_at
+                    : row.resolved_at || row.created_at,
+                )} ago
+              </span>
             </li>
           );
         })}

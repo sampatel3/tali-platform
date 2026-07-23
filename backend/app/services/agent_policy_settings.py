@@ -53,13 +53,6 @@ FIXED_HUMAN_REVIEW_ACTIONS = (
     "hire",
 )
 
-RELATED_ROLE_REJECT_AUTOMATION_MESSAGE = (
-    "Automatic rejection is unavailable while roles share an ATS application "
-    "because it rejects the candidate in every linked role. "
-    "A recruiter can still review and confirm each rejection."
-)
-
-
 def role_is_related(role: Role) -> bool:
     """Return whether ``role`` is the related member of a role family."""
 
@@ -67,11 +60,11 @@ def role_is_related(role: Role) -> bool:
 
 
 def role_shares_ats_application(role: Role, *, db: Session) -> bool:
-    """Whether candidate actions on ``role`` also affect a linked role.
+    """Whether this role has an ATS transport linked to another role.
 
-    A related role and its original ATS owner point at the same provider
-    application. Automatic rejection is therefore unsafe on either side of
-    the family; other Agent policy settings remain role-owned.
+    This is transport/restriction metadata only. It must never be used to
+    couple membership, state, decisions, rejection, or advancement across
+    logical roles.
     """
 
     if role_is_related(role):
@@ -94,10 +87,10 @@ def pre_screen_reject_review_copy(*, shared_ats_application: bool) -> tuple[str,
 
     if shared_ats_application:
         return (
-            "Below pre-screen threshold; related-role rejections require "
-            "recruiter confirmation because the ATS application is shared.",
-            "Below pre-screen threshold; related-role rejection was held for "
-            "recruiter confirmation but no Decision Hub card was created.",
+            "Below pre-screen threshold; the role-local candidate action could "
+            "not be verified and was held for recruiter review.",
+            "Below pre-screen threshold; the role-local candidate action could "
+            "not be verified and no Decision Hub card was created.",
         )
     return (
         "Below pre-screen threshold; auto_reject_pre_screen is off so the "
