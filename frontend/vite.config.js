@@ -38,6 +38,13 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/test/setup.js',
     globals: true,
+    // Vitest fans the suite across roughly one worker per core, each running
+    // jsdom plus React. On a machine already busy with a dev server the heavier
+    // page tests miss the 5s default and fail in ways that have nothing to do
+    // with the code under test — a full serial run of the same commit is green.
+    // Paired with asyncUtilTimeout in src/test/setup.js; both have to move,
+    // they govern different waits.
+    testTimeout: 20000,
   },
   server: {
     proxy: {

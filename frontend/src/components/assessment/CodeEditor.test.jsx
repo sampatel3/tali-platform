@@ -138,19 +138,30 @@ describe('CodeEditor load failure', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     monacoMock.mounts = false;
 
-    render(
-      <CatchBoundary>
-        <CodeEditor value="x = 1" onChange={vi.fn()} />
-      </CatchBoundary>,
-    );
+    // React rethrows a boundary-caught error at window so jsdom can report it.
+    // Throwing is the point of this test, so mark it handled: an unexplained
+    // Monaco stack trace in an otherwise green run sends whoever reads the
+    // output next off debugging something that is working as designed.
+    const swallowExpectedThrow = (event) => event.preventDefault();
+    window.addEventListener('error', swallowExpectedThrow);
 
-    expect(screen.queryByText('plain text fallback')).toBeNull();
+    try {
+      render(
+        <CatchBoundary>
+          <CodeEditor value="x = 1" onChange={vi.fn()} />
+        </CatchBoundary>,
+      );
 
-    act(() => {
-      vi.advanceTimersByTime(15000);
-    });
+      expect(screen.queryByText('plain text fallback')).toBeNull();
 
-    expect(screen.getByText('plain text fallback')).toBeTruthy();
+      act(() => {
+        vi.advanceTimersByTime(15000);
+      });
+
+      expect(screen.getByText('plain text fallback')).toBeTruthy();
+    } finally {
+      window.removeEventListener('error', swallowExpectedThrow);
+    }
   });
 
   it('leaves a mounted editor alone once the timeout would have fired', () => {
