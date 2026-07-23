@@ -1193,6 +1193,39 @@
   .legal-line { margin-top: 17px; display: grid; grid-template-columns: 1fr auto; gap: 24px; align-items: center; padding: 14px 20px; border-radius: 14px; background: var(--purple-soft); font-size: 13.5px; line-height: 1.4; color: var(--ink-2); }
   .legal-line b { color: var(--ink); }
   .legal-line a { color: var(--purple); text-decoration: none; font-family: var(--font-mono); font-size: 11px; }
+
+  /* ---- round 2: merged solution slide, work-shift slide, uniform titles ---- */
+  .trust-band { margin-top: 18px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .trust-cell { padding: 18px 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); font-size: 15px; line-height: 1.45; color: var(--ink-2); }
+  .trust-cell b { display: block; margin-bottom: 7px; color: var(--ink); font: 600 18px var(--font-display); letter-spacing: -.01em; }
+
+  .shift-grid { margin-top: 10px; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .shift-panel { padding: 28px 32px 22px; border: 1px solid var(--line); border-radius: 20px; background: var(--bg-2); }
+  .shift-kicker { font: 700 11.5px var(--font-mono); letter-spacing: .13em; text-transform: uppercase; color: var(--purple); }
+  .shift-cap { margin-top: 10px; font: 600 22px/1.2 var(--font-display); letter-spacing: -.015em; color: var(--ink); }
+  .shift-bars { margin-top: 20px; display: flex; align-items: flex-end; gap: 18px; height: 265px; }
+  .shift-bar { flex: 1; display: flex; flex-direction: column; height: 100%; }
+  .shift-bar .sp { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; position: relative; }
+  .shift-bar i { display: block; background: color-mix(in oklab, var(--purple) 16%, #fff); border: 1px solid color-mix(in oklab, var(--purple) 26%, var(--line)); border-radius: 8px 8px 4px 4px; height: var(--h); }
+  .shift-bar.hi i { background: var(--purple); border-color: var(--purple); }
+  .shift-bar b { margin-top: 9px; min-height: 28px; font: 500 12px/1.25 var(--font-mono); color: var(--mute); text-align: center; }
+  .par-chip { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(var(--h) + 8px); white-space: nowrap; font: 700 9px var(--font-mono); letter-spacing: .08em; background: var(--ink); color: #fff; border-radius: 999px; padding: 3px 9px; }
+  .shift-note { margin-top: 8px; font: 500 10.5px var(--font-mono); letter-spacing: .05em; text-transform: uppercase; color: var(--mute); text-align: right; }
+  .shift-bridge { min-height: 86px; margin-top: 16px; padding: 0 30px; border-radius: 16px; background: var(--purple-soft); display: grid; grid-template-columns: 400px 1fr; gap: 26px; align-items: center; }
+  .shift-bridge b { font-family: var(--font-display); font-size: 22px; }
+  .shift-bridge span { font-size: 18px; color: var(--ink-2); }
+  .fived-strip-label { margin: 20px 0 12px; font: 700 12px var(--font-mono); letter-spacing: .13em; text-transform: uppercase; color: var(--purple); }
+  .fived-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .fived-mini { padding: 20px 20px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); }
+  .fived-mini.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
+  .fived-mini .n { font: 700 10.5px var(--font-mono); letter-spacing: .1em; color: var(--purple); }
+  .fived-mini.dark .n { color: var(--purple-lav); }
+  .fived-mini b { display: block; margin-top: 8px; font: 600 21px var(--font-display); letter-spacing: -.015em; }
+  .fived-mini span { display: block; margin-top: 8px; font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
+  .fived-mini.dark span { color: rgba(255,255,255,.75); }
+
+  /* Uniform one-line titles on all story slides (product demos keep surf-title) */
+  deck-stage > section[data-slide] .slide-title { font-size: 52px !important; line-height: 1.05; max-width: none; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -1227,7 +1260,7 @@
     <div class="tally-grid tg-tr"></div>
     <div class="slide-head h71-head">
       <div class="eyebrow"><span class="num">02</span><span class="dot">·</span><span>The problem</span></div>
-      <h2 class="slide-title h71-title">AI has multiplied applications — <em>and weakened the signal in every one.</em></h2>
+      <h2 class="slide-title h71-title">AI has multiplied applications — <em>and weakened the signal.</em></h2>
       <p class="h71-deck">More volume on every role. Less proof behind every CV. The people making hiring decisions are the last to get help.</p>
     </div>
     <div class="h71-stats3">
@@ -1260,7 +1293,7 @@
   <!-- 03 · SOLUTION · WHAT TAALI IS -->
   <section data-slide="product" data-screen-label="03 Solution · what Taali is">
     <div class="slide-head h71-head">
-      <div class="eyebrow"><span class="num">03</span><span class="dot">·</span><span>The solution · 1 of 2 · What Taali is</span></div>
+      <div class="eyebrow"><span class="num">03</span><span class="dot">·</span><span>The solution · What Taali is</span></div>
       <h2 class="slide-title h71-title">Taali runs the hiring workflow — <em>and proves who can do the work.</em></h2>
       <p class="h71-deck">Two connected products close the loop from role brief to evidence-backed interview decision.</p>
     </div>
@@ -1278,42 +1311,55 @@
         <div class="h71-engine-path"><span>Task</span><b>→</b><span>Work trace</span><b>→</b><span>Evidence</span><b>→</b><span>Verdict</span></div>
       </div>
     </div>
+    <div class="trust-band">
+      <div class="trust-cell"><b>Evidence, word for word</b>Every match cites the CV verbatim, and every score opens to the exact work behind it. Less administration, faster shortlists.</div>
+      <div class="trust-cell"><b>Your rules, at your autonomy</b>Verdicts follow written rules you set, at the autonomy you choose — held and consequential cases wait for your sign-off.</div>
+      <div class="trust-cell"><b>Accountable and compliant</b>Every action is logged and attributable — role-based access, revocable sharing, data-access and erasure. UK/EU detail in the appendix.</div>
+    </div>
     <div class="h71-control-line"><span>The recruiter stays accountable</span><b>Set rules and budget · approve consequential actions · inspect or override every recommendation</b></div>
     <div class="slide-foot"><span>03 / 08 · The solution · what Taali is</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
-  <!-- 04 · SOLUTION · WHY IT WORKS -->
-  <section class="how-slide" data-slide="agent-control" data-screen-label="04 Solution · why it works">
-    <div class="slide-head">
-      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The solution · 2 of 2 · Why it works</span></div>
-      <h2 class="slide-title">Taali turns application volume into <em>decisions your team can trust.</em></h2>
+  <!-- 04 · THE SHIFT · WHAT WE MEASURE -->
+  <section data-slide="work-shift" data-screen-label="04 The shift · the five Ds">
+    <div class="slide-head tight-head">
+      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>The shift · what we measure</span></div>
+      <h2 class="slide-title">Work now runs through AI — <em>we score how well people direct it.</em></h2>
     </div>
-    <div class="solution-outcomes">
-      <article class="solution-outcome">
-        <div class="solution-problem">Application overload</div>
-        <h3>Start with the people worth reviewing.</h3>
-        <div class="solution-result">Less administration. Faster shortlists.</div>
-        <p>Every candidate is screened against the same role rules, and every match cites the CV verbatim — recruiters spend their time on judgement, not repetitive triage.</p>
-      </article>
-      <article class="solution-outcome dark">
-        <div class="solution-problem">Weak signal</div>
-        <h3>See who can actually do the work.</h3>
-        <div class="solution-result">More signal. Stronger interviews.</div>
-        <p>Candidates complete realistic work with AI. Every score links to the exact prompts, edits and tests behind it — evidence beyond the CV.</p>
-      </article>
-      <article class="solution-outcome">
-        <div class="solution-problem">Black-box risk</div>
-        <h3>Move faster while people stay accountable.</h3>
-        <div class="solution-result">Automation with visible accountability.</div>
-        <p>Every verdict follows a written rule your team sets, and the rule is recorded with the decision. Unusual cases come back to a person; every override is logged.</p>
-      </article>
+    <div class="shift-grid">
+      <div class="shift-panel">
+        <div class="shift-kicker">Traditional</div>
+        <div class="shift-cap">Most of the time went on producing the work.</div>
+        <div class="shift-bars">
+          <div class="shift-bar"><span class="sp"><i style="--h:34%"></i></span><b>Brief</b></div>
+          <div class="shift-bar"><span class="sp"><i style="--h:42%"></i></span><b>Plan</b></div>
+          <div class="shift-bar hi"><span class="sp"><i style="--h:100%"></i></span><b>Produce</b></div>
+          <div class="shift-bar"><span class="sp"><i style="--h:38%"></i></span><b>Check</b></div>
+          <div class="shift-bar"><span class="sp"><i style="--h:30%"></i></span><b>Deliver</b></div>
+        </div>
+      </div>
+      <div class="shift-panel">
+        <div class="shift-kicker">Working with AI</div>
+        <div class="shift-cap">Time shifts to framing the problem and verifying the result.</div>
+        <div class="shift-bars">
+          <div class="shift-bar hi"><span class="sp"><i style="--h:96%"></i></span><b>Frame the problem</b></div>
+          <div class="shift-bar"><span class="sp" style="--h:26%"><span class="par-chip">AI · in parallel</span><i></i></span><b>Draft · iterate</b></div>
+          <div class="shift-bar hi"><span class="sp"><i style="--h:100%"></i></span><b>Verify the work</b></div>
+          <div class="shift-bar"><span class="sp"><i style="--h:26%"></i></span><b>Deliver</b></div>
+        </div>
+      </div>
     </div>
-    <div class="solution-control">
-      <div class="solution-control-label">Controlled by design</div>
-      <div class="solution-control-copy"><b>Role-based access</b> · human review and override · evidence and decision history · secure, revocable sharing · data-access and erasure workflows</div>
-      <div class="solution-control-eu"><b>Compliant for UK/EU hiring</b> — data-protection controls plus a documented process with every customer (see appendix).</div>
+    <div class="shift-note">Illustrative proportions — the pattern, not measured hours.</div>
+    <div class="shift-bridge"><b>Software teams felt it first.</b><span>The same shift is reaching every knowledge role — and a CV cannot show who is good at this way of working.</span></div>
+    <div class="fived-strip-label">// The five Ds — how Taali scores the new way of working · every score links to the recorded session</div>
+    <div class="fived-strip">
+      <div class="fived-mini"><span class="n">01</span><b>Delegation</b><span>What do they own — and what do they hand to AI?</span></div>
+      <div class="fived-mini"><span class="n">02</span><b>Description</b><span>Do they give AI clear goals, context and constraints?</span></div>
+      <div class="fived-mini dark"><span class="n">03</span><b>Discernment</b><span>Do they challenge and correct what AI produces?</span></div>
+      <div class="fived-mini"><span class="n">04</span><b>Diligence</b><span>Do they test and verify before trusting it?</span></div>
+      <div class="fived-mini"><span class="n">05</span><b>Deliverable</b><span>Is the final result genuinely good?</span></div>
     </div>
-    <div class="slide-foot"><span>04 / 08 · The solution · why it works</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>04 / 08 · The shift · the five Ds</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
   <!-- 05 · CASE STUDY -->
@@ -1321,7 +1367,7 @@
     <div class="tally-grid tg-tr"></div>
     <div class="slide-head">
       <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>Case study · live proof &amp; pilot expansion</span></div>
-      <h2 class="slide-title" style="font-size:54px;">Not a demo — Taali runs a <em>real hiring operation</em> every day.</h2>
+      <h2 class="slide-title">Not a demo — Taali runs a <em>real hiring operation</em> every day.</h2>
     </div>
     <div class="market-grid" style="grid-template-columns:0.92fr 1.18fr;">
       <div class="traction" style="gap:12px;">
@@ -1363,7 +1409,7 @@
     <div class="slide-head">
       <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>Product today + roadmap</span></div>
       <h2 class="slide-title">From role brief to client-ready report — <em>live in Taali today.</em></h2>
-      <p class="slide-sub">Use Taali as the ATS, or connect Workable or Bullhorn — your ATS stays the system of record, and Taali writes decisions back.</p>
+      <p class="slide-sub">Use Taali as the ATS, or connect Workable or Bullhorn — your ATS stays the system of record, and Taali writes decisions back. Every stage is work a recruiter would otherwise do by hand, run consistently and with evidence.</p>
     </div>
     <div class="capability-board">
       <div class="live-mode-bar">
@@ -1384,15 +1430,15 @@
         <article class="pipe-stage">
           <div class="stage-head"><span class="stage-num">02</span></div>
           <h3>Pre-screen &amp; integrity</h3>
-          <p>Fast first-pass triage plus CV-integrity flags — copied job text, timeline conflicts, unsupported claims.</p>
-          <div class="pipe-feats"><span>First-pass screening</span><span>Evidence-linked fit</span><span>Integrity flags</span></div>
+          <p>Triage plus the fraud checks no recruiter has time to run by hand — before any paid scoring.</p>
+          <div class="pipe-feats"><span>Job-spec copy-paste flags</span><span>Hidden prompt-injection detection</span><span>Timeline &amp; claim checks</span><span>Cross-candidate similarity signals</span></div>
           <div class="pipe-live"><span class="blip"></span>Live</div>
         </article>
         <article class="pipe-stage">
           <div class="stage-head"><span class="stage-num">03</span></div>
           <h3>Score &amp; search</h3>
           <p>Every role requirement graded with exact CV quotes, plus plain-English search across the pool you own.</p>
-          <div class="pipe-feats"><span>Plain-English search</span><span>Cited shortlist</span><span>Candidate rediscovery</span></div>
+          <div class="pipe-feats"><span>Plain-English search</span><span>Cited shortlist</span><span>GitHub + peer corroboration</span><span>Candidate rediscovery</span></div>
           <div class="pipe-live"><span class="blip"></span>Live</div>
         </article>
         <article class="pipe-stage">
@@ -1444,7 +1490,7 @@
   <section data-slide="wedge" data-screen-label="07 Competitor analysis">
     <div class="slide-head tight-head">
       <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>Competitor analysis</span></div>
-      <h2 class="slide-title" style="font-size:58px;">Taali unifies what ATSs and assessment tools <em>split apart.</em></h2>
+      <h2 class="slide-title">Taali unifies what ATSs and assessment tools <em>split apart.</em></h2>
       <p class="slide-sub">Category-level positioning; capabilities vary by provider and configuration.</p>
     </div>
     <div class="wedge-grid">
@@ -1482,7 +1528,7 @@
     <div class="tally-grid tg-br"></div>
     <div class="slide-head tight-head">
       <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>How we work with you</span></div>
-      <h2 class="slide-title" style="font-size:52px;">Start with a few live roles — <em>for client mandates, in-house hiring, or both.</em></h2>
+      <h2 class="slide-title">Start with a few live roles — <em>in-house, client mandates, or both.</em></h2>
     </div>
     <div class="ways">
       <div class="way">
@@ -1544,7 +1590,7 @@
         <span><b>Agent chat:</b> steer that role's agent; its conversation and activity stay tied to the role.</span>
       </div>
     </div>
-    <div class="slide-foot"><span>A1 / A7 · Product demo · Home Hub</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A1 / A6 · Product demo · Home Hub</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
   <!-- A2 · PRODUCT DEMO · JOBS & ROLE AGENTS -->
@@ -1565,7 +1611,7 @@
         <span><b>Operational view:</b> open the role directly into the pipeline the team works each morning.</span>
       </div>
     </div>
-    <div class="slide-foot"><span>A2 / A7 · Product demo · Jobs &amp; role agents</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A2 / A6 · Product demo · Jobs &amp; role agents</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
   <!-- A3 · PRODUCT DEMO · CANDIDATE SEARCH -->
@@ -1586,7 +1632,7 @@
         <span><b>Per-role agents:</b> reason over the same pool within that role's budget and rules.</span>
       </div>
     </div>
-    <div class="slide-foot"><span>A3 / A7 · Product demo · Candidate search</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A3 / A6 · Product demo · Candidate search</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
   <!-- A4 · PRODUCT DEMO · AI-NATIVE ASSESSMENT -->
@@ -1607,7 +1653,7 @@
         <span><b>No proctoring theatre:</b> the evidence comes from the work itself, not a webcam or a locked browser.</span>
       </div>
     </div>
-    <div class="slide-foot"><span>A4 / A7 · Product demo · AI-native assessment</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A4 / A6 · Product demo · AI-native assessment</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
   <!-- A5 · PRODUCT DEMO · CANDIDATE REPORT -->
@@ -1628,62 +1674,15 @@
         <span><b>Separate audience views:</b> client-safe links omit internal notes and detailed evaluation material.</span>
       </div>
     </div>
-    <div class="slide-foot"><span>A5 / A7 · Product demo · Candidate report</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A5 / A6 · Product demo · Candidate report</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
-  <!-- A6 · THE FIVE DS -->
-  <section data-slide="five-ds" data-screen-label="A6 The five Ds">
-    <div class="slide-head tight-head">
-      <div class="eyebrow"><span class="num">A6</span><span class="dot">·</span><span>Appendix · what Taali measures</span></div>
-      <h2 class="slide-title" style="font-size:54px;">The five Ds turn AI use into <em>hiring evidence you can defend.</em></h2>
-      <p class="slide-sub">Every dimension answers a practical question about how the candidate works with AI — and every score links back to the session behind it.</p>
-    </div>
-    <div class="fived-grid">
-      <div class="fived-card">
-        <div class="fived-num">01 · Delegation</div>
-        <h3>Delegation</h3>
-        <div class="fived-q">Do they choose what to own, what to hand to AI, and what must stay human?</div>
-        <p>Strong candidates keep judgement and design; they delegate the mechanical work.</p>
-        <div class="fived-evidence">Evidence · task split + prompts</div>
-      </div>
-      <div class="fived-card">
-        <div class="fived-num">02 · Description</div>
-        <h3>Description</h3>
-        <div class="fived-q">Do they give AI clear goals, context, constraints and useful feedback?</div>
-        <p>Vague prompts produce vague work. Clear direction is a hiring signal in itself.</p>
-        <div class="fived-evidence">Evidence · prompt quality</div>
-      </div>
-      <div class="fived-card dark">
-        <div class="fived-num">03 · Discernment</div>
-        <h3>Discernment</h3>
-        <div class="fived-q">Do they challenge output, spot errors and select what is safe and useful?</div>
-        <p>The difference between using AI and being used by it. The core of the signal.</p>
-        <div class="fived-evidence">Evidence · edits + corrections</div>
-      </div>
-      <div class="fived-card">
-        <div class="fived-num">04 · Diligence</div>
-        <h3>Diligence</h3>
-        <div class="fived-q">Do they test, verify and manage the residual risk instead of trusting blindly?</div>
-        <p>Validation runs, tests and checks show who ships work they can stand behind.</p>
-        <div class="fived-evidence">Evidence · tests + verification</div>
-      </div>
-      <div class="fived-card">
-        <div class="fived-num">05 · Deliverable</div>
-        <h3>Deliverable</h3>
-        <div class="fived-q">Is the final result correct, high quality — and does it meet the brief?</div>
-        <p>Process matters, but the work still has to be good. The outcome is scored too.</p>
-        <div class="fived-evidence">Evidence · final deliverable</div>
-      </div>
-    </div>
-    <div class="fived-flow"><span>Prompt + tool trace</span><b>→</b><span>Edits + tests</span><b>→</b><span>Final deliverable</span><b>→</b><span>Evidence-linked report + interview questions</span></div>
-    <div class="slide-foot"><span>A6 / A7 · The five Ds · evidence, not a black box</span><span class="brand">taali<span class="p">.</span></span></div>
-  </section>
 
-  <!-- A7 · UK & EU DATA PROTECTION -->
-  <section data-slide="data-protection" data-screen-label="A7 UK &amp; EU data protection">
+  <!-- A6 · UK & EU DATA PROTECTION -->
+  <section data-slide="data-protection" data-screen-label="A6 UK &amp; EU data protection">
     <div class="slide-head tight-head">
-      <div class="eyebrow"><span class="num">A7</span><span class="dot">·</span><span>Appendix · data protection &amp; accountable automation</span></div>
-      <h2 class="slide-title" style="font-size:52px;">Compliant, accountable hiring — <em>human oversight and traceable decisions.</em></h2>
+      <div class="eyebrow"><span class="num">A6</span><span class="dot">·</span><span>Appendix · data protection &amp; accountable automation</span></div>
+      <h2 class="slide-title">Compliant hiring — <em>human oversight and traceable decisions.</em></h2>
       <p class="slide-sub">Taali operates in line with UK and EU data-protection requirements — practical product controls, paired with a documented compliance process with every customer.</p>
     </div>
     <div class="compliance-grid">
@@ -1712,7 +1711,7 @@
       <span><b>Regulatory frame:</b> UK GDPR + DPA 2018 as amended by the Data (Use and Access) Act 2025. EU recruitment AI is a high-risk category; the current employment-system timetable is 2 December 2027.</span>
       <span><a href="https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/employment/recruitment-and-selection/">ICO guidance ↗</a> · <a href="https://digital-strategy.ec.europa.eu/en/policies/guidelines-ai-high-risk-systems">EU AI Act timetable ↗</a></span>
     </div>
-    <div class="slide-foot"><span>A7 / A7 · UK &amp; EU data protection</span><span class="brand">taali<span class="p">.</span></span></div>
+    <div class="slide-foot"><span>A6 / A6 · UK &amp; EU data protection</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
 
 </deck-stage>
@@ -1723,10 +1722,10 @@
 [
   "Taali is for recruitment and staffing firms as well as in-house hiring teams. The promise is deliberately simple: let a governed agent run repetitive workflow, assess real work with AI in the loop, and give decision-makers evidence they can inspect.",
   "The problem, with numbers a buyer can check: LinkedIn reports around 11,000 applications a minute, up 45% year on year. Checkr found one in three hiring managers has interviewed a candidate using a fake identity, and Gartner projects one in four candidate profiles worldwide will be fake by 2028. Karat's interview data shows flagged cheating up five-fold in two years. Volume is up, signal is down — the response is automation to run the funnel plus evidence you can trust.",
-  "Taali combines an agentic ATS with an AI-native assessment. The ATS handles intake, pool search, screening, ranking and orchestration. The assessment captures the work trace and links scores to evidence. Together they turn the hiring workflow and the proof of work into one decision loop — and the recruiter stays accountable throughout.",
-  "Slide 3 explains what Taali is; this slide explains why the decisions are trustworthy. Three mechanisms: every match cites the CV verbatim; every verdict follows a written rule the team sets, recorded with the decision; and every override is logged. Data-protection controls plus a documented per-customer process support compliant UK and EU hiring — the appendix slide carries the detail, and each customer still completes its own legal assessment.",
+  "Taali combines an agentic ATS with an AI-native assessment. The ATS handles intake, pool search, screening, ranking and orchestration; the assessment captures the work trace and links scores to evidence. Why the output is trustworthy: every match cites the CV verbatim; every verdict follows written rules the team sets, at the autonomy they choose, with held and consequential cases waiting for sign-off; and every action is logged and attributable. The recruiter stays accountable throughout.",
+  "The shift slide: in traditional work most time went on producing the artifact. Working with AI, production runs in parallel with the model and human time moves to framing the problem and verifying the result. Software teams felt this first; the same pattern is reaching every knowledge role — and a CV cannot show who is good at it. That is exactly what the five Ds score: Delegation, Description, Discernment, Diligence, Deliverable, each linked back to the recorded session. Proportions on the chart are illustrative.",
   "The case study comes before the product tour so the depth lands as proven, not promised. The design partner is a UAE-based data and AI consultancy operating across the UAE, UK and US — named on request. As of July 2026: 120+ roles, 63,000 applications, 23,000 agent decisions, 65+ assessments, 24 offers and 18 hires have run through the workflow. These are operating figures, not a claim that Taali alone caused each outcome. A second pilot is live with a European staffing and consultancy firm.",
-  "The condensed pipeline view: six stages, all live — brief and apply, pre-screen and integrity, score and search, assess real work, decide with control, share and operate. Taali runs natively as the ATS or connects to Workable and Bullhorn with decisions written back. The roadmap adds offer management in the next three months, then external talent discovery, wider job-board distribution and reusable talent pools.",
+  "The condensed pipeline view: six stages, all live. Emphasise the integrity work in stage two — the agent runs the fraud checks a recruiter never has time to do by hand: flagging job-spec text copied into CVs, detecting hidden prompt-injection aimed at gaming ATS screening, checking timelines and unsupported claims, and spotting suspicious similarity across candidates. Once candidates are scored and shortlisted, flagged claims are corroborated against the candidate's public GitHub work and peers from the same employer — corroboration adds questions, never auto-rejects. Taali runs natively as the ATS or connects to Workable and Bullhorn with decisions written back. The roadmap adds offer management in the next three months, then external discovery, wider job-board distribution and reusable talent pools.",
   "Taali's difference is structural: the role agent, AI-native work sample and evidence-linked decision record operate in one loop. The comparison is category-level and individual providers vary, but most buyers currently assemble these capabilities across separate ATS, assessment and automation products.",
   "The close: two audiences, one usage-based model. The pilot mechanics are on the slide — connect or run native on day one, two to three live roles, four to six weeks, success measures agreed upfront, and the customer's data stays theirs. Free proof-of-value pilot, then credits with a budget per role.",
   "Product demo: the Home Hub starts at the all-roles view, leads with the pipeline and review queue, and opens a role-scoped agent chat when a mandate is selected. All data shown is representative.",
@@ -1734,7 +1733,6 @@
   "Product demo: natural-language search works across the customer's own applied, uploaded and ATS-synced candidates, and qualitative matches carry verbatim CV citations. Automated external talent discovery is not represented as live.",
   "Product demo: candidates complete role-specific work with AI, an editor and a safe test environment. Taali records prompts, responses, edits, saves, validation runs and the final deliverable without webcam or lockdown-browser proctoring.",
   "Product demo: the internal candidate report includes an Assessment tab when completed assessment evidence is linked. Scores open into the five Ds, rubric criteria, the work trace and final deliverable, while client-safe sharing remains a separate audience view.",
-  "The five Ds — Delegation, Description, Discernment, Diligence, Deliverable — turn AI use into defensible hiring evidence. Each dimension answers a practical question about how the candidate works with AI, and every score links back to the recorded session.",
   "Data protection: the left card is what the product enforces today — tenant-scoped access, review holds, exportable decision history, revocable sharing, data-access and erasure. The right card is the documented process run with each customer — roles, lawful basis, DPIA, candidate rights and the EU AI Act readiness plan. UK GDPR and DPA 2018 frame the UK side; EU recruitment AI is high-risk with a December 2027 employment-system timetable."
 ]
 </script>
