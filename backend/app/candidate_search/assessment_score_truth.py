@@ -281,7 +281,7 @@ def blended_taali_score_expression(
     )
 
 
-def _assessment_snapshot_role_fit_expression() -> Any:
+def assessment_snapshot_role_fit_value_expression() -> Any:
     """Role-fit snapshot used by legacy assessments without persisted TAALI."""
 
     component = Assessment.score_breakdown["score_components"][
@@ -382,7 +382,7 @@ def assessment_taali_score_value_expression() -> Any:
     persisted = normalized_score_expression(Assessment.taali_score)
     legacy = blended_taali_score_expression(
         assessment_expression=assessment_score_value_expression(),
-        role_fit_expression=_assessment_snapshot_role_fit_expression(),
+        role_fit_expression=assessment_snapshot_role_fit_value_expression(),
     )
     return case(
         (
@@ -412,6 +412,7 @@ __all__ = [
     "assessment_score_mode",
     "assessment_score_value_expression",
     "assessment_snapshot_role_fit_score_100",
+    "assessment_snapshot_role_fit_value_expression",
     "assessment_taali_score_100",
     "assessment_taali_score_value_expression",
     "blended_taali_score_expression",

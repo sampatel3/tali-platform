@@ -49,6 +49,10 @@ from ..models.role import Role
 from ..models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
 from ..models.user import User
 from ..platform.request_context import get_request_id
+from ..services.needs_input_membership import (
+    is_candidate_application_subject,
+    resolve_live_logical_needs_input_scope,
+)
 from ..services.role_change_audit import (
     add_role_change_event,
     capture_role_change_snapshot,
@@ -157,13 +161,33 @@ def open(
 
     role = (
         db.query(Role)
-        .filter(Role.id == role_id, Role.organization_id == organization_id)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+        )
         .one_or_none()
     )
     if role is None:
         raise HTTPException(
             status_code=404,
             detail=f"role {role_id} not found in org {organization_id}",
+        )
+    live_scope = resolve_live_logical_needs_input_scope(
+        db,
+        organization_id=int(organization_id),
+    )
+    if (
+        is_candidate_application_subject(kind=kind, subject_id=subject_id)
+        and not live_scope.subject_is_live(
+            db,
+            role_id=int(role_id),
+            application_id=int(subject_id),
+        )
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail="candidate subject is not a live member of this role",
         )
 
     # Override the agent's free-text prompt with a canonical plain-English
@@ -198,9 +222,8 @@ def open(
         else AgentNeedsInput.subject_id.is_(None)
     )
     existing = (
-        db.query(AgentNeedsInput)
+        live_scope.query(db, AgentNeedsInput)
         .filter(
-            AgentNeedsInput.organization_id == organization_id,
             AgentNeedsInput.role_id == role_id,
             AgentNeedsInput.kind == kind,
             subject_filter,
@@ -542,11 +565,14 @@ def answer(
             status_code=403,
             detail="ask_recruiter.answer is recruiter-only",
         )
+    live_scope = resolve_live_logical_needs_input_scope(
+        db,
+        organization_id=int(organization_id),
+    )
     row = (
-        db.query(AgentNeedsInput)
+        live_scope.query(db, AgentNeedsInput)
         .filter(
             AgentNeedsInput.id == needs_input_id,
-            AgentNeedsInput.organization_id == organization_id,
         )
         .one_or_none()
     )
@@ -583,10 +609,9 @@ def answer(
     )
     assert_role_version(role, expected_version=expected_version)
     row = (
-        db.query(AgentNeedsInput)
+        live_scope.query(db, AgentNeedsInput)
         .filter(
             AgentNeedsInput.id == needs_input_id,
-            AgentNeedsInput.organization_id == organization_id,
         )
         .with_for_update(of=AgentNeedsInput)
         .one_or_none()
@@ -876,11 +901,14 @@ def dismiss(
     Recruiter dismisses to say "skip / not now"; the agent dismisses
     its own stale rows when it gives up after N cycles.
     """
+    live_scope = resolve_live_logical_needs_input_scope(
+        db,
+        organization_id=int(organization_id),
+    )
     row = (
-        db.query(AgentNeedsInput)
+        live_scope.query(db, AgentNeedsInput)
         .filter(
             AgentNeedsInput.id == needs_input_id,
-            AgentNeedsInput.organization_id == organization_id,
         )
         .one_or_none()
     )
@@ -896,10 +924,9 @@ def dismiss(
         )
 
     row = (
-        db.query(AgentNeedsInput)
+        live_scope.query(db, AgentNeedsInput)
         .filter(
             AgentNeedsInput.id == needs_input_id,
-            AgentNeedsInput.organization_id == organization_id,
         )
         .with_for_update(of=AgentNeedsInput)
         .one_or_none()

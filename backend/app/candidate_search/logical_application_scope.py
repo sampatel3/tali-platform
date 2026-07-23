@@ -20,9 +20,12 @@ from ..models.assessment import Assessment, AssessmentStatus
 from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import SisterRoleEvaluation
+from .assessment_score_truth import (
+    assessment_snapshot_role_fit_value_expression,
+    blended_taali_score_expression,
+)
 from .role_assessment_scores import (
     assessment_score_value_expression,
-    assessment_taali_score_value_expression,
     normalized_score_expression,
 )
 from .population import apply_searchable_candidate_scope
@@ -405,15 +408,26 @@ def _membership_subquery(
 def _assessment_subquery(*, organization_id: int) -> Any:
     """One latest completed score snapshot per logical role/candidate."""
 
-    score = assessment_score_value_expression()
-    taali_score = assessment_taali_score_value_expression()
+    # Materialize the expensive legacy inputs before composing TAALI. Reusing
+    # the raw SQLAlchemy expression tree directly makes every weighted-score
+    # reference expand the full JSON/normalization CASE tree again. The
+    # resulting global list query exceeded SQLite's parser stack on Python
+    # 3.10 even though PostgreSQL accepted it. These stages preserve the same
+    # row-local truth while keeping each canonical expression present once.
     ranked = (
         select(
             Assessment.id.label("assessment_id"),
             Assessment.role_id.label("role_id"),
             Assessment.candidate_id.label("candidate_id"),
-            score.label("assessment_score"),
-            taali_score.label("taali_score"),
+            Assessment.scoring_partial.label("scoring_partial"),
+            Assessment.scoring_failed.label("scoring_failed"),
+            assessment_score_value_expression().label("assessment_score"),
+            normalized_score_expression(Assessment.taali_score).label(
+                "persisted_taali_score"
+            ),
+            assessment_snapshot_role_fit_value_expression().label(
+                "snapshot_role_fit_score"
+            ),
             func.row_number()
             .over(
                 partition_by=(Assessment.role_id, Assessment.candidate_id),
@@ -436,18 +450,55 @@ def _assessment_subquery(*, organization_id: int) -> Any:
                 )
             ),
         )
-        .subquery("ranked_logical_role_assessment_scores")
+        .subquery("ranked_logical_role_assessment_inputs")
     )
-    return (
+    latest = (
         select(
             ranked.c.assessment_id,
             ranked.c.role_id,
             ranked.c.candidate_id,
+            ranked.c.scoring_partial,
+            ranked.c.scoring_failed,
             ranked.c.assessment_score,
-            ranked.c.taali_score,
+            ranked.c.persisted_taali_score,
+            ranked.c.snapshot_role_fit_score,
         )
         .where(ranked.c.assessment_rank == 1)
+        .subquery("latest_logical_role_assessment_inputs")
+    )
+    legacy_taali_score = blended_taali_score_expression(
+        assessment_expression=latest.c.assessment_score,
+        role_fit_expression=latest.c.snapshot_role_fit_score,
+    )
+    scored = (
+        select(
+            latest.c.assessment_id,
+            latest.c.role_id,
+            latest.c.candidate_id,
+            latest.c.assessment_score,
+            case(
+                (
+                    latest.c.scoring_partial.is_(True)
+                    | latest.c.scoring_failed.is_(True),
+                    literal(None),
+                ),
+                else_=func.coalesce(
+                    latest.c.persisted_taali_score,
+                    legacy_taali_score,
+                ),
+            ).label("taali_score"),
+        )
         .subquery("logical_role_assessment_scores")
+    )
+    return (
+        select(
+            scored.c.assessment_id,
+            scored.c.role_id,
+            scored.c.candidate_id,
+            scored.c.assessment_score,
+            scored.c.taali_score,
+        )
+        .subquery("latest_logical_role_assessment_scores")
     )
 
 

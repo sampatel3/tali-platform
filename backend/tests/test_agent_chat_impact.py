@@ -488,6 +488,116 @@ def test_list_agent_conversations_counts_attention(db):
     assert item["attention"] == 3
 
 
+def test_list_agent_conversations_excludes_stale_candidate_questions_from_attention_order(
+    db,
+):
+    org = _org(db)
+    user = _user(db, org)
+    stale_role = _role(db, org, name="Stale candidate questions", agentic=True)
+    general_role = _role(db, org, name="General question", agentic=True)
+    stale_app = _scored_app(
+        db,
+        org,
+        stale_role,
+        score=40,
+        name="Removed",
+    )
+    stale_app.deleted_at = datetime.now(timezone.utc)
+    db.add_all(
+        [
+            AgentNeedsInput(
+                organization_id=org.id,
+                role_id=stale_role.id,
+                kind="candidate_tie_break",
+                subject_id=stale_app.id,
+                prompt="Private candidate tie-break",
+            ),
+            AgentNeedsInput(
+                organization_id=org.id,
+                role_id=stale_role.id,
+                kind="other",
+                subject_id=stale_app.id,
+                prompt="Private candidate follow-up",
+            ),
+            AgentNeedsInput(
+                organization_id=org.id,
+                role_id=general_role.id,
+                kind="monthly_budget_missing",
+                prompt="What monthly budget should this role use?",
+            ),
+        ]
+    )
+    db.commit()
+
+    items = service.list_agent_conversations(
+        db,
+        organization_id=org.id,
+        user=user,
+    )
+    by_role = {item["role_id"]: item for item in items}
+
+    assert by_role[stale_role.id]["open_questions"] == 0
+    assert by_role[stale_role.id]["attention"] == 0
+    assert by_role[general_role.id]["open_questions"] == 1
+    assert by_role[general_role.id]["attention"] == 1
+    assert items[0]["role_id"] == general_role.id
+
+
+def test_list_agent_conversations_excludes_stale_decisions_from_attention_order(
+    db,
+):
+    org = _org(db)
+    user = _user(db, org)
+    stale_role = _role(db, org, name="Stale decisions", agentic=True)
+    live_role = _role(db, org, name="Live decision", agentic=True)
+    for index in range(2):
+        stale_app = _scored_app(
+            db,
+            org,
+            stale_role,
+            score=40 + index,
+            name=f"Removed decision {index}",
+        )
+        _decision(
+            db,
+            org,
+            stale_role,
+            stale_app,
+            status="pending",
+            key=f"stale-sidebar-decision:{index}",
+        )
+        stale_app.deleted_at = datetime.now(timezone.utc)
+    live_app = _scored_app(
+        db,
+        org,
+        live_role,
+        score=80,
+        name="Live decision candidate",
+    )
+    _decision(
+        db,
+        org,
+        live_role,
+        live_app,
+        status="pending",
+        key="live-sidebar-decision",
+    )
+    db.commit()
+
+    items = service.list_agent_conversations(
+        db,
+        organization_id=org.id,
+        user=user,
+    )
+    by_role = {item["role_id"]: item for item in items}
+
+    assert by_role[stale_role.id]["pending_decisions"] == 0
+    assert by_role[stale_role.id]["attention"] == 0
+    assert by_role[live_role.id]["pending_decisions"] == 1
+    assert by_role[live_role.id]["attention"] == 1
+    assert items[0]["role_id"] == live_role.id
+
+
 # ---------------------------------------------------------------------------
 # Re-screen impact report ("feels instant" completion message)
 # ---------------------------------------------------------------------------

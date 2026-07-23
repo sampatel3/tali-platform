@@ -32,6 +32,9 @@ from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from ..services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 
 
 logger = logging.getLogger("taali.agent_runtime.cohort_tools")
@@ -84,9 +87,12 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
     )
 
     open_questions = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == organization_id,
             AgentNeedsInput.role_id == role_id,
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),
@@ -226,9 +232,12 @@ def _recent_resolved_answers(
     column itself is still null.
     """
     rows = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == organization_id,
             AgentNeedsInput.role_id == role_id,
             AgentNeedsInput.resolved_at.isnot(None),
             AgentNeedsInput.kind.in_(("threshold_ambiguous", "monthly_budget_missing")),
@@ -575,9 +584,12 @@ def read_pending_recruiter_inputs(
     Limits to 25 most recent rows; older resolved rows are noise.
     """
     rows = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == organization_id,
             AgentNeedsInput.role_id == role_id,
         )
         .order_by(AgentNeedsInput.created_at.desc())

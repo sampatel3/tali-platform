@@ -205,6 +205,44 @@ def test_related_role_decision_freezes_related_evaluation_summary(db):
     assert "OWNER ROLE ONLY" not in str(decision.evidence)
 
 
+@pytest.mark.parametrize(
+    ("stored_threshold", "expected_threshold"),
+    [(70, 70.0), (0, 0.0), (None, 50.0)],
+)
+def test_related_runtime_fingerprints_fallback_when_dynamic_resolution_fails(
+    db,
+    stored_threshold,
+    expected_threshold,
+):
+    org, _owner, application, roles, _evaluations = _family(
+        db,
+        related_count=1,
+    )
+    related = roles[0]
+    related.score_threshold = stored_threshold
+    db.commit()
+
+    with patch(
+        "app.services.decision_policy_generation.resolve_role_fit_threshold",
+        return_value=None,
+    ):
+        result = run_related_role_cycle(db, role=related)
+
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.organization_id == int(org.id),
+            AgentDecision.role_id == int(related.id),
+            AgentDecision.application_id == int(application.id),
+        )
+        .one()
+    )
+    generation = decision.input_fingerprint["decision_policy_generation"]
+    assert result["created"] == 1
+    assert decision.evidence["effective_threshold"] == expected_threshold
+    assert generation["effective_threshold"] == expected_threshold
+
+
 def test_ownerless_related_role_agent_cycle_uses_local_membership(db):
     _org, _owner, application, roles, evaluations = _family(
         db, related_count=1

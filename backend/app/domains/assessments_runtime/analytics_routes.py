@@ -30,6 +30,12 @@ from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
 from ...models.usage_event import UsageEvent
 from ...models.user import User
+from ...services.decision_membership import (
+    resolve_live_logical_decision_scope,
+)
+from ...services.needs_input_membership import (
+    resolve_live_logical_needs_input_scope,
+)
 from .logical_analytics_service import (
     APPROVED_DECISION_STATUSES,
     empty_conversion_bucket,
@@ -1217,6 +1223,14 @@ def get_activity_timeseries(
         }
 
     now = datetime.now(timezone.utc)
+    decision_scope = resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(org_id),
+    )
+    needs_input_scope = resolve_live_logical_needs_input_scope(
+        db,
+        organization_id=int(org_id),
+    )
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     day_starts = [today_start - timedelta(days=days - 1 - i) for i in range(days)]
     day_ends = [ds + timedelta(days=1) for ds in day_starts]
@@ -1231,22 +1245,24 @@ def get_activity_timeseries(
         return idx if 0 <= idx < days else None
 
     # ── Decisions (role-scoped): created/resolved timestamps + type/status ──
-    dq = db.query(
+    dq = decision_scope.query(
+        db,
         AgentDecision.created_at,
         AgentDecision.resolved_at,
         AgentDecision.status,
         AgentDecision.decision_type,
-    ).filter(AgentDecision.organization_id == org_id)
+    )
     if role_id is not None:
         dq = dq.filter(AgentDecision.role_id == role_id)
     decision_rows = dq.all()
 
     # ── Agent questions (role-scoped) — the other half of the badge count ──
-    nq = db.query(
+    nq = needs_input_scope.query(
+        db,
         AgentNeedsInput.created_at,
         AgentNeedsInput.resolved_at,
         AgentNeedsInput.dismissed_at,
-    ).filter(AgentNeedsInput.organization_id == org_id)
+    )
     if role_id is not None:
         nq = nq.filter(AgentNeedsInput.role_id == role_id)
     needs_rows = nq.all()
@@ -1299,16 +1315,16 @@ def get_activity_timeseries(
 
     # ── Current pending (reconciles with the Home tab badge) ───────────────
     pending_decisions = (
-        db.query(func.count(AgentDecision.id))
-        .filter(AgentDecision.organization_id == org_id, pending_filter(now))
+        decision_scope.query(db, func.count(AgentDecision.id))
+        .filter(pending_filter(now))
     )
     if role_id is not None:
         pending_decisions = pending_decisions.filter(AgentDecision.role_id == role_id)
     pending_decisions_count = int(pending_decisions.scalar() or 0)
 
     pending_questions = (
-        db.query(func.count(AgentNeedsInput.id))
-        .filter(AgentNeedsInput.organization_id == org_id, open_needs_input_filter())
+        needs_input_scope.query(db, func.count(AgentNeedsInput.id))
+        .filter(open_needs_input_filter())
     )
     if role_id is not None:
         pending_questions = pending_questions.filter(AgentNeedsInput.role_id == role_id)
@@ -1317,8 +1333,12 @@ def get_activity_timeseries(
     # Pending decisions split by type — backs the "Pending now · by type"
     # summary chips in the same Hub section (role-aware via the same filter).
     pending_by_type_q = (
-        db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
-        .filter(AgentDecision.organization_id == org_id, pending_filter(now))
+        decision_scope.query(
+            db,
+            AgentDecision.decision_type,
+            func.count(AgentDecision.id),
+        )
+        .filter(pending_filter(now))
     )
     if role_id is not None:
         pending_by_type_q = pending_by_type_q.filter(AgentDecision.role_id == role_id)
@@ -1329,9 +1349,12 @@ def get_activity_timeseries(
 
     # ── Workable-error callout: decisions bounced back to the queue ────────
     err_q = (
-        db.query(AgentDecision.role_id, AgentDecision.resolution_note)
+        decision_scope.query(
+            db,
+            AgentDecision.role_id,
+            AgentDecision.resolution_note,
+        )
         .filter(
-            AgentDecision.organization_id == org_id,
             AgentDecision.status == "pending",
             AgentDecision.resolution_note.ilike(f"{_WORKABLE_REQUEUE_NOTE_PREFIX}%"),
         )

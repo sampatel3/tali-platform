@@ -315,6 +315,40 @@ def test_agentic_home_and_mcp_hide_deleted_or_unowned_decisions(client, db):
     for label in seeded.hidden_labels:
         assert label not in event_payload
 
+    sidebar = client.get(
+        "/api/v1/agent-chat/conversations",
+        headers=seeded.headers,
+    )
+    assert sidebar.status_code == 200, sidebar.text
+    sidebar_by_role = {
+        int(row["role_id"]): row for row in sidebar.json()["agents"]
+    }
+    assert sidebar_by_role[int(seeded.ordinary.id)]["pending_decisions"] == 1
+    assert sidebar_by_role[int(seeded.related.id)]["pending_decisions"] == 1
+
+    timeline_rows = []
+    for role, live_id in (
+        (seeded.ordinary, seeded.decisions["live-ordinary"].id),
+        (seeded.related, seeded.decisions["live-related"].id),
+    ):
+        timeline = client.get(
+            f"/api/v1/agent-chat/conversations/{int(role.id)}/timeline",
+            headers=seeded.headers,
+        )
+        assert timeline.status_code == 200, timeline.text
+        decision_cards = [
+            row
+            for row in timeline.json()["timeline"]
+            if row["kind"] == "decision"
+        ]
+        assert {int(row["decision_id"]) for row in decision_cards} == {
+            int(live_id)
+        }
+        timeline_rows.extend(decision_cards)
+    timeline_payload = json.dumps(timeline_rows)
+    for label in seeded.hidden_labels:
+        assert label not in timeline_payload
+
     org_status = client.get(
         "/api/v1/agent/org-status",
         headers=seeded.headers,

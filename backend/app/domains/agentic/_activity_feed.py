@@ -37,6 +37,9 @@ from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
 from ...services.decision_membership import apply_live_logical_decision_scope
 from ...services.logical_event_membership import apply_live_logical_event_scope
+from ...services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 
 
 class AgentActivityEntry(BaseModel):
@@ -159,8 +162,10 @@ def build_activity_feed(
         .filter(CandidateApplicationEvent.actor_type == "agent"),
         organization_id=int(organization_id),
     )
-    needs_q = db.query(AgentNeedsInput).filter(
-        AgentNeedsInput.organization_id == organization_id
+    needs_q = apply_live_logical_needs_input_scope(
+        db,
+        db.query(AgentNeedsInput),
+        organization_id=int(organization_id),
     )
 
     if role_id is not None:

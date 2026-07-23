@@ -65,6 +65,20 @@ NEEDS_INPUT_KINDS = (
     "other",
 )
 
+# These kinds may carry a structured CandidateApplication subject in
+# ``subject_id``.  A NULL subject keeps the legacy role-wide/general semantic;
+# a populated subject is candidate-scoped and must pass the shared live logical
+# membership boundary before any recruiter-facing read or action.
+CANDIDATE_APPLICATION_SUBJECT_KINDS = (
+    "candidate_tie_break",
+    "other",
+    # Historical per-candidate HITL cards. New rows are prohibited because
+    # these values are intentionally absent from NEEDS_INPUT_KINDS, but rolling
+    # data must still honor candidate/application lifecycle authority.
+    "send_assessment_approval",
+    "resend_assessment_invite_approval",
+)
+
 
 class AgentNeedsInput(Base):
     __tablename__ = "agent_needs_input"

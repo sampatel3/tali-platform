@@ -100,6 +100,9 @@ from ...models.organization import Organization
 from ...models.role import ROLE_KIND_SISTER, Role
 from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.user import User
+from ...services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
 from ._activity_feed import (
@@ -1399,9 +1402,12 @@ def agent_status(
         organization_id=int(current_user.organization_id),
     ).count()
     open_needs_input_count = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(current_user.organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == current_user.organization_id,
             AgentNeedsInput.role_id == role_id,
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),

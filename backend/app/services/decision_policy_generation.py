@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
 from ..models.decision_policy import DecisionPolicy
-from ..models.role import Role, role_tasks
+from ..models.role import ROLE_KIND_SISTER, Role, role_tasks
 from ..models.task import Task
 from .agent_policy_settings import (
     GRANULAR_AUTOMATION_FIELDS,
@@ -27,6 +27,7 @@ POLICY_GENERATION_FINGERPRINT_KEY = "decision_policy_generation"
 _ACTIONABLE_STATUSES = frozenset(
     {"pending", "processing", "reverted_for_feedback"}
 )
+_RELATED_ROLE_DEFAULT_THRESHOLD = 50.0
 
 
 def _threshold(value: object) -> float | None:
@@ -37,6 +38,25 @@ def _threshold(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _generation_threshold(db: Session, *, role: Role) -> float | None:
+    """Return the threshold the role runtime will actually execute.
+
+    Related-role cycles deliberately keep operating from their stored
+    threshold when dynamic calibration is temporarily unavailable. Their
+    generation fence must snapshot that same fallback, otherwise the queue
+    boundary rejects the verdict produced moments earlier. Ordinary roles keep
+    ``None`` because their policy engine falls back to policy JSON instead.
+    """
+
+    resolved = _threshold(resolve_role_fit_threshold(db, role=role))
+    if resolved is not None:
+        return resolved
+    if str(getattr(role, "role_kind", "") or "") != ROLE_KIND_SISTER:
+        return None
+    stored = _threshold(getattr(role, "score_threshold", None))
+    return stored if stored is not None else _RELATED_ROLE_DEFAULT_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -134,7 +154,7 @@ def capture_decision_policy_generation(
     )
     generation = DecisionPolicyGeneration(
         role_id=role_id,
-        effective_threshold=_threshold(resolve_role_fit_threshold(db, role=role)),
+        effective_threshold=_generation_threshold(db, role=role),
         active_assessment_task_ids=active_task_ids,
         auto_skip_assessment=bool(getattr(role, "auto_skip_assessment", False)),
         automation=tuple(

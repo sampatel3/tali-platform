@@ -43,6 +43,7 @@ from ...models.role import ROLE_KIND_SISTER, Role
 from ...models.user import User
 from ...platform.database import get_db
 from ...services.decision_membership import LiveLogicalDecisionScope, resolve_live_logical_decision_scope
+from ...services.needs_input_membership import apply_live_logical_needs_input_scope
 from ...services.sister_role_service import related_role_pipeline_counts_bulk
 from ..assessments_runtime.pipeline_service import role_pipeline_counts_bulk
 
@@ -85,15 +86,13 @@ def _compute_kpis(
         .group_by(AgentDecision.decision_type)
         .all()
     }
-    pending_questions = (
-        db.query(AgentNeedsInput)
-        .filter(
-            AgentNeedsInput.organization_id == organization_id,
-            AgentNeedsInput.resolved_at.is_(None),
-            AgentNeedsInput.dismissed_at.is_(None),
-        )
-        .count()
+    questions_q = apply_live_logical_needs_input_scope(
+        db, db.query(AgentNeedsInput), organization_id=int(organization_id)
     )
+    pending_questions = questions_q.filter(
+        AgentNeedsInput.resolved_at.is_(None),
+        AgentNeedsInput.dismissed_at.is_(None),
+    ).count()
     pending = int(pending_decisions) + int(pending_questions)
     oldest_pending_row = pending_decisions_q.order_by(AgentDecision.created_at.asc()).first()
     oldest_pending_age = None

@@ -36,6 +36,9 @@ from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..models.role_criterion import RoleCriterion
 from ..models.sister_role_evaluation import SisterRoleEvaluation
+from ..services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 from .draft_tasks import count_role_drafts
 from .health import role_health_check
 from .service import conversation_agent_working, post_agent_message
@@ -86,9 +89,12 @@ def _digest(value: Any) -> str:
 
 def _open_questions(db: Session, role: Role) -> list[AgentNeedsInput]:
     rows = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(role.organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == int(role.organization_id),
             AgentNeedsInput.role_id == int(role.id),
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),
@@ -162,9 +168,12 @@ def _source_signal(db: Session, role: Role) -> tuple[str, int]:
     """Cheap material-state token used to avoid running health checks on polls."""
 
     question_count, question_max = (
-        db.query(func.count(AgentNeedsInput.id), func.max(AgentNeedsInput.id))
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(func.count(AgentNeedsInput.id), func.max(AgentNeedsInput.id)),
+            organization_id=int(role.organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == int(role.organization_id),
             AgentNeedsInput.role_id == int(role.id),
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),

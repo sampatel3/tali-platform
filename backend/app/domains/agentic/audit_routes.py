@@ -22,6 +22,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from ...deps import get_current_user
@@ -105,11 +106,24 @@ def _build_export_rows(
     """Return (rows, truncated). Each row is a flat dict keyed by EXPORT_COLUMNS."""
     query = (
         db.query(AgentDecision, User.email, DecisionFeedback)
-        .outerjoin(User, User.id == AgentDecision.resolved_by_user_id)
+        .outerjoin(
+            User,
+            and_(
+                User.id == AgentDecision.resolved_by_user_id,
+                User.organization_id == int(org_id),
+            ),
+        )
         # Latest feedback for the decision — ``feedback_id`` points at it when
         # the disposition was ``taught``. Left join so decisions without
         # feedback still export.
-        .outerjoin(DecisionFeedback, DecisionFeedback.id == AgentDecision.feedback_id)
+        .outerjoin(
+            DecisionFeedback,
+            and_(
+                DecisionFeedback.id == AgentDecision.feedback_id,
+                DecisionFeedback.organization_id == int(org_id),
+                DecisionFeedback.decision_id == AgentDecision.id,
+            ),
+        )
         .filter(AgentDecision.organization_id == org_id)
     )
     if from_dt is not None:

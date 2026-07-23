@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from typing import Any, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session, joinedload
 
@@ -32,6 +32,9 @@ from ..models.organization import Organization
 from ..models.role import Role
 from ..models.user import User
 from ..platform.database import get_db
+from ..services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 from ..schemas.role import RoleFamilyResponse
 
 logger = logging.getLogger("taali.agent_runtime.needs_input_routes")
@@ -189,10 +192,12 @@ def list_needs_input(
     """
     # joinedload role so NeedsInputView.from_row's row.role.name access
     # doesn't trigger N+1 queries on the list endpoint (Codex #185).
-    q = db.query(AgentNeedsInput).options(
-        joinedload(AgentNeedsInput.role),
-    ).filter(
-        AgentNeedsInput.organization_id == user.organization_id
+    q = apply_live_logical_needs_input_scope(
+        db,
+        db.query(AgentNeedsInput).options(
+            joinedload(AgentNeedsInput.role),
+        ),
+        organization_id=int(user.organization_id),
     )
     if role_id is not None:
         q = q.filter(AgentNeedsInput.role_id == int(role_id))
@@ -260,10 +265,13 @@ def dismiss_needs_input(
     db: Session = Depends(get_db),
 ) -> NeedsInputView:
     policy_row = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(user.organization_id),
+        )
         .filter(
             AgentNeedsInput.id == needs_input_id,
-            AgentNeedsInput.organization_id == int(user.organization_id),
         )
         .one_or_none()
     )
@@ -326,11 +334,13 @@ def reject_cv_gap(
     write fails are reported back as ``failed`` and left open.
     """
     row = (
-        db.query(AgentNeedsInput)
-        .options(joinedload(AgentNeedsInput.role))
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput).options(joinedload(AgentNeedsInput.role)),
+            organization_id=int(user.organization_id),
+        )
         .filter(
             AgentNeedsInput.id == needs_input_id,
-            AgentNeedsInput.organization_id == user.organization_id,
         )
         .one_or_none()
     )
@@ -347,11 +357,13 @@ def reject_cv_gap(
         permission=JobPermission.CONTROL_AGENT,
     )
     row = (
-        db.query(AgentNeedsInput)
-        .options(joinedload(AgentNeedsInput.role))
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput).options(joinedload(AgentNeedsInput.role)),
+            organization_id=int(user.organization_id),
+        )
         .filter(
             AgentNeedsInput.id == needs_input_id,
-            AgentNeedsInput.organization_id == user.organization_id,
         )
         .with_for_update(of=AgentNeedsInput)
         .one_or_none()

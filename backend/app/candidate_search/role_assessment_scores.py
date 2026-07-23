@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import case, select, tuple_
+from sqlalchemy import case, func, select, tuple_
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -23,6 +23,7 @@ from .assessment_score_truth import (
     assessment_score_100,
     assessment_score_value_expression,
     assessment_snapshot_role_fit_score_100,
+    assessment_snapshot_role_fit_value_expression,
     assessment_taali_score_100,
     assessment_taali_score_value_expression,
     blended_taali_score_expression,
@@ -165,12 +166,47 @@ def related_taali_score_expression(
         .correlate(*correlations)
         .scalar_subquery()
     )
-    latest_taali_score = (
-        select(assessment_taali_score_value_expression())
+    # Compose legacy TAALI from staged columns. Referencing the full canonical
+    # expression inline causes SQLAlchemy to duplicate its nested normalization
+    # and JSON CASE tree throughout the scalar subquery, overflowing older
+    # SQLite parsers used by CI.
+    latest_inputs = (
+        select(
+            Assessment.scoring_partial.label("scoring_partial"),
+            Assessment.scoring_failed.label("scoring_failed"),
+            normalized_score_expression(Assessment.taali_score).label(
+                "persisted_taali_score"
+            ),
+            assessment_score_value_expression().label("assessment_score"),
+            assessment_snapshot_role_fit_value_expression().label(
+                "snapshot_role_fit_score"
+            ),
+        )
         .where(*filters)
         .order_by(*ordering)
         .limit(1)
         .correlate(*correlations)
+        .subquery("latest_related_assessment_inputs")
+    )
+    legacy_taali_score = blended_taali_score_expression(
+        assessment_expression=latest_inputs.c.assessment_score,
+        role_fit_expression=latest_inputs.c.snapshot_role_fit_score,
+    )
+    latest_taali_score = (
+        select(
+            case(
+                (
+                    latest_inputs.c.scoring_partial.is_(True)
+                    | latest_inputs.c.scoring_failed.is_(True),
+                    None,
+                ),
+                else_=func.coalesce(
+                    latest_inputs.c.persisted_taali_score,
+                    legacy_taali_score,
+                ),
+            )
+        )
+        .select_from(latest_inputs)
         .scalar_subquery()
     )
     return case(

@@ -215,7 +215,7 @@
     },
     "candidate.decision_history": {
       "risk": "critical",
-      "ground_truth_scope": "Agent recommendations are admitted and keyed by logical organization/role/candidate identity even when their physical evidence application is replaced or soft-deleted; an active related-role membership remains actionable while a deleted ordinary application remains blocked. Recruiter-facing queues and tools expose only live logical subjects, and every active card remains bound to its exact current membership application rather than following a replacement source. Immutable audit rows remain available after a subject is erased or removed, but candidate-derived reasoning, evidence, notes, and other PII are redacted. A recruiter's explicit discard remains suppressed until the acting logical role's own score, CV, assessment, threshold, or policy inputs materially change; physical owner/application drift cannot override that human decision, including for direct and rolling-compatible related roles. Recommendations are filtered independently by created and resolved time, ordered deterministically, and never presented as proof that a workflow action completed. Policy feedback and nightly labels resolve the same role/candidate subject.",
+      "ground_truth_scope": "Agent recommendations are admitted and keyed by logical organization/role/candidate identity even when their physical evidence application is replaced or soft-deleted; an active related-role membership remains actionable while a deleted ordinary application remains blocked. Recruiter-facing queues, candidate-scoped needs-input cards, tools, attention badges, and workload analytics expose or count only live logical subjects, while preserving general role-level questions; every active card remains bound to its exact current membership application rather than following a replacement source. Immutable audit rows remain available after a subject is erased or removed, but candidate-derived reasoning, evidence, notes, and other PII are redacted; auxiliary reviewer and feedback joins also require the same organization and exact decision. A recruiter's explicit discard remains suppressed until the acting logical role's own score, CV, assessment, threshold, or policy inputs materially change; physical owner/application drift cannot override that human decision, including for direct and rolling-compatible related roles. Related-role policy fingerprints preserve the exact stored/default threshold used when dynamic resolution is unavailable. Recommendations are filtered independently by created and resolved time, ordered deterministically, and never presented as proof that a workflow action completed. Policy feedback and nightly labels resolve the same role/candidate subject.",
       "required_surfaces": [
         "rest",
         "public_mcp",
@@ -276,8 +276,16 @@
         "tests/test_related_role_runtime.py::test_direct_related_removed_membership_cannot_requeue_as_ordinary",
         "tests/test_related_role_runtime.py::test_rolling_direct_related_human_suppression_uses_membership_identity",
         "tests/test_related_role_runtime.py::test_related_page_does_not_project_decision_from_replaced_membership",
+        "tests/test_related_role_runtime.py::test_related_runtime_fingerprints_fallback_when_dynamic_resolution_fails",
         "tests/test_deleted_candidate_agent_visibility.py::test_agentic_home_and_mcp_hide_deleted_or_unowned_decisions",
         "tests/test_deleted_candidate_agent_visibility.py::test_audit_keeps_metadata_but_redacts_unavailable_candidate_content",
+        "tests/test_deleted_candidate_needs_input_visibility.py::test_candidate_needs_input_lifecycle_matrix_across_active_surfaces",
+        "tests/test_deleted_candidate_needs_input_visibility.py::test_candidate_needs_input_actions_fail_closed_but_general_rows_remain",
+        "tests/test_deleted_candidate_needs_input_visibility.py::test_legacy_candidate_needs_input_rows_follow_lifecycle_without_reopening_kind",
+        "tests/test_agent_chat_impact.py::test_list_agent_conversations_excludes_stale_candidate_questions_from_attention_order",
+        "tests/test_agent_chat_impact.py::test_list_agent_conversations_excludes_stale_decisions_from_attention_order",
+        "tests/test_activity_timeseries.py::test_activity_timeseries",
+        "tests/test_audit_export_routes.py::test_export_rejects_cross_tenant_user_and_feedback_pointers",
         "tests/test_taali_chat_role_scoped.py::test_decision_history_follows_candidate_when_related_source_changes"
       ]
     }
