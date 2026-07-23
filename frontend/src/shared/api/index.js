@@ -8,6 +8,7 @@ export { roles } from './rolesClient';
 export { billing } from './billingClient';
 export { organizations } from './orgClient';
 export { apiKeys } from './apiKeysClient';
+export { deckLinks } from './deckLinksClient';
 export { analytics } from './analyticsClient';
 export { tasks } from './tasksClient';
 export { candidates } from './candidatesClient';

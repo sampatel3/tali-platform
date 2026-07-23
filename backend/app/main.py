@@ -313,6 +313,10 @@ from .domains.submittal_packs import (
     public_router as submittal_packs_public_router,
     router as submittal_packs_router,
 )
+from .domains.deck_share_links import (
+    public_router as deck_share_links_public_router,
+    router as deck_share_links_router,
+)
 from .domains.outreach import (
     campaigns_router,
     interest_public_router,
@@ -379,6 +383,7 @@ app.include_router(bullhorn_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
 app.include_router(submittal_packs_router, prefix="/api/v1")
+app.include_router(deck_share_links_router, prefix="/api/v1")
 app.include_router(prospects_router, prefix="/api/v1")
 app.include_router(sourcing_assist_router, prefix="/api/v1")
 app.include_router(campaigns_router, prefix="/api/v1")
@@ -417,6 +422,11 @@ app.include_router(top_reports_public_router)
 # Public curated client submittal: GET /submittal/{token} (no auth) — the
 # agency shortlist a recruiter shares with their client for one role.
 app.include_router(submittal_packs_public_router)
+# Public sales deck: GET /deck/{token} (no auth) — one link per prospect,
+# gated on a live row so a link can be revoked without breaking the others.
+# The bundle lives in backend/app/static/deck and is deliberately NOT in the
+# frontend build, so the CDN has no copy to serve.
+app.include_router(deck_share_links_public_router)
 # Public job page: GET /api/v1/public/job/{token} (no auth) — the shareable
 # listing minted when a requisition is published. Also carries the native public
 # apply (POST /api/v1/public/job-pages/{token}/apply, flag-gated off).

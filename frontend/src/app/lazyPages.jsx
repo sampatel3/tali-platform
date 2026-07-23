@@ -153,6 +153,7 @@ export const AtsAdminPage = lazy(() =>
 export const DecisionPolicyPage = lazy(() => import('../features/decision_policy/DecisionPolicyPage'));
 export const TokenGate = lazy(() => import('../features/_dev/TokenGate'));
 export const DeckIframe = lazy(() => import('../features/_dev/DeckIframe'));
+export const DeckLinksPage = lazy(() => import('../features/_dev/DeckLinksPage'));
 export const BlogIndexPage = lazy(() => import('../features/blog/BlogIndexPage'));
 export const BlogPostPage = lazy(() => import('../features/blog/BlogPostPage'));
 export const PrivacyPage = lazy(() =>

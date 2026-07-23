@@ -192,6 +192,7 @@ from .share_link import (
 )
 from .top_candidates_report import TopCandidatesReport
 from .submittal_pack import SubmittalPack
+from .deck_share_link import DeckShareLink, DeckShareView
 from .threshold_calibration import ThresholdCalibration
 from .api_key import (
     API_KEY_SCOPES,
@@ -367,6 +368,8 @@ __all__ = [
     "ShareLink",
     "TopCandidatesReport",
     "SubmittalPack",
+    "DeckShareLink",
+    "DeckShareView",
     "ThresholdCalibration",
     "SHARE_LINK_MODE_RECRUITER",
     "SHARE_LINK_MODE_CLIENT",
