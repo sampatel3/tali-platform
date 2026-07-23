@@ -1,8 +1,9 @@
 """API tests for candidate CRUD + file-upload endpoints (/api/v1/candidates/)."""
 
 import io
-import uuid
+from datetime import datetime, timezone
 
+from app.models.candidate import Candidate
 from tests.conftest import auth_headers, create_candidate_via_api
 
 
@@ -187,7 +188,7 @@ def test_get_candidate_not_found_404(client):
 
 
 def test_get_candidate_no_auth_401(client):
-    resp = client.get(f"/api/v1/candidates/99999")
+    resp = client.get("/api/v1/candidates/99999")
     assert resp.status_code == 401
 
 
@@ -233,7 +234,7 @@ def test_update_candidate_not_found_404(client):
 
 def test_update_candidate_no_auth_401(client):
     resp = client.patch(
-        f"/api/v1/candidates/99999",
+        "/api/v1/candidates/99999",
         json={"full_name": "No Auth"},
     )
     assert resp.status_code == 401
@@ -259,7 +260,7 @@ def test_delete_candidate_not_found_404(client):
 
 
 def test_delete_candidate_no_auth_401(client):
-    resp = client.delete(f"/api/v1/candidates/99999")
+    resp = client.delete("/api/v1/candidates/99999")
     assert resp.status_code == 401
 
 
@@ -307,7 +308,7 @@ def test_upload_cv_invalid_extension(client):
 def test_upload_cv_no_auth_401(client):
     files = {"file": ("resume.txt", io.BytesIO(b"content"), "text/plain")}
     resp = client.post(
-        f"/api/v1/candidates/99999/upload-cv",
+        "/api/v1/candidates/99999/upload-cv",
         files=files,
     )
     assert resp.status_code == 401
@@ -410,3 +411,96 @@ def test_download_candidate_document_not_found(client):
     cand = create_candidate_via_api(client, headers).json()
     resp = client.get(f"/api/v1/candidates/{cand['id']}/documents/cv", headers=headers)
     assert resp.status_code == 404
+
+
+def test_soft_deleted_candidate_blocks_every_raw_and_document_route(
+    client,
+    db,
+    monkeypatch,
+):
+    """A retained audit row is not a readable or mutable candidate profile."""
+
+    headers, _ = auth_headers(client)
+    candidate_id = int(
+        create_candidate_via_api(
+            client,
+            headers,
+            email="erased-raw-routes@example.com",
+            full_name="Erased Raw Routes",
+        ).json()["id"]
+    )
+    candidate = db.get(Candidate, candidate_id)
+    assert candidate is not None
+    candidate.cv_file_url = "s3://private-bucket/erased-candidate.pdf"
+    candidate.cv_filename = "erased-candidate.pdf"
+    candidate.cv_text = "private CV content"
+    candidate.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    external_calls: list[str] = []
+
+    def _unexpected_upload(**_kwargs):
+        external_calls.append("upload")
+        raise AssertionError("deleted candidate reached document upload")
+
+    def _unexpected_presign(*_args, **_kwargs):
+        external_calls.append("presign")
+        raise AssertionError("deleted candidate reached presigned URL generation")
+
+    monkeypatch.setattr(
+        "app.domains.candidates_documents.routes.process_document_upload",
+        _unexpected_upload,
+    )
+    monkeypatch.setattr(
+        "app.services.s3_service.generate_presigned_url",
+        _unexpected_presign,
+    )
+
+    assert (
+        client.get(
+            f"/api/v1/candidates/{candidate_id}",
+            headers=headers,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.patch(
+            f"/api/v1/candidates/{candidate_id}",
+            json={"full_name": "Should Not Reappear"},
+            headers=headers,
+        ).status_code
+        == 404
+    )
+    assert (
+        client.delete(
+            f"/api/v1/candidates/{candidate_id}",
+            headers=headers,
+        ).status_code
+        == 404
+    )
+
+    auth_only = {"Authorization": headers["Authorization"]}
+    for suffix, filename, content_type in (
+        ("upload-cv", "replacement.pdf", "application/pdf"),
+        ("upload-job-spec", "replacement.txt", "text/plain"),
+    ):
+        response = client.post(
+            f"/api/v1/candidates/{candidate_id}/{suffix}",
+            files={"file": (filename, io.BytesIO(b"private"), content_type)},
+            headers=auth_only,
+        )
+        assert response.status_code == 404
+
+    for doc_type in ("cv", "job-spec"):
+        response = client.get(
+            f"/api/v1/candidates/{candidate_id}/documents/{doc_type}",
+            headers=headers,
+            follow_redirects=False,
+        )
+        assert response.status_code == 404
+
+    assert external_calls == []
+    retained = db.get(Candidate, candidate_id)
+    assert retained is not None
+    assert retained.deleted_at is not None
+    assert retained.full_name == "Erased Raw Routes"

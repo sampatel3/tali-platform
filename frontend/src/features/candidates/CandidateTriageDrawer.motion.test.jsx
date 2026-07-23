@@ -182,7 +182,7 @@ describe('CandidateTriageDrawer shared motion', () => {
     expect(screen.queryByText(/rejected in Bullhorn/i)).not.toBeInTheDocument();
   });
 
-  it('names every linked role when warning about a shared-application reject', () => {
+  it('keeps a related-role reject inside the current role', () => {
     render(
       <MotionSystemProvider>
         <CandidateTriageDrawer
@@ -200,13 +200,13 @@ describe('CandidateTriageDrawer shared motion', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
-    expect(screen.getByRole('alert')).toHaveTextContent(/Reject everywhere/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(/Reject in Data Engineer/i);
     expect(screen.getByRole('alert')).toHaveTextContent(
-      /shared Workable application across all linked roles: Data Platform Lead #31 \(original\) and AI Engineer #47 \(related\)/i,
+      /changes only this role.*linked Workable application and other roles are unchanged/i,
     );
   });
 
-  it('keeps the generic linked-role warning when family metadata is absent', () => {
+  it('keeps an owner-role reject separate from related-role state', () => {
     render(
       <MotionSystemProvider>
         <CandidateTriageDrawer
@@ -221,11 +221,11 @@ describe('CandidateTriageDrawer shared motion', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Reject Closes the application$/i }));
     expect(screen.getByRole('alert')).toHaveTextContent(
-      /original role and every related role/i,
+      /this role owns the Workable write-back.*Related roles keep their own Taali candidate status/i,
     );
   });
 
-  it('warns that moving a shared ATS application updates every linked role', () => {
+  it('warns that an ATS move does not move another role locally', () => {
     render(
       <MotionSystemProvider>
         <CandidateTriageDrawer
@@ -246,9 +246,9 @@ describe('CandidateTriageDrawer shared motion', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Interview' }));
 
-    expect(screen.getByRole('alert')).toHaveTextContent(/Shared ATS move/i);
+    expect(screen.getByRole('alert')).toHaveTextContent(/Move in Data Engineer/i);
     expect(screen.getByRole('alert')).toHaveTextContent(
-      /shared Workable application to Interview updates all linked roles: Data Platform Lead #31 \(original\) and AI Engineer #47 \(related\)/i,
+      /changes only this role's Taali pipeline state.*linked Workable application.*Interview write-back.*other roles do not move/i,
     );
   });
 

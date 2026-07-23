@@ -19,8 +19,16 @@ CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE = (
 )
 CANDIDATE_SEARCH_TOOL_NAMES = frozenset(
     {
+        # Canonical role-fact reads. A failure in any one is terminal for the
+        # turn: the model must not replace missing current state, detail,
+        # action history, or recommendation history with prompt/UI context.
+        "get_role_candidate",
+        "compare_role_applications",
+        "list_candidate_actions",
+        "list_recent_agent_decisions",
         "search_candidates",
         "search_applications",
+        "search_role_candidates",
         "nl_search_candidates",
         "find_top_candidates",
         "screen_pool_against_requirement",

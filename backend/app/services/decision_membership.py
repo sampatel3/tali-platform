@@ -4,12 +4,132 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
-from sqlalchemy.orm import Session
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Query, Session, aliased
 
-from ..models.agent_decision import AgentDecision
+from ..candidate_search.logical_application_scope import (
+    resolve_logical_application_selection,
+)
+from ..models.agent_decision import (
+    AGENT_DECISION_ACTIVE_STATUSES,
+    AgentDecision,
+)
+from ..models.candidate import Candidate
+from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from .role_concurrency import role_query_for_update
+
+
+@dataclass(frozen=True)
+class LiveLogicalDecisionScope:
+    """Reusable live-subject authority for one request/organization."""
+
+    organization_id: int
+    membership: Any
+
+    def apply(self, query: Query) -> Query:
+        subject_application = aliased(
+            CandidateApplication,
+            name="live_decision_subject_application",
+        )
+        subject_candidate = aliased(
+            Candidate,
+            name="live_decision_subject_candidate",
+        )
+        live_subject = (
+            select(self.membership.c.application_id)
+            .select_from(self.membership)
+            .join(
+                subject_application,
+                subject_application.id == self.membership.c.application_id,
+            )
+            .join(
+                subject_candidate,
+                subject_candidate.id == subject_application.candidate_id,
+            )
+            .where(
+                self.membership.c.logical_role_id == AgentDecision.role_id,
+                subject_application.organization_id == self.organization_id,
+                subject_application.candidate_id == AgentDecision.candidate_id,
+                subject_candidate.organization_id == self.organization_id,
+                subject_candidate.deleted_at.is_(None),
+                or_(
+                    AgentDecision.status.notin_(AGENT_DECISION_ACTIVE_STATUSES),
+                    self.membership.c.application_id
+                    == AgentDecision.application_id,
+                ),
+            )
+            .correlate(AgentDecision)
+            .exists()
+        )
+        return query.filter(
+            AgentDecision.organization_id == self.organization_id,
+            live_subject,
+        )
+
+    def query(self, db: Session, *entities) -> Query:
+        return self.apply(db.query(*entities))
+
+
+def resolve_live_logical_decision_scope(
+    db: Session,
+    *,
+    organization_id: int,
+) -> LiveLogicalDecisionScope:
+    """Resolve role storage semantics once for a bounded request."""
+
+    organization_id = int(organization_id)
+    selection = resolve_logical_application_selection(
+        db,
+        organization_id=organization_id,
+        role_ids=(),
+    )
+    return LiveLogicalDecisionScope(
+        organization_id=organization_id,
+        membership=selection.membership_rows,
+    )
+
+
+def apply_live_logical_decision_scope(
+    db: Session, query: Query, *, organization_id: int
+) -> Query:
+    """Restrict a recruiter-facing decision query to live logical subjects.
+
+    Agent decisions are immutable audit records, but candidate-facing product
+    surfaces may expose them only while the person is live and the acting role
+    still owns that candidate.  Ownership is keyed by ``(role, candidate)``:
+    a related role can replace its evidence application without changing the
+    logical subject of a resolved prior decision. Active queue rows remain
+    bound to their exact current membership application because that is the
+    side-effect authority an approval would execute against.
+
+    The membership subquery is the same authority used by candidate search:
+    ordinary roles require a live application, while related roles require a
+    live ``SisterRoleEvaluation``.  Keeping the check as a correlated
+    ``EXISTS`` lets callers preserve their existing joins and projections.
+    """
+
+    return resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(organization_id),
+    ).apply(query)
+
+
+def live_logical_decision_query(
+    db: Session,
+    *entities,
+    organization_id: int,
+) -> Query:
+    """Create a query already constrained to the live decision boundary."""
+
+    return apply_live_logical_decision_scope(
+        db,
+        db.query(*entities),
+        organization_id=int(organization_id),
+    )
 
 
 def lock_role_memberships(
@@ -90,3 +210,15 @@ def lock_resolution_roles(
         if role is not None:
             locked[role_id] = role
     return locked
+
+
+__all__ = [
+    "apply_live_logical_decision_scope",
+    "authorize_then_lock_role_membership",
+    "LiveLogicalDecisionScope",
+    "live_logical_decision_query",
+    "lock_resolution_roles",
+    "lock_role_membership",
+    "lock_role_memberships",
+    "resolve_live_logical_decision_scope",
+]

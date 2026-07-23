@@ -22,12 +22,15 @@ from app.candidate_search.schemas import (
     SearchRetrievalTrace,
 )
 from app.mcp import handlers
+from app.models.agent_decision import AgentDecision
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
+from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.user import User
+from app.taali_chat.tool_registry import dispatch_tool
 
 
 def _make_user_and_org(db) -> tuple[User, Organization]:
@@ -50,7 +53,10 @@ def _make_user_and_org(db) -> tuple[User, Organization]:
 
 def _make_app(db, *, org_id, role, candidate_name, email, taali=None, pre_screen=None):
     candidate = Candidate(
-        organization_id=org_id, email=email, full_name=candidate_name, position="Engineer"
+        organization_id=org_id,
+        email=email,
+        full_name=candidate_name,
+        position="Engineer",
     )
     db.add(candidate)
     db.flush()
@@ -95,7 +101,15 @@ def _seed_sister_top_candidate_world(db, *, org: Organization) -> dict:
     specs = (
         # key, display name, owner score, owner verdict/stage, sister score/stage
         ("best", "Sister Best", 12.0, "Below threshold", "review", 96.0, "applied"),
-        ("second", "Sister Second", 92.0, "Advance recommended", "applied", 61.0, "review"),
+        (
+            "second",
+            "Sister Second",
+            92.0,
+            "Advance recommended",
+            "applied",
+            61.0,
+            "review",
+        ),
         (
             "sister_advanced",
             "Owner Best But Sister Advanced",
@@ -105,11 +119,28 @@ def _seed_sister_top_candidate_world(db, *, org: Organization) -> dict:
             30.0,
             "advanced",
         ),
-        # A stale local stage must not revive a globally advanced ATS row.
-        ("globally_advanced", "Globally Advanced", 8.0, None, "advanced", 98.0, "applied"),
+        # Shared ATS progress is a writeback restriction only. It must not
+        # remove or move this independent role-local membership.
+        (
+            "globally_advanced",
+            "Globally Advanced",
+            8.0,
+            None,
+            "advanced",
+            98.0,
+            "applied",
+        ),
     )
     applications: dict[str, CandidateApplication] = {}
-    for key, name, owner_score, owner_verdict, owner_stage, sister_score, sister_stage in specs:
+    for (
+        key,
+        name,
+        owner_score,
+        owner_verdict,
+        owner_stage,
+        sister_score,
+        sister_stage,
+    ) in specs:
         application = _make_app(
             db,
             org_id=org.id,
@@ -177,8 +208,11 @@ def test_search_applications_uses_sister_score_stage_and_safe_projection(db):
         sort_by="taali_score",
     )
 
-    assert [row["application_id"] for row in rows] == [int(case["best"].id)]
-    row = rows[0]
+    assert [row["application_id"] for row in rows] == [
+        int(case["globally_advanced"].id),
+        int(case["best"].id),
+    ]
+    row = next(item for item in rows if item["application_id"] == int(case["best"].id))
     assert row["role_id"] == int(case["sister"].id)
     assert row["role_name"] == case["sister"].name
     assert row["pipeline_stage"] == "applied"
@@ -188,7 +222,7 @@ def test_search_applications_uses_sister_score_stage_and_safe_projection(db):
     assert row["cv_match_score"] == 96.0
     assert row["role_fit_score"] == 96.0
     assert row["assessment_score"] is None
-    assert row["auto_reject_state"] is None
+    assert "auto_reject_state" not in row
     assert row["score_mode"] == "sister_role"
     assert row["frontend_url"].endswith(
         f"/candidates/{case['best'].id}?from=jobs/{case['sister'].id}"
@@ -199,6 +233,259 @@ def test_search_applications_uses_sister_score_stage_and_safe_projection(db):
     assert case["best"].pipeline_stage == "review"
     assert case["best"].pre_screen_recommendation == "Below threshold"
     assert "pre_screen_recommendation" not in row
+
+
+def test_search_role_candidates_filters_live_pending_decision_state(db):
+    user, org = _make_user_and_org(db)
+    role = Role(
+        organization_id=int(org.id), name="Pending filter role", source="manual"
+    )
+    db.add(role)
+    db.flush()
+    pending = _make_app(
+        db,
+        org_id=int(org.id),
+        role=role,
+        candidate_name="Pending Candidate",
+        email="pending-filter@test.example",
+    )
+    clear = _make_app(
+        db,
+        org_id=int(org.id),
+        role=role,
+        candidate_name="Clear Candidate",
+        email="clear-filter@test.example",
+    )
+    db.add(
+        AgentDecision(
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            application_id=int(pending.id),
+            decision_type="advance_to_interview",
+            recommendation="advance",
+            status="reverted_for_feedback",
+            reasoning="Needs recruiter review.",
+            model_version="test-model",
+            prompt_version="test-prompt",
+            idempotency_key=f"pending-filter-{pending.id}",
+        )
+    )
+    db.commit()
+
+    with_pending = handlers.search_role_candidates(
+        db,
+        user,
+        role_id=int(role.id),
+        has_pending_decision=True,
+    )
+    without_pending = handlers.search_role_candidates(
+        db,
+        user,
+        role_id=int(role.id),
+        has_pending_decision=False,
+    )
+
+    assert with_pending["total"] == 1
+    assert with_pending["items"][0]["application_id"] == int(pending.id)
+    assert with_pending["filters"]["has_pending_decision"] is True
+    assert without_pending["total"] == 1
+    assert without_pending["items"][0]["application_id"] == int(clear.id)
+
+
+def test_search_role_candidates_filters_related_role_explicit_ats_transport(db):
+    """ATS filters must not confuse local membership with ATS transport.
+
+    A fully independent related role can have its own source application and a
+    separate owner-role application used only for shared ATS state.  The first
+    candidate proves the linked transport is searched; the second deliberately
+    carries a stale matching stage on its local row and proves that row is not
+    treated as ATS authority.
+    """
+
+    user, org = _make_user_and_org(db)
+    owner = Role(organization_id=int(org.id), name="ATS owner", source="manual")
+    related = Role(
+        organization_id=int(org.id),
+        name="Independent related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role=owner,
+    )
+    db.add_all([owner, related])
+    db.flush()
+
+    def _membership(
+        *,
+        key: str,
+        local_ats_stage: str | None,
+        transport_ats_stage: str,
+    ) -> tuple[CandidateApplication, CandidateApplication]:
+        candidate = Candidate(
+            organization_id=int(org.id),
+            email=f"{key}@related-ats.test",
+            full_name=key.replace("-", " ").title(),
+            position="Engineer",
+        )
+        db.add(candidate)
+        db.flush()
+        transport = CandidateApplication(
+            organization_id=int(org.id),
+            candidate_id=int(candidate.id),
+            role_id=int(owner.id),
+            status="applied",
+            pipeline_stage="review",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            source="workable",
+            workable_candidate_id=f"wk-{key}",
+            workable_stage=transport_ats_stage,
+            external_stage_raw=transport_ats_stage,
+        )
+        local = CandidateApplication(
+            organization_id=int(org.id),
+            candidate_id=int(candidate.id),
+            role_id=int(related.id),
+            status="applied",
+            pipeline_stage="review",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            source="manual",
+            # Deliberately stale/malformed local transport data. It must not
+            # become ATS authority for this independent role.
+            workable_stage=local_ats_stage,
+            external_stage_raw=local_ats_stage,
+        )
+        db.add_all([transport, local])
+        db.flush()
+        db.add(
+            SisterRoleEvaluation(
+                organization_id=int(org.id),
+                role_id=int(related.id),
+                candidate_id=int(candidate.id),
+                source_application_id=int(local.id),
+                ats_application_id=int(transport.id),
+                status="done",
+                pipeline_stage="review",
+                application_outcome="open",
+                membership_source="direct",
+                spec_fingerprint=f"spec-{key}",
+                role_fit_score=80,
+            )
+        )
+        return local, transport
+
+    grounded_local, _grounded_transport = _membership(
+        key="grounded-match",
+        local_ats_stage=None,
+        transport_ats_stage="Technical Interview",
+    )
+    _stale_local, _stale_transport = _membership(
+        key="stale-local-match",
+        local_ats_stage="Technical Interview",
+        transport_ats_stage="Applied",
+    )
+    db.commit()
+
+    result = handlers.search_role_candidates(
+        db,
+        user,
+        role_id=int(related.id),
+        ats_stage="Technical Interview",
+    )
+
+    assert result["total"] == 1
+    assert result["total_is_exact"] is True
+    assert result["items"][0]["application_id"] == int(grounded_local.id)
+    assert result["items"][0]["role_id"] == int(related.id)
+    assert result["items"][0]["pipeline_stage"] == "review"
+    assert result["items"][0]["current_state"]["ats"]["raw_stage"] == (
+        "Technical Interview"
+    )
+
+
+def test_role_bound_legacy_detail_and_compare_use_logical_role_projection(db):
+    """Legacy tool names must not escape a role-bound Taali conversation."""
+
+    user, org = _make_user_and_org(db)
+    case = _seed_sister_top_candidate_world(db, org=org)
+    conversation = TaaliChatConversation(
+        organization_id=int(org.id),
+        user_id=int(user.id),
+        role_id=int(case["sister"].id),
+        title="Related role truth",
+    )
+    db.add(conversation)
+    db.flush()
+    owner_only = _make_app(
+        db,
+        org_id=int(org.id),
+        role=case["owner"],
+        candidate_name="Owner Only Candidate",
+        email="owner-only-role-bound@test.example",
+        taali=77,
+    )
+
+    detail = dispatch_tool(
+        "get_application",
+        {"application_id": int(case["best"].id)},
+        db=db,
+        user=user,
+        conversation=conversation,
+    )
+    comparison = dispatch_tool(
+        "compare_applications",
+        {
+            "application_ids": [
+                int(case["best"].id),
+                int(case["second"].id),
+            ]
+        },
+        db=db,
+        user=user,
+        conversation=conversation,
+    )
+    candidate = dispatch_tool(
+        "get_candidate",
+        {"candidate_id": int(case["best"].candidate_id)},
+        db=db,
+        user=user,
+        conversation=conversation,
+    )
+    cv = dispatch_tool(
+        "get_candidate_cv",
+        {"candidate_id": int(case["best"].candidate_id)},
+        db=db,
+        user=user,
+        conversation=conversation,
+    )
+
+    assert detail["role_id"] == int(case["sister"].id)
+    assert detail["taali_score"] == 96.0
+    assert detail["current_state"]["pipeline_stage"] == "applied"
+    assert [row["role_id"] for row in comparison["applications"]] == [
+        int(case["sister"].id),
+        int(case["sister"].id),
+    ]
+    assert [row["scores"]["taali"] for row in comparison["applications"]] == [
+        96.0,
+        61.0,
+    ]
+    assert [row["pipeline_stage"] for row in comparison["applications"]] == [
+        "applied",
+        "review",
+    ]
+    assert len(candidate["applications"]) == 1
+    assert candidate["applications"][0]["role_id"] == int(case["sister"].id)
+    assert candidate["applications"][0]["taali_score"] == 96.0
+    assert cv["candidate_id"] == int(case["best"].candidate_id)
+    with pytest.raises(ValueError, match="not in the acting role"):
+        dispatch_tool(
+            "get_candidate_cv",
+            {"candidate_id": int(owner_only.candidate_id)},
+            db=db,
+            user=user,
+            conversation=conversation,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -212,10 +499,22 @@ def test_nl_search_candidates_passes_through_run_search(db):
     role = Role(organization_id=org.id, name="Backend", source="manual")
     db.add(role)
     db.commit()
-    app1 = _make_app(db, org_id=org.id, role=role, candidate_name="Alice",
-                     email="alice@x.test", taali=80.0)
-    app2 = _make_app(db, org_id=org.id, role=role, candidate_name="Bob",
-                     email="bob@x.test", taali=70.0)
+    app1 = _make_app(
+        db,
+        org_id=org.id,
+        role=role,
+        candidate_name="Alice",
+        email="alice@x.test",
+        taali=80.0,
+    )
+    app2 = _make_app(
+        db,
+        org_id=org.id,
+        role=role,
+        candidate_name="Bob",
+        email="bob@x.test",
+        taali=70.0,
+    )
 
     fake_result = SearchOutput(
         application_ids=[app2.id, app1.id],  # rerank changed order
@@ -245,7 +544,9 @@ def test_nl_search_candidates_passes_through_run_search(db):
         subgraph=None,
     )
 
-    with patch("app.candidate_search.runner.run_search", return_value=fake_result) as runner:
+    with patch(
+        "app.candidate_search.runner.run_search", return_value=fake_result
+    ) as runner:
         out = handlers.nl_search_candidates(
             db, user, query="aws engineers with 5 years", role_id=role.id
         )
@@ -287,8 +588,14 @@ def test_nl_search_candidates_caps_limit(db):
     db.add(role)
     db.commit()
     apps = [
-        _make_app(db, org_id=org.id, role=role, candidate_name=f"C{i}",
-                  email=f"c{i}@x.test", taali=float(i))
+        _make_app(
+            db,
+            org_id=org.id,
+            role=role,
+            candidate_name=f"C{i}",
+            email=f"c{i}@x.test",
+            taali=float(i),
+        )
         for i in range(5)
     ]
     fake = SearchOutput(
@@ -316,9 +623,7 @@ def test_autonomous_authority_reaches_all_candidate_search_engines(db):
         rerank_applied=False,
     )
 
-    with patch(
-        "app.candidate_search.runner.run_search", return_value=empty
-    ) as runner:
+    with patch("app.candidate_search.runner.run_search", return_value=empty) as runner:
         handlers.nl_search_candidates(
             db,
             user,
@@ -370,8 +675,14 @@ def test_nl_search_candidates_supports_person_result_pagination(db):
     db.add(role)
     db.commit()
     apps = [
-        _make_app(db, org_id=org.id, role=role, candidate_name=f"P{i}",
-                  email=f"p{i}@x.test", taali=float(i))
+        _make_app(
+            db,
+            org_id=org.id,
+            role=role,
+            candidate_name=f"P{i}",
+            email=f"p{i}@x.test",
+            taali=float(i),
+        )
         for i in range(4)
     ]
     fake = SearchOutput(
@@ -403,9 +714,7 @@ def test_nl_search_candidates_supports_person_result_pagination(db):
         ),
     )
     with patch("app.candidate_search.runner.run_search", return_value=fake) as runner:
-        out = handlers.nl_search_candidates(
-            db, user, query="Python", limit=2, offset=2
-        )
+        out = handlers.nl_search_candidates(db, user, query="Python", limit=2, offset=2)
     assert [row["application_id"] for row in out["applications"]] == [
         apps[2].id,
         apps[3].id,
@@ -432,36 +741,60 @@ def test_nl_search_candidates_rejects_empty_query(db):
 
 
 # ---------------------------------------------------------------------------
-# find_top_candidates — in-the-running pool filter
+# find_top_candidates — complete active logical-pool membership
 # ---------------------------------------------------------------------------
 
 
-def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
-    """The 'top candidates' pool must be in-the-running candidates only:
-    scored AND not the engine's below-threshold/reject verdict. Unscored and
-    'Below threshold' applications are dropped before ranking/grounding, so a
-    re-score reject can't surface as a 'top' candidate and the deep grounding
-    window isn't wasted on un-evaluated rows."""
+def test_find_top_candidates_searches_low_score_and_unscored_active_members(db):
+    """Prior scores rank grounded matches; they never define search membership."""
     user, org = _make_user_and_org(db)
     role = Role(organization_id=org.id, name="Backend", source="manual")
     db.add(role)
     db.commit()
 
-    strong = _make_app(db, org_id=org.id, role=role, candidate_name="Strong",
-                       email="strong@x.test", taali=80.0)
-    review = _make_app(db, org_id=org.id, role=role, candidate_name="Review",
-                       email="review@x.test", taali=55.0)
+    strong = _make_app(
+        db,
+        org_id=org.id,
+        role=role,
+        candidate_name="Strong",
+        email="strong@x.test",
+        taali=80.0,
+    )
+    review = _make_app(
+        db,
+        org_id=org.id,
+        role=role,
+        candidate_name="Review",
+        email="review@x.test",
+        taali=55.0,
+    )
     review.pre_screen_recommendation = "Manual review recommended"
-    below = _make_app(db, org_id=org.id, role=role, candidate_name="Below",
-                      email="below@x.test", taali=20.0)
+    below = _make_app(
+        db,
+        org_id=org.id,
+        role=role,
+        candidate_name="Below",
+        email="below@x.test",
+        taali=20.0,
+    )
     below.pre_screen_recommendation = "Below threshold"
-    # Non-canonical label (case/trailing space) must still be excluded — the
-    # reject policy stores it lower/trim-normalised elsewhere.
-    below_noncanonical = _make_app(db, org_id=org.id, role=role, candidate_name="BelowMessy",
-                                   email="belowmessy@x.test", taali=30.0)
+    below_noncanonical = _make_app(
+        db,
+        org_id=org.id,
+        role=role,
+        candidate_name="BelowMessy",
+        email="belowmessy@x.test",
+        taali=30.0,
+    )
     below_noncanonical.pre_screen_recommendation = "below threshold "
-    unscored = _make_app(db, org_id=org.id, role=role, candidate_name="Unscored",
-                         email="unscored@x.test", taali=None)
+    unscored = _make_app(
+        db,
+        org_id=org.id,
+        role=role,
+        candidate_name="Unscored",
+        email="unscored@x.test",
+        taali=None,
+    )
     db.commit()
 
     captured: dict = {}
@@ -489,11 +822,13 @@ def test_find_top_candidates_pool_is_scored_and_not_below_threshold(db):
             _search_context={"titles_all": ["project manager"], "titles_any": []},
         )
 
-    assert captured["ids"] == sorted([strong.id, review.id])
+    assert captured["ids"] == sorted(
+        [strong.id, review.id, below.id, below_noncanonical.id, unscored.id]
+    )
     assert captured["role_id"] == role.id
-    assert below.id not in captured["ids"]              # below-threshold reject excluded
-    assert below_noncanonical.id not in captured["ids"] # case/space variant excluded too
-    assert unscored.id not in captured["ids"]           # un-evaluated excluded
+    assert below.id in captured["ids"]
+    assert below_noncanonical.id in captured["ids"]
+    assert unscored.id in captured["ids"]
     assert captured["limit"] == 5
     assert captured["rank_by"] == "taali"
     assert captured["context"]["inherited_titles_all"] == ["project manager"]
@@ -545,27 +880,39 @@ def test_find_top_candidates_uses_sister_scope_score_stage_and_projection(db):
 
     assert len(runner_calls) == 1
     assert runner_calls[0]["role_id"] == int(case["sister"].id)
-    assert result["pool_size"] == 2
+    assert result["pool_size"] == 3
     assert [row["application_id"] for row in result["candidates"]] == [
+        int(case["globally_advanced"].id),
         int(case["best"].id),
         int(case["second"].id),
     ]
 
-    best, second = result["candidates"]
-    assert [best["taali_score"], second["taali_score"]] == [96.0, 61.0]
-    assert [best["pipeline_stage"], second["pipeline_stage"]] == [
+    source_advanced, best, second = result["candidates"]
+    assert [
+        source_advanced["taali_score"],
+        best["taali_score"],
+        second["taali_score"],
+    ] == [98.0, 96.0, 61.0]
+    assert [
+        source_advanced["pipeline_stage"],
+        best["pipeline_stage"],
+        second["pipeline_stage"],
+    ] == [
+        "applied",
         "applied",
         "review",
     ]
     assert best["role_id"] == int(case["sister"].id)
     assert best["role_name"] == case["sister"].name
-    assert best["operational_role_id"] == int(case["owner"].id)
-    assert best["source_role_score"] == 12.0
     assert best["score_mode"] == "sister_role"
+    assert source_advanced["action_restrictions"]["restricted"] is True
+    for row in result["candidates"]:
+        assert "operational_role_id" not in row
+        assert "source_role_score" not in row
 
     returned_ids = {int(row["application_id"]) for row in result["candidates"]}
     assert int(case["sister_advanced"].id) not in returned_ids
-    assert int(case["globally_advanced"].id) not in returned_ids
+    assert int(case["globally_advanced"].id) in returned_ids
     # The winning related candidate is explicitly below threshold on the owner
     # role. That owner-only verdict must neither exclude nor relabel it here.
     assert case["best"].pre_screen_recommendation == "Below threshold"
@@ -726,9 +1073,7 @@ def test_screen_pool_uses_sister_scored_history_and_strips_owner_verdicts(db):
     captured: dict[str, object] = {}
 
     def _local_runner(**kwargs):
-        captured["ids"] = {
-            int(app.id) for app in kwargs["base_query"].all()
-        }
+        captured["ids"] = {int(app.id) for app in kwargs["base_query"].all()}
         captured["role_id"] = kwargs["role_id"]
         return SearchOutput(
             application_ids=[int(case["best"].id), int(case["second"].id)],
@@ -781,7 +1126,7 @@ def test_screen_pool_uses_sister_scored_history_and_strips_owner_verdicts(db):
     assert row["cv_match_score"] == 96.0
     assert row["role_fit_score"] == 96.0
     assert row["assessment_score"] is None
-    assert row["auto_reject_state"] is None
+    assert "auto_reject_state" not in row
     assert row["score_mode"] == "sister_role"
     assert row["candidate_headline"] == "Sister Best related-role evidence."
     assert row["candidate_summary"] is None
@@ -792,6 +1137,7 @@ def test_screen_pool_uses_sister_scored_history_and_strips_owner_verdicts(db):
         "operational_role_name",
         "pre_screen_recommendation",
         "pre_screen_evidence",
+        "auto_reject_state",
         "auto_reject_reason",
     ):
         assert owner_only_field not in row
@@ -806,22 +1152,33 @@ def test_screen_pool_handler_scopes_scored_nonhired(db):
     db.add(role)
     db.commit()
 
-    scored = _make_app(db, org_id=org.id, role=role, candidate_name="Scored",
-                       email="s@x.test", taali=80.0)
+    scored = _make_app(
+        db,
+        org_id=org.id,
+        role=role,
+        candidate_name="Scored",
+        email="s@x.test",
+        taali=80.0,
+    )
     scored.cv_match_details = {"requirements_assessment": []}
-    unscored = _make_app(db, org_id=org.id, role=role, candidate_name="Unscored",
-                         email="u@x.test")  # cv_match_details stays None
-    hired = _make_app(db, org_id=org.id, role=role, candidate_name="Hired",
-                      email="h@x.test", taali=90.0)
+    unscored = _make_app(
+        db, org_id=org.id, role=role, candidate_name="Unscored", email="u@x.test"
+    )  # cv_match_details stays None
+    hired = _make_app(
+        db,
+        org_id=org.id,
+        role=role,
+        candidate_name="Hired",
+        email="h@x.test",
+        taali=90.0,
+    )
     hired.cv_match_details = {"requirements_assessment": []}
     hired.application_outcome = "hired"
     db.commit()
 
     captured = {}
 
-    def _fake_engine(
-        *, db, organization_id, role_id, requirement, base_query, limit
-    ):
+    def _fake_engine(*, db, organization_id, role_id, requirement, base_query, limit):
         captured["ids"] = {a.id for a in base_query.all()}
         captured["role_id"] = role_id
         return {"mode": "rediscovery", "candidates": []}
@@ -837,7 +1194,7 @@ def test_screen_pool_handler_scopes_scored_nonhired(db):
     assert scored.id in captured["ids"]
     assert captured["role_id"] == role.id
     assert unscored.id not in captured["ids"]  # not scored → excluded
-    assert hired.id not in captured["ids"]      # already placed → excluded
+    assert hired.id not in captured["ids"]  # already placed → excluded
 
 
 def test_screen_pool_mints_report_with_database_only_coverage(db):
@@ -878,9 +1235,7 @@ def test_screen_pool_mints_report_with_database_only_coverage(db):
     assert report.snapshot["deep_checked"] == 0
     assert report.snapshot["qualified"] is None
     assert report.snapshot["evidence_model"] is None
-    assert report.snapshot["warnings"] == [
-        {"code": "deep_verification_not_requested"}
-    ]
+    assert report.snapshot["warnings"] == [{"code": "deep_verification_not_requested"}]
 
 
 def test_screen_pool_rejects_foreign_role_before_search_or_report(db):
@@ -924,30 +1279,43 @@ def test_screen_pool_handler_excludes_candidate_hired_elsewhere(db):
     db.commit()
 
     # ONE candidate, TWO applications: hired on role_a, scored + still-open on role_b.
-    cand = Candidate(organization_id=org.id, email="dup@x.test", full_name="Dup",
-                     position="Engineer")
+    cand = Candidate(
+        organization_id=org.id, email="dup@x.test", full_name="Dup", position="Engineer"
+    )
     db.add(cand)
     db.flush()
     hired_app = CandidateApplication(
-        organization_id=org.id, candidate_id=cand.id, role_id=role_a.id,
-        status="hired", pipeline_stage="hired", pipeline_stage_source="recruiter",
-        application_outcome="hired", source="manual", taali_score_cache_100=90.0,
+        organization_id=org.id,
+        candidate_id=cand.id,
+        role_id=role_a.id,
+        status="hired",
+        pipeline_stage="hired",
+        pipeline_stage_source="recruiter",
+        application_outcome="hired",
+        source="manual",
+        taali_score_cache_100=90.0,
     )
     open_app = CandidateApplication(
-        organization_id=org.id, candidate_id=cand.id, role_id=role_b.id,
-        status="applied", pipeline_stage="review", pipeline_stage_source="recruiter",
-        application_outcome="open", source="manual", taali_score_cache_100=80.0,
+        organization_id=org.id,
+        candidate_id=cand.id,
+        role_id=role_b.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        taali_score_cache_100=80.0,
     )
     db.add_all([hired_app, open_app])
     db.commit()
-    open_app.cv_match_details = {"requirements_assessment": []}  # scored → eligible but for the hire
+    open_app.cv_match_details = {
+        "requirements_assessment": []
+    }  # scored → eligible but for the hire
     db.commit()
 
     captured = {}
 
-    def _fake_engine(
-        *, db, organization_id, role_id, requirement, base_query, limit
-    ):
+    def _fake_engine(*, db, organization_id, role_id, requirement, base_query, limit):
         captured["ids"] = {a.id for a in base_query.all()}
         return {"mode": "rediscovery", "candidates": []}
 
@@ -957,8 +1325,89 @@ def test_screen_pool_handler_excludes_candidate_hired_elsewhere(db):
     ):
         handlers.screen_pool_against_requirement(db, user, requirement_text="banking")
 
-    assert open_app.id not in captured["ids"]   # candidate already placed elsewhere
+    assert open_app.id not in captured["ids"]  # candidate already placed elsewhere
     assert hired_app.id not in captured["ids"]
+
+
+def test_screen_pool_excludes_candidate_hired_in_independent_related_role(db):
+    """A related-role placement is person-wide even without a physical hired app."""
+    user, org = _make_user_and_org(db)
+    owner = Role(organization_id=org.id, name="ATS owner", source="manual")
+    related = Role(
+        organization_id=org.id,
+        name="Independent related hire",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role=owner,
+    )
+    rediscovery_role = Role(
+        organization_id=org.id,
+        name="Rediscovery role",
+        source="manual",
+    )
+    candidate = Candidate(
+        organization_id=org.id,
+        email="related-hire@example.test",
+        full_name="Already Placed",
+        position="Engineer",
+    )
+    db.add_all([owner, related, rediscovery_role, candidate])
+    db.flush()
+    transport = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    scored_open = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=rediscovery_role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        cv_match_details={"requirements_assessment": []},
+    )
+    db.add_all([transport, scored_open])
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=org.id,
+            role_id=related.id,
+            candidate_id=candidate.id,
+            source_application_id=transport.id,
+            ats_application_id=transport.id,
+            status="done",
+            pipeline_stage="advanced",
+            application_outcome="hired",
+            membership_source="initial_snapshot",
+            spec_fingerprint="related-hire-spec",
+        )
+    )
+    db.commit()
+    captured: dict[str, set[int]] = {}
+
+    def _fake_engine(**kwargs):
+        captured["ids"] = {int(app.id) for app in kwargs["base_query"].all()}
+        return {"mode": "rediscovery", "candidates": []}
+
+    with patch(
+        "app.candidate_search.top_candidates.screen_pool_against_requirement",
+        _fake_engine,
+    ):
+        handlers.screen_pool_against_requirement(
+            db,
+            user,
+            requirement_text="banking",
+        )
+
+    assert int(scored_open.id) not in captured["ids"]
 
 
 def test_screen_pool_handler_rejects_empty_requirement(db):
@@ -981,7 +1430,9 @@ def _node(node_id: str, *, label: str = "Person", name: str | None = None) -> di
     }
 
 
-def _edge(source: str, target: str, *, label: str = "WORKED_AT", fact: str = "") -> dict:
+def _edge(
+    source: str, target: str, *, label: str = "WORKED_AT", fact: str = ""
+) -> dict:
     return {
         "source": source,
         "target": target,
@@ -998,9 +1449,9 @@ def test_graph_topology_drops_edges_with_unknown_endpoints():
     payload = GraphPayload(
         nodes=[_node("a"), _node("b"), _node("c")],
         edges=[
-            _edge("a", "b"),                 # both endpoints kept → keep
-            _edge("a", "ghost"),             # target not in nodes → drop
-            _edge("ghost-2", "c"),           # source not in nodes → drop
+            _edge("a", "b"),  # both endpoints kept → keep
+            _edge("a", "ghost"),  # target not in nodes → drop
+            _edge("ghost-2", "c"),  # source not in nodes → drop
         ],
     )
     out = handlers._graph_topology(payload)
@@ -1021,10 +1472,9 @@ def test_graph_topology_caps_at_60_nodes_but_preserves_edge_endpoints():
     nodes = [_node(f"n-{i}") for i in range(80)]
     # Edges 0..49 reference low-index nodes; edges 50..99 reference
     # high-index nodes (which would be dropped by naive slicing).
-    edges = (
-        [_edge(f"n-{i}", f"n-{(i + 1) % 50}") for i in range(50)]
-        + [_edge(f"n-{60 + (i % 20)}", f"n-{60 + ((i + 1) % 20)}") for i in range(50)]
-    )
+    edges = [_edge(f"n-{i}", f"n-{(i + 1) % 50}") for i in range(50)] + [
+        _edge(f"n-{60 + (i % 20)}", f"n-{60 + ((i + 1) % 20)}") for i in range(50)
+    ]
     payload = GraphPayload(nodes=nodes, edges=edges)
     out = handlers._graph_topology(payload)
     assert len(out["nodes"]) <= 60

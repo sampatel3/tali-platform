@@ -1666,7 +1666,9 @@ def test_auto_execute_allows_deterministic_full_scoring_reject(db):
 
 
 @pytest.mark.parametrize("decision_role", ["owner", "related"])
-def test_shared_role_family_deterministic_reject_stays_pending(db, decision_role):
+def test_related_ats_link_does_not_force_deterministic_reject_to_hitl(
+    db, decision_role
+):
     org = _make_org(db)
     owner = _make_role(db, org)
     owner.auto_reject = True
@@ -1684,18 +1686,32 @@ def test_shared_role_family_deterministic_reject_stays_pending(db, decision_role
     db.add(related)
     db.flush()
     role = owner if decision_role == "owner" else related
+    related_contract = decision_role == "related"
     decision = MagicMock(
+        id=991,
+        role_id=int(role.id),
         status="pending",
         evidence={
             "decision_source": "policy",
             "decision_stage": "full_scoring",
-            "source": "score_time_decision",
+            "source": (
+                "related_role_runtime" if related_contract else "score_time_decision"
+            ),
+            "role_state_is_independent": related_contract,
+            "related_role_id": int(role.id) if related_contract else None,
+            "sister_evaluation_id": 771 if related_contract else None,
         },
-        model_version="bulk-deterministic",
+        model_version=(
+            "related-role-deterministic"
+            if related_contract
+            else "bulk-deterministic"
+        ),
         _just_created=True,
     )
 
-    with patch.object(tool_registry.reject_application, "run") as reject:
+    with patch.object(
+        tool_registry, "_auto_execute_decision", return_value=True
+    ) as execute:
         outcome = tool_registry.maybe_auto_execute_decision(
             db,
             role=role,
@@ -1704,10 +1720,17 @@ def test_shared_role_family_deterministic_reject_stays_pending(db, decision_role
             on_policy=True,
         )
 
-    assert outcome["executed"] is False
-    assert outcome["human_confirm_required"] is True
+    assert outcome["executed"] is True
+    assert outcome["human_confirm_required"] is False
     assert decision.status == "pending"
-    reject.assert_not_called()
+    execute.assert_called_once_with(
+        db,
+        role=role,
+        decision=decision,
+        decision_type="reject",
+        _locked_live_role=role,
+        expected_score_generation=None,
+    )
 
 
 def test_auto_reject_does_not_execute_deterministic_assessment_reject(db):

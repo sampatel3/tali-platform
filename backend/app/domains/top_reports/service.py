@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 import re
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -132,6 +132,8 @@ def _scrub_value(value: Any) -> Any:
         return [_scrub_value(item) for item in value]
     if isinstance(value, tuple):
         return [_scrub_value(item) for item in value]
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
     if isinstance(value, str):
         return _redact_public_text(value)
     return value

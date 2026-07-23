@@ -73,7 +73,10 @@ const CandidateGrid = ({ rows, emptyMessage }) => {
     >
       <div className="cp-cand-grid">
         {rows.map((r) => (
-          <CandidateCard key={r.application_id || r.candidate_id || r.frontend_url} row={r} />
+          <CandidateCard
+            key={r.logical_membership_id || r.application_id || r.candidate_id || r.frontend_url}
+            row={r}
+          />
         ))}
       </div>
     </ChatArtifact>

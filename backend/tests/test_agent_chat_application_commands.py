@@ -14,6 +14,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 
 
@@ -256,6 +257,86 @@ def test_internal_note_uses_application_notes_service_and_is_role_scoped(db):
             note="Cross-role note",
         )
     assert exc_info.value.code == "application_not_found"
+
+
+def test_related_application_commands_use_explicit_independent_membership(db):
+    org = _org(db, "related-membership")
+    user = _user(db, org, "related-membership")
+    owner = _role(db, org, "related-owner")
+    related = Role(
+        organization_id=int(org.id),
+        name="Independent Related Role",
+        description="A separate role with its own candidate membership.",
+        source="sister",
+        role_kind="sister",
+        ats_owner_role_id=int(owner.id),
+        agentic_mode_enabled=True,
+        score_threshold=70,
+    )
+    db.add(related)
+    db.flush()
+    member_app = _application(db, org, owner, "related-member")
+    nonmember_app = _application(db, org, owner, "owner-only")
+    membership = SisterRoleEvaluation(
+        organization_id=int(org.id),
+        role_id=int(related.id),
+        candidate_id=int(member_app.candidate_id),
+        source_application_id=int(member_app.id),
+        ats_application_id=int(member_app.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="initial_snapshot",
+        spec_fingerprint="related-membership-spec",
+        role_fit_score=83,
+    )
+    db.add(membership)
+    member_app.deleted_at = datetime.now(timezone.utc)
+    db.flush()
+
+    preview = commands.preview_create_application(
+        db,
+        related,
+        user,
+        candidate_email=member_app.candidate.email,
+    )
+    assert preview["application_exists"] is True
+    assert preview["application_id"] == int(member_app.id)
+    assert preview["blocked_reason"] == "application_exists"
+
+    result = commands.add_internal_note(
+        db,
+        related,
+        user,
+        application_id=int(member_app.id),
+        note="This guidance belongs only to the independent related role.",
+    )
+    event = db.get(CandidateApplicationEvent, int(result["event_id"]))
+    assert event.role_id == related.id
+    assert event.application_id == member_app.id
+    assert event.event_metadata["acting_role_id"] == related.id
+
+    with pytest.raises(commands.ApplicationCommandError) as not_in_pool:
+        commands.add_internal_note(
+            db,
+            related,
+            user,
+            application_id=int(nonmember_app.id),
+            note="Must not leak into the related role.",
+        )
+    assert not_in_pool.value.code == "application_not_found"
+
+    membership.deleted_at = datetime.now(timezone.utc)
+    db.flush()
+    with pytest.raises(commands.ApplicationCommandError) as removed:
+        commands.add_internal_note(
+            db,
+            related,
+            user,
+            application_id=int(member_app.id),
+            note="Removed candidates are no longer actionable.",
+        )
+    assert removed.value.code == "application_not_found"
 
 
 def test_standalone_ats_note_is_blocked_before_serialized_runner(db):

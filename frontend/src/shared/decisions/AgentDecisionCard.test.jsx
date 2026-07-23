@@ -19,7 +19,7 @@ const noop = () => {};
 const baseDecision = {
   id: 1,
   application_id: 7,
-  role_id: 3,
+  role_id: 47,
   candidate_name: 'Tarig Elamin',
   status: 'pending',
   decision_type: 'reject',
@@ -136,8 +136,8 @@ describe('AgentDecisionCard staleness approval gate', () => {
   });
 });
 
-describe('AgentDecisionCard shared candidate-pool context', () => {
-  it('labels the shared provider date as pool entry on a related-role card', () => {
+describe('AgentDecisionCard linked ATS evidence context', () => {
+  it('labels the provider date as linked evidence on a related-role card', () => {
     renderCard({
       ...baseDecision,
       applied_at: '2026-06-30T10:00:00Z',
@@ -145,7 +145,7 @@ describe('AgentDecisionCard shared candidate-pool context', () => {
       evidence: { shared_ats_application: true },
     });
 
-    expect(screen.getByText(/In shared ATS pool since .*2026/i)).toBeInTheDocument();
+    expect(screen.getByText(/Linked ATS application dated .*2026/i)).toBeInTheDocument();
     expect(screen.queryByText(/^Applied .*2026/i)).not.toBeInTheDocument();
   });
 
@@ -161,28 +161,25 @@ describe('AgentDecisionCard shared candidate-pool context', () => {
 });
 
 describe('AgentDecisionCard reject consequence copy', () => {
-  // Parity with the candidate-report rail: a one-click reject must show what
-  // confirming does to the one shared ATS application and linked role family.
-  // Previously the hub card showed nothing.
-  it('names every linked role in the shared reject consequence', () => {
+  it('makes a related-role rejection boundary explicit', () => {
     renderCard(baseDecision);
     expect(
       screen.getByText(
-        /Rejects the shared ATS application across all linked roles: Data Platform Lead #31 \(original\) and AI Engineer #47 \(related\)\./i,
+        /Rejects this candidate only for AI Engineer #47 \(related\)\. The linked ATS application and other roles are unchanged\./i,
       ),
     ).toBeInTheDocument();
     const recommendation = screen.getByRole('button', { name: /reject/i });
     expect(recommendation)
-      .toHaveAttribute('title', expect.stringMatching(/Data Platform Lead #31.*AI Engineer #47/i));
+      .toHaveAttribute('title', expect.stringMatching(/only for AI Engineer #47/i));
     expect(recommendation).toHaveAttribute('data-motion-loop', 'flow');
     expect(recommendation).toHaveAttribute('data-motion-state', 'rest');
   });
 
   it('keeps the generic reject consequence when linked-role metadata is absent', () => {
     renderCard({ ...baseDecision, role_family: undefined });
-    expect(
-      screen.getByText(/Rejects this candidate's ATS application\. If this role shares a candidate pool/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(
+      /Rejects this candidate for this role\. Other roles keep their own candidate status/i,
+    )).toBeInTheDocument();
   });
 
   it('passes role-specific shared-application copy into a reject confirmation', () => {
@@ -203,7 +200,7 @@ describe('AgentDecisionCard reject consequence copy', () => {
       expect.objectContaining({ id: baseDecision.id }),
       expect.objectContaining({
         action: 'reject',
-        body: expect.stringMatching(/Data Platform Lead #31 \(original\).*AI Engineer #47 \(related\)/i),
+        body: expect.stringMatching(/only for AI Engineer #47.*linked ATS application.*unchanged/i),
       }),
     );
   });
@@ -401,12 +398,12 @@ describe('AgentDecisionCard button design-system contract', () => {
     renderCard(baseDecision);
 
     const report = screen.getByRole('link', { name: 'Candidate report' });
-    expect(report).toHaveAttribute('href', '/candidates/7?from=home&view_role_id=3');
+    expect(report).toHaveAttribute('href', '/candidates/7?from=home&view_role_id=47');
     expect(report).toHaveAttribute('target', '_blank');
     expect(report).toHaveClass('taali-btn', 'taali-btn-secondary', 'taali-btn-sm');
 
     const pipeline = screen.getByRole('link', { name: 'Job pipeline' });
-    expect(pipeline).toHaveAttribute('href', '/jobs/3');
+    expect(pipeline).toHaveAttribute('href', '/jobs/47');
     expect(pipeline).toHaveClass('taali-btn', 'taali-btn-secondary', 'taali-btn-sm');
   });
 

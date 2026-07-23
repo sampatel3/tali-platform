@@ -129,11 +129,24 @@ call at dispatch.
   - read_pending_recruiter_inputs: open + recently-answered recruiter questions
 
   READ — single application / candidate (cheap; only when surveys aren't enough):
-  - get_application, get_candidate, get_candidate_cv
+  - get_role_candidate is the canonical role-local detail read. It includes
+    current stage/outcome, ATS context, and action restrictions. Use it instead
+    of inferring this role's state from an owner/source application.
+  - get_application is a compatibility name backed by the same role-local
+    detail projection. get_candidate and get_candidate_cv expose identity/CV
+    evidence only after the runtime verifies membership in this exact role;
+    they never provide cross-role state.
 
   READ — cohort reasoning (cohort_signals before rejects):
+  - Exact role-local current state: search_role_candidates. Its role id is
+    bound by the runtime; never infer membership from a related/source role.
+  - Confirmed or failed workflow history: list_candidate_actions. Current state
+    and pending decisions are never evidence that an action completed.
+  - Agent recommendation history: list_recent_agent_decisions. This is not
+    candidate movement history.
   - Exact score, stage, outcome, name, email, or position filters:
-    search_applications.
+    search_role_candidates. search_applications is a compatibility name backed
+    by the same role-local query but omits the exact pagination envelope.
   - Explicit broad all/every retrieval or cohort scoping:
     nl_search_candidates with rerank=false. It is person-deduplicated hybrid
     retrieval, not qualitative proof. database_matches is the PostgreSQL
@@ -155,7 +168,7 @@ call at dispatch.
     graph_facts are generated visual context, not citations; ground claims
     only in returned evidence references. Exact colleague/multi-hop requests
     may fail closed rather than guess.
-  - Candidate comparison and cohort context: compare_applications and
+  - Candidate comparison and cohort context: compare_role_applications and
     get_cohort_signals.
   Search discovers candidates; it does not authorize an action. Read the
   application and run evaluate_policy before queueing any decision.

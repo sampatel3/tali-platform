@@ -16,7 +16,9 @@ from app.models import (
     Organization,
     Role,
     RoleBrief,
+    SisterRoleEvaluation,
 )
+from app.models.role import ROLE_KIND_SISTER
 from app.platform.config import settings
 from app.services import rate_limit
 from app.services.rate_limit import reset_memory_buckets
@@ -155,6 +157,116 @@ def test_running_prescreen_opted_in_role_resolves_knockout_without_decision_hub(
     assert event.event_metadata["failed_question_ids"] == [question.id]
     assert event.event_metadata["ats_provider"] == "standalone"
     assert event.event_metadata["ats_written"] is False
+
+
+def test_related_role_knockout_rejects_only_its_direct_membership(
+    client, db, monkeypatch
+):
+    acting_role, page, _question = _seed_page(
+        db,
+        agentic=True,
+        auto_reject_pre_screen=True,
+    )
+    owner = Role(
+        organization_id=acting_role.organization_id,
+        name="Original ATS role",
+        source="workable",
+        workable_job_id="knockout-owner",
+        workable_job_data={"state": "published"},
+        agentic_mode_enabled=True,
+        auto_reject_pre_screen=False,
+    )
+    db.add(owner)
+    db.flush()
+    acting_role.role_kind = ROLE_KIND_SISTER
+    acting_role.source = "sister"
+    acting_role.ats_owner_role_id = owner.id
+    sibling = Role(
+        organization_id=acting_role.organization_id,
+        name="Independent sibling role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        agentic_mode_enabled=True,
+        auto_reject_pre_screen=False,
+    )
+    candidate = Candidate(
+        organization_id=acting_role.organization_id,
+        full_name="Related knockout candidate",
+        email="related@knockout.test",
+    )
+    db.add_all([sibling, candidate])
+    db.flush()
+    owner_application = CandidateApplication(
+        organization_id=acting_role.organization_id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        source="workable",
+        workable_candidate_id="owner-candidate-1",
+        pipeline_stage="applied",
+        application_outcome="open",
+    )
+    db.add(owner_application)
+    db.flush()
+    sibling_membership = SisterRoleEvaluation(
+        organization_id=acting_role.organization_id,
+        role_id=sibling.id,
+        candidate_id=candidate.id,
+        source_application_id=owner_application.id,
+        ats_application_id=owner_application.id,
+        membership_source="initial_snapshot",
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        spec_fingerprint="sibling-role-spec",
+        role_fit_score=80,
+    )
+    db.add(sibling_membership)
+    db.commit()
+
+    from app.components.integrations import resolver
+
+    provider_resolution = pytest.fail
+    monkeypatch.setattr(
+        resolver,
+        "resolve_application_ats_provider",
+        lambda *_args, **_kwargs: provider_resolution(
+            "related-role local knockout must not resolve an ATS provider"
+        ),
+    )
+
+    response = _apply(
+        client,
+        page,
+        monkeypatch,
+        email="related@knockout.test",
+    )
+
+    assert response.status_code == 200, response.text
+    direct_application_id = response.json()["application_id"]
+    db.expire_all()
+    direct_application = db.get(CandidateApplication, direct_application_id)
+    acting_membership = (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.role_id == acting_role.id,
+            SisterRoleEvaluation.source_application_id == direct_application_id,
+        )
+        .one()
+    )
+    assert direct_application.role_id == acting_role.id
+    # CandidateApplication is evidence for a related role; its role-local
+    # outcome lives on the explicit membership.
+    assert direct_application.application_outcome == "open"
+    assert acting_membership.application_outcome == "rejected"
+    assert db.get(CandidateApplication, owner_application.id).application_outcome == "open"
+    assert db.get(SisterRoleEvaluation, sibling_membership.id).application_outcome == "open"
+    assert (
+        db.query(AgentDecision)
+        .filter(AgentDecision.application_id == direct_application_id)
+        .count()
+        == 0
+    )
 
 
 @pytest.mark.parametrize(

@@ -67,6 +67,8 @@ def _record_bullhorn_movement_note_failure(
     app: CandidateApplication,
     application_id: int,
     action: str = "related_role_movement_note",
+    role_id: int | None = None,
+    ats_application_id: int | None = None,
 ) -> None:
     """Record an optional-note miss without replaying a confirmed movement."""
     from ....domains.assessments_runtime.pipeline_service import (
@@ -86,6 +88,7 @@ def _record_bullhorn_movement_note_failure(
         append_application_event(
             db,
             app=app,
+            role_id=role_id,
             event_type="bullhorn_movement_note_failed",
             actor_type="system",
             reason=(
@@ -95,6 +98,16 @@ def _record_bullhorn_movement_note_failure(
             metadata={
                 "ats": "bullhorn",
                 "action": action,
+                **(
+                    {"acting_role_id": int(role_id)}
+                    if role_id is not None
+                    else {}
+                ),
+                **(
+                    {"ats_application_id": int(ats_application_id)}
+                    if ats_application_id is not None
+                    else {}
+                ),
             },
         )
         db.commit()
@@ -119,6 +132,7 @@ def _post_confirmed_related_role_bullhorn_note(
     org: Organization,
     app: CandidateApplication,
     *,
+    event_app: CandidateApplication | None = None,
     acting_role: object,
     actor_type: str,
     actor_id: int | None,
@@ -179,12 +193,17 @@ def _post_confirmed_related_role_bullhorn_note(
     _raise_if_failed(result, default_action="note")
     append_application_event(
         db,
-        app=app,
+        app=event_app or app,
+        role_id=int(acting_role.id),
         event_type="bullhorn_note_posted",
         actor_type=actor_type,
         actor_id=actor_id,
         reason="Related-role movement summary posted to Bullhorn",
-        metadata={"bullhorn_candidate_id": bullhorn_candidate_id},
+        metadata={
+            "acting_role_id": int(acting_role.id),
+            "ats_application_id": int(app.id),
+            "bullhorn_candidate_id": bullhorn_candidate_id,
+        },
     )
     db.commit()
     return {"status": "ok", "application_id": application_id}
@@ -203,6 +222,12 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
         append_application_event,
         transition_stage,
     )
+    from ....services.related_role_action_service import (
+        RelatedRoleActionContractError,
+        related_role_ats_action_state,
+        resolve_related_role_ats_action_context,
+        transition_related_role_stage_action,
+    )
     from ....services.workable_actions_service import strict_workable_writes
 
     application_id = int(app.id)
@@ -218,6 +243,142 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
     actor_id = payload.get("actor_id", user_id)
     source = str(payload.get("source") or actor_type)
     target_intent = str(payload.get("target_intent") or "advanced").strip().lower()
+    try:
+        related_context = resolve_related_role_ats_action_context(
+            db,
+            organization_id=int(org.id),
+            ats_application=app,
+            acting_role_id=payload.get("acting_role_id"),
+            source_application_id=payload.get("role_application_id"),
+        )
+    except RelatedRoleActionContractError as exc:
+        raise WorkableWritebackError(
+            action="move",
+            code="related_role_context_invalid",
+            message=str(exc),
+            retriable=False,
+        ) from exc
+    event_app = (
+        related_context.source_application if related_context is not None else app
+    )
+    logical_role_id = (
+        int(related_context.role.id)
+        if related_context is not None
+        else int(app.role_id)
+    )
+
+    def blocked_related_move(codes: list[str], *, reason_code: str) -> dict:
+        append_application_event(
+            db,
+            app=event_app,
+            role_id=logical_role_id,
+            event_type="ats_writeback_restricted",
+            actor_type=actor_type,
+            actor_id=actor_id,
+            target_stage=target_intent,
+            effect_status="blocked",
+            reason="Related-role ATS move was blocked at execution time",
+            metadata={
+                "acting_role_id": logical_role_id,
+                "ats_application_id": int(app.id),
+                "provider": "bullhorn",
+                "op_type": "move_stage",
+                "restriction_codes": codes,
+                "target_stage": target_intent,
+            },
+            idempotency_key=(
+                f"ats_move_blocked:{payload.get('job_run_id')}"
+                if payload.get("job_run_id") is not None
+                else (
+                    f"ats_move_blocked:bullhorn:{event_app.id}:"
+                    f"{logical_role_id}:{target_intent}:{reason_code}"
+                )
+            ),
+        )
+        db.commit()
+        return {
+            "status": "skipped",
+            "reason": reason_code,
+            "application_id": application_id,
+        }
+
+    def reconcile_confirmed_advance(*, already_at_target: bool, remote_status=None) -> None:
+        event_reason = (
+            "Already at the Bullhorn hand-off status"
+            if already_at_target
+            else (reason or "Handed back to Bullhorn")
+        )
+        event_key = (
+            f"bullhorn_handback_reconcile:{event_app.id}:{logical_role_id}"
+            if already_at_target
+            else f"bullhorn_handback:{event_app.id}:{logical_role_id}"
+        )
+        metadata = {
+            "bullhorn_status": remote_status,
+            "ats_application_id": int(app.id),
+            **(
+                {"acting_role_id": logical_role_id}
+                if related_context is not None
+                else {}
+            ),
+        }
+        if related_context is not None:
+            transition_related_role_stage_action(
+                db,
+                application=event_app,
+                acting_role_id=logical_role_id,
+                to_stage="advanced",
+                source=source,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                reason=event_reason,
+                metadata=metadata,
+                idempotency_key=event_key,
+            )
+            return
+        transition_stage(
+            db,
+            app=app,
+            to_stage="advanced",
+            source=source,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            reason=event_reason,
+            metadata=metadata,
+            idempotency_key=event_key,
+        )
+
+    if related_context is not None:
+        action_state = related_role_ats_action_state(related_context)
+        local_codes = list(action_state["local_codes"])
+        if local_codes == ["role_pipeline_stage_advanced"]:
+            return {
+                "status": "skipped",
+                "reason": "role_already_advanced",
+                "application_id": application_id,
+            }
+        if local_codes:
+            return blocked_related_move(
+                local_codes,
+                reason_code="related_role_application_resolved",
+            )
+        hard_codes = list(action_state["hard_restriction_codes"])
+        if hard_codes:
+            return blocked_related_move(
+                hard_codes,
+                reason_code="related_role_ats_write_restricted",
+            )
+        if bool(action_state["post_handover"]):
+            reconcile_confirmed_advance(
+                already_at_target=True,
+                remote_status=getattr(app, "bullhorn_status", None),
+            )
+            db.commit()
+            return {
+                "status": "skipped",
+                "reason": "already_at_target",
+                "application_id": application_id,
+            }
     with strict_workable_writes():
         result = provider.move_application(
             candidate_id=str(app.bullhorn_job_submission_id),
@@ -227,20 +388,9 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
     _raise_if_failed(result, default_action="move")
     if result.get("skipped") or result.get("code") == "already_at_target":
         if target_intent in {"advanced", "advance", "skip_advanced"}:
-            transition_stage(
-                db,
-                app=app,
-                to_stage="advanced",
-                source=source,
-                actor_type=actor_type,
-                actor_id=actor_id,
-                reason="Already at the Bullhorn hand-off status",
-                metadata={
-                    "bullhorn_status": result.get("config", {}).get(
-                        "remote_status"
-                    )
-                },
-                idempotency_key=f"bullhorn_handback_reconcile:{app.id}",
+            reconcile_confirmed_advance(
+                already_at_target=True,
+                remote_status=result.get("config", {}).get("remote_status"),
             )
             db.commit()
         return {
@@ -250,28 +400,33 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
         }
     append_application_event(
         db,
-        app=app,
+        app=event_app,
+        role_id=logical_role_id,
         event_type="bullhorn_moved",
         actor_type=actor_type,
         actor_id=actor_id,
         reason=reason or "Candidate handed back to Bullhorn",
+        target_stage=(
+            str(result.get("config", {}).get("remote_status") or "").strip()
+            or target_intent
+        ),
+        effect_status="confirmed",
         metadata={
             "bullhorn_status": result.get("config", {}).get("remote_status"),
             "bullhorn_job_submission_id": app.bullhorn_job_submission_id,
             "taali_intent": target_intent,
+            "ats_application_id": int(app.id),
+            **(
+                {"acting_role_id": logical_role_id}
+                if related_context is not None
+                else {}
+            ),
         },
     )
     if target_intent in {"advanced", "advance", "skip_advanced"}:
-        transition_stage(
-            db,
-            app=app,
-            to_stage="advanced",
-            source=source,
-            actor_type=actor_type,
-            actor_id=actor_id,
-            reason=reason or "Handed back to Bullhorn",
-            metadata={"bullhorn_status": result.get("config", {}).get("remote_status")},
-            idempotency_key=f"bullhorn_handback:{app.id}",
+        reconcile_confirmed_advance(
+            already_at_target=False,
+            remote_status=result.get("config", {}).get("remote_status"),
         )
     # Checkpoint the confirmed status move before the optional movement note.
     # A note failure must not retry or invalidate the provider movement.
@@ -295,6 +450,7 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
                     db,
                     org,
                     app,
+                    event_app=event_app,
                     acting_role=acting_role,
                     actor_type=actor_type,
                     actor_id=actor_id,
@@ -314,7 +470,11 @@ def run_move_stage(db: Session, org: Organization, app: CandidateApplication, pa
                     type(exc).__name__,
                 )
                 _record_bullhorn_movement_note_failure(
-                    db, app=app, application_id=application_id
+                    db,
+                    app=event_app,
+                    application_id=application_id,
+                    role_id=logical_role_id,
+                    ats_application_id=int(app.id),
                 )
     return {"status": "ok", "application_id": application_id}
 

@@ -127,6 +127,7 @@ def test_explicit_cv_authority_is_scoped_to_one_changed_application(db):
 
     db.expire_all()
     assert result.changed_application_ids == (target.id, sibling.id)
+    assert db.query(SisterRoleEvaluation).count() == 2
     assert db.get(SisterRoleEvaluation, target_evaluation.id).status == "pending"
     assert (
         db.get(SisterRoleEvaluation, sibling_evaluation.id).status
@@ -152,7 +153,7 @@ def test_same_text_reupload_timestamp_is_a_real_owner_input_change(db):
         cv_text="Identical extracted text",
         cv_uploaded_at=old_uploaded_at,
     )
-    owner, _related = _role_pair(
+    owner, related = _role_pair(
         db, organization_id=org.id, suffix="same-text"
     )
     db.add(candidate)
@@ -168,6 +169,19 @@ def test_same_text_reupload_timestamp_is_a_real_owner_input_change(db):
         cv_match_score=79.0,
     )
     db.add(application)
+    db.flush()
+    evaluation = SisterRoleEvaluation(
+        organization_id=org.id,
+        role_id=related.id,
+        source_application_id=application.id,
+        status="done",
+        pipeline_stage="review",
+        spec_fingerprint=_fingerprint_for_test(related.job_spec_text),
+        cv_fingerprint=_fingerprint_for_test(application.cv_text),
+        role_fit_score=79.0,
+        scored_at=old_uploaded_at,
+    )
+    db.add(evaluation)
     db.commit()
 
     before = capture_candidate_cv_input_snapshot(
@@ -186,6 +200,10 @@ def test_same_text_reupload_timestamp_is_a_real_owner_input_change(db):
     )
 
     assert result.changed_application_ids == (application.id,)
+    assert result.related_evaluation_ids == ()
+    db.refresh(evaluation)
+    assert evaluation.status == "done"
+    assert evaluation.role_fit_score == 79.0
     assert (
         db.query(CvScoreJob)
         .filter(
@@ -195,3 +213,9 @@ def test_same_text_reupload_timestamp_is_a_real_owner_input_change(db):
         .count()
         == 1
     )
+
+
+def _fingerprint_for_test(value: object) -> str:
+    import hashlib
+
+    return hashlib.sha256(str(value or "").strip().encode("utf-8")).hexdigest()

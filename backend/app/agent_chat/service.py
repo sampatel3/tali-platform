@@ -30,6 +30,14 @@ from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.role import Role
 from ..models.user import User
+from ..services.decision_membership import (
+    LiveLogicalDecisionScope,
+    resolve_live_logical_decision_scope,
+)
+from ..services.needs_input_membership import (
+    LiveLogicalNeedsInputScope,
+    resolve_live_logical_needs_input_scope,
+)
 from ..services.workspace_agent_control import workspace_agent_pause_state
 
 _VISIBLE_MESSAGE_KINDS = (
@@ -188,14 +196,24 @@ def mark_read(db: Session, *, conversation: AgentConversation, user: User) -> No
     db.flush()
 
 
-def _counts_by_role(db: Session, role_ids: list[int]) -> tuple[dict[int, int], dict[int, int]]:
+def _counts_by_role(
+    db: Session,
+    role_ids: list[int],
+    *,
+    decision_scope: LiveLogicalDecisionScope,
+    needs_input_scope: LiveLogicalNeedsInputScope,
+) -> tuple[dict[int, int], dict[int, int]]:
     """(pending_decisions_by_role, open_questions_by_role) for the given roles."""
     if not role_ids:
         return {}, {}
     pending = {
         int(rid): int(n)
         for rid, n in (
-            db.query(AgentDecision.role_id, func.count(AgentDecision.id))
+            decision_scope.query(
+                db,
+                AgentDecision.role_id,
+                func.count(AgentDecision.id),
+            )
             .filter(
                 AgentDecision.role_id.in_(role_ids),
                 AgentDecision.status == "pending",
@@ -207,7 +225,11 @@ def _counts_by_role(db: Session, role_ids: list[int]) -> tuple[dict[int, int], d
     questions = {
         int(rid): int(n)
         for rid, n in (
-            db.query(AgentNeedsInput.role_id, func.count(AgentNeedsInput.id))
+            needs_input_scope.query(
+                db,
+                AgentNeedsInput.role_id,
+                func.count(AgentNeedsInput.id),
+            )
             .filter(
                 AgentNeedsInput.role_id.in_(role_ids),
                 AgentNeedsInput.resolved_at.is_(None),
@@ -339,7 +361,20 @@ def list_agent_conversations(
             if last_read is None or (created_at and created_at > last_read):
                 unread[cid] = unread.get(cid, 0) + 1
 
-    pending_by_role, questions_by_role = _counts_by_role(db, role_ids)
+    decision_scope = resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(organization_id),
+    )
+    needs_input_scope = resolve_live_logical_needs_input_scope(
+        db,
+        organization_id=int(organization_id),
+    )
+    pending_by_role, questions_by_role = _counts_by_role(
+        db,
+        role_ids,
+        decision_scope=decision_scope,
+        needs_input_scope=needs_input_scope,
+    )
     # The workspace switch is an execution overlay, not a bulk edit of every
     # role. Resolve it once for the whole sidebar response, then expose both
     # the effective state and the untouched role-local desired state on each

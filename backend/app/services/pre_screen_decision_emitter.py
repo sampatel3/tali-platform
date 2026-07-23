@@ -28,6 +28,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -41,6 +42,10 @@ from ..models.candidate_application import CandidateApplication
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.role import Role
 from ..platform.config import settings
+from .agent_decision_admission import (
+    latest_active_decision,
+    lock_decision_application,
+)
 from .decision_presentation_service import normalize_candidate_summary
 
 logger = logging.getLogger("taali.pre_screen_decision_emitter")
@@ -332,18 +337,11 @@ def queue_pre_screen_reject(
         # key, so apps that already had an agent-emitted ``reject`` row
         # got a *second* row from the backfill — recruiter saw the same
         # candidate twice. One pending per app, always.
-        existing_pending = (
-            db.query(AgentDecision)
-            .filter(
-                AgentDecision.application_id == int(application.id),
-                AgentDecision.organization_id == int(organization_id),
-                AgentDecision.role_id == int(role.id),
-                AgentDecision.status.in_(
-                    ("pending", "processing", "reverted_for_feedback")
-                ),
-            )
-            .order_by(AgentDecision.created_at.desc())
-            .first()
+        existing_pending = latest_active_decision(
+            db,
+            organization_id=int(organization_id),
+            role_id=int(role.id),
+            application_id=int(application.id),
         )
         if existing_pending is not None:
             return existing_pending
@@ -365,6 +363,7 @@ def queue_pre_screen_reject(
             organization_id=int(organization_id),
             role_id=int(role.id),
             application_id=int(application.id),
+            candidate_id=int(application.candidate_id),
             agent_run_id=None,  # system-emitted; no agent cycle ran
             decision_type=_DECISION_TYPE,
             recommendation=_DECISION_TYPE,
@@ -398,13 +397,20 @@ def queue_pre_screen_reject(
             # Organization). A full rollback would release it and reopen the
             # intent-edit race before the existing row is revived.
             nested.rollback()
-            existing = (
-                db.query(AgentDecision)
-                .filter(AgentDecision.idempotency_key == key)
-                .populate_existing()
-                .with_for_update()
-                .first()
+            existing = latest_active_decision(
+                db,
+                organization_id=int(organization_id),
+                role_id=int(role.id),
+                application_id=int(application.id),
             )
+            if existing is None:
+                existing = (
+                    db.query(AgentDecision)
+                    .filter(AgentDecision.idempotency_key == key)
+                    .populate_existing()
+                    .with_for_update()
+                    .first()
+                )
             # Revive a previously system-terminated card only when ALL hold:
             #  1. status is 'discarded' OR 'expired' with NO human resolver. A
             #     recruiter resolution (``overridden`` / ``approved`` /
@@ -454,6 +460,8 @@ def queue_pre_screen_reject(
             CandidateApplicationEvent(
                 application_id=int(application.id),
                 organization_id=int(organization_id),
+                role_id=int(role.id),
+                agent_decision_id=int(decision.id),
                 event_type="agent_decision_queued",
                 actor_type="system",
                 actor_id=None,
@@ -508,15 +516,20 @@ def queue_knockout_reject(
     if normalize_pipeline_key(getattr(application, "pipeline_stage", None)) == "sourced":
         return None
     try:
+        locked_application = lock_decision_application(
+            db,
+            organization_id=int(organization_id),
+            application_id=int(application.id),
+        )
+        if locked_application is None:
+            return None
+        application = locked_application
         # One pending decision per app — never double-card a candidate.
-        existing_pending = (
-            db.query(AgentDecision)
-            .filter(
-                AgentDecision.application_id == int(application.id),
-                AgentDecision.status == "pending",
-            )
-            .order_by(AgentDecision.created_at.desc())
-            .first()
+        existing_pending = latest_active_decision(
+            db,
+            organization_id=int(organization_id),
+            role_id=int(role.id),
+            application_id=int(application.id),
         )
         if existing_pending is not None:
             return existing_pending
@@ -587,6 +600,7 @@ def queue_knockout_reject(
             organization_id=int(organization_id),
             role_id=int(role.id),
             application_id=int(application.id),
+            candidate_id=int(application.candidate_id),
             agent_run_id=None,  # system-emitted; no agent cycle ran
             decision_type=_DECISION_TYPE,
             recommendation=_DECISION_TYPE,
@@ -612,6 +626,14 @@ def queue_knockout_reject(
         except IntegrityError:
             # A concurrent request inserted the card between the pre-check and
             # this flush. Return the winning row rather than duplicating.
+            winner = latest_active_decision(
+                db,
+                organization_id=int(organization_id),
+                role_id=int(role.id),
+                application_id=int(application.id),
+            )
+            if winner is not None:
+                return winner
             return (
                 db.query(AgentDecision)
                 .filter(AgentDecision.idempotency_key == key)
@@ -622,6 +644,8 @@ def queue_knockout_reject(
             CandidateApplicationEvent(
                 application_id=int(application.id),
                 organization_id=int(organization_id),
+                role_id=int(role.id),
+                agent_decision_id=int(decision.id),
                 event_type="agent_decision_queued",
                 actor_type="system",
                 actor_id=None,
@@ -1254,6 +1278,7 @@ def discard_pending_decisions_for_app(
     reason: str,
     decision_types: tuple[str, ...] | None = None,
     include_processing: bool = False,
+    role_id: int | None = None,
 ) -> int:
     """Discard pending agent decisions for an application — used when the
     application closes (rejected / hired / withdrawn). A closed candidate's
@@ -1264,24 +1289,32 @@ def discard_pending_decisions_for_app(
     types (e.g. ``("reject", "skip_assessment_reject")`` to clear only stale
     reject cards while leaving legitimate advance/send cards live, for a
     candidate who is being interviewed but not yet terminally resolved).
-    Defaults to all pending decisions. ``include_processing`` is reserved for
-    a terminal shared-application transition: after the canonical application
-    row is locked, sibling workers have not started their side effect yet and
-    their accepted cards must be superseded rather than returned to the queue.
+    Defaults to pending and taught/reverted decisions. ``include_processing``
+    is reserved for a terminal shared-application transition: after the
+    canonical application row is locked, sibling workers have not started
+    their side effect yet and their accepted cards must be superseded rather
+    than returned to the queue.
 
-    Never touches a human-resolved row (defensive — a pending row shouldn't
-    have a human resolver). Returns the number discarded. Does NOT commit;
-    the caller's transaction owns that.
+    A taught/reverted row is the exception to the human-resolver guard because
+    it is deliberately back in the live queue. Returns the number discarded.
+    Does NOT commit; the caller's transaction owns that.
     """
     query = db.query(AgentDecision).filter(
         AgentDecision.application_id == int(application_id),
         AgentDecision.status.in_(
-            ("pending", "processing") if include_processing else ("pending",)
+            ("pending", "processing", "reverted_for_feedback")
+            if include_processing
+            else ("pending", "reverted_for_feedback")
         ),
-        AgentDecision.resolved_by_user_id.is_(None),
+        or_(
+            AgentDecision.resolved_by_user_id.is_(None),
+            AgentDecision.status == "reverted_for_feedback",
+        ),
     )
     if decision_types:
         query = query.filter(AgentDecision.decision_type.in_(tuple(decision_types)))
+    if role_id is not None:
+        query = query.filter(AgentDecision.role_id == int(role_id))
     cards = query.all()
     now = datetime.now(timezone.utc)
     discarded = 0

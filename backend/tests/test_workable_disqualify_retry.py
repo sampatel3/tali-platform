@@ -102,6 +102,7 @@ def test_retry_task_skips_when_already_disqualified(db):
         CandidateApplicationEvent(
             application_id=app_id,
             organization_id=int(org.id),
+            role_id=int(role.id),
             event_type="workable_disqualified",
             actor_type="system",
         )

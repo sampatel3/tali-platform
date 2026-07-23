@@ -38,9 +38,13 @@ def activation_readiness(
     activation verifies the Beat→worker canary, live usage metering, a usable
     model credential, native application ingress when no ATS job is linked,
     and the assessment execution/delivery dependencies only when that stage
-    is explicitly enabled. Optional policy arguments are a read-only preview
-    of a role PATCH: Turn on can validate the exact incoming cap and granular
-    policy without mutating the ORM row before every readiness rail passes.
+    is explicitly enabled. Related roles remain runnable without their
+    optional ATS transport: candidate membership, scoring, decisions, and
+    local funnel state belong to the related role, while external writes are
+    authorized against per-candidate restrictions at action time. Optional
+    policy arguments are a read-only preview of a role PATCH: Turn on can
+    validate the exact incoming cap and granular policy without mutating the
+    ORM row before every readiness rail passes.
     """
     from ..platform.startup_validation import is_production_like
 
@@ -170,7 +174,7 @@ def activation_readiness(
 
     session = object_session(role)
     related_role = str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER
-    ats_role = role
+    ats_role: Role | None = role
     if related_role:
         ats_role = (
             session.query(Role)
@@ -183,17 +187,10 @@ def activation_readiness(
             if session is not None and getattr(role, "ats_owner_role_id", None)
             else None
         )
-        if ats_role is None:
-            reasons.append(
-                {
-                    "code": "related_ats_owner_missing",
-                    "detail": (
-                        "Reconnect this related role to its original ATS role "
-                        "before turning on the agent."
-                    ),
-                }
-            )
-            ats_role = role
+        # A missing/deleted owner removes an optional external write route; it
+        # does not remove this role's membership or local operating authority.
+        # Candidate action tools surface that restriction when an ATS write is
+        # requested instead of disabling the entire Agent.
     active_tasks = [
         task
         for task in (getattr(role, "tasks", None) or [])
@@ -351,7 +348,11 @@ def activation_readiness(
             else bool(auto_reject_pre_screen)
         )
 
-    if org is not None and getattr(ats_role, "workable_job_id", None):
+    if (
+        org is not None
+        and not related_role
+        and getattr(ats_role, "workable_job_id", None)
+    ):
         workable_reject_enabled = bool(
             not related_role
             and (effective_auto_reject or effective_auto_reject_pre_screen)
@@ -375,7 +376,9 @@ def activation_readiness(
         workable_writable = bool(
             workable_connected and workable_writeback_enabled(org)
         )
-        # This connection is the inbound candidate feed too. Even when all
+        # This connection is the inbound candidate feed for the ATS-owned role.
+        # Related roles have explicit, independently managed membership and do
+        # not enter this provider preflight. Even when all
         # write actions are deliberately off, a disconnected external role
         # cannot receive future applications or recruiter-side stage changes,
         # so it is not autonomous. Require connectivity for every linked role;
@@ -430,7 +433,9 @@ def activation_readiness(
                 )
 
     bullhorn_role = bool(
-        not getattr(ats_role, "workable_job_id", None)
+        not related_role
+        and ats_role is not None
+        and not getattr(ats_role, "workable_job_id", None)
         and (
             str(getattr(ats_role, "source", None) or "").strip().lower()
             == "bullhorn"

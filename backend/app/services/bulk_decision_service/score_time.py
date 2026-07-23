@@ -91,7 +91,9 @@ def ensure_deterministic_decision(
             .filter(
                 AgentDecision.role_id == int(role.id),
                 AgentDecision.application_id == int(app.id),
-                AgentDecision.status.in_(("pending", "processing")),
+                AgentDecision.status.in_(
+                    ("pending", "processing", "reverted_for_feedback")
+                ),
             )
             .first()
         )

@@ -11,7 +11,12 @@ from __future__ import annotations
 import io
 from datetime import datetime, timedelta, timezone
 
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
+from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.share_link import ShareLink
+from app.models.sister_role_evaluation import SisterRoleEvaluation
+from app.models.user import User
 from tests.conftest import auth_headers, TestingSessionLocal
 
 
@@ -47,6 +52,89 @@ def _make_role_and_application(client, headers, candidate_email="share-link@exam
     return role, app_resp.json()
 
 
+def _make_related_share_membership(db, *, user_email: str):
+    user = db.query(User).filter(User.email == user_email).one()
+    owner = Role(
+        organization_id=int(user.organization_id),
+        name="Physical ATS Owner",
+        source="workable",
+        workable_job_id=f"SHARE-OWNER-{id(db)}",
+        job_spec_text="Owner role specification.",
+    )
+    db.add(owner)
+    db.flush()
+    related = Role(
+        organization_id=int(user.organization_id),
+        name="Logical Reliability Role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        related_source_role_id=int(owner.id),
+        ats_owner_role_id=int(owner.id),
+        job_spec_text="Related reliability engineering specification.",
+    )
+    db.add(related)
+    db.flush()
+    candidate = Candidate(
+        organization_id=int(user.organization_id),
+        email=f"related-share-{id(db)}@example.com",
+        full_name="Related Share Candidate",
+        cv_text="Python reliability and production incident evidence.",
+    )
+    db.add(candidate)
+    db.flush()
+    application = CandidateApplication(
+        organization_id=int(user.organization_id),
+        candidate_id=int(candidate.id),
+        role_id=int(owner.id),
+        status="advanced",
+        pipeline_stage="advanced",
+        pipeline_stage_source="sync",
+        application_outcome="rejected",
+        source="workable",
+        cv_text=candidate.cv_text,
+        taali_score_cache_100=12,
+        rank_score=13,
+        pre_screen_score_100=14,
+        requirements_fit_score_100=15,
+        cv_match_score=16,
+        cv_match_details={"summary": "Physical owner evidence"},
+        pre_screen_evidence={"summary": "Physical owner pre-screen evidence"},
+    )
+    db.add(application)
+    db.flush()
+    evaluation = SisterRoleEvaluation(
+        organization_id=int(user.organization_id),
+        role_id=int(related.id),
+        candidate_id=int(candidate.id),
+        source_application_id=int(application.id),
+        ats_application_id=int(application.id),
+        status="done",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        application_outcome_source="recruiter",
+        membership_source="initial_snapshot",
+        spec_fingerprint="related-share-spec",
+        cv_fingerprint="related-share-cv",
+        role_fit_score=91,
+        summary="Logical role evidence summary",
+        details={
+            "summary": "Logical role evidence summary",
+            "requirements_match_score_100": 88,
+            "requirements": [
+                {
+                    "requirement": "Production reliability",
+                    "evidence_quote": "Led production incident response.",
+                }
+            ],
+            "integrity_signals": {"recruiter_only": True},
+        },
+    )
+    db.add(evaluation)
+    db.commit()
+    return owner, related, application, evaluation
+
+
 def test_create_list_revoke_share_link(client):
     headers, _ = auth_headers(client)
     _, application = _make_role_and_application(client, headers)
@@ -59,6 +147,7 @@ def test_create_list_revoke_share_link(client):
     assert create.status_code == 200, create.text
     link = create.json()
     assert link["mode"] == "client"
+    assert link["view_role_id"] is None
     assert link["expiry_preset"] == "7d"
     assert link["active"] is True
     assert link["revoked"] is False
@@ -74,6 +163,7 @@ def test_create_list_revoke_share_link(client):
     body = listing.json()
     assert len(body["links"]) == 1
     assert body["links"][0]["id"] == link["id"]
+    assert body["links"][0]["view_role_id"] is None
 
     # Mint a second link in a different mode + expiry to confirm
     # multiple active links per application is the new contract.
@@ -314,3 +404,229 @@ def test_share_links_are_org_scoped(client):
         headers=headers_b,
     )
     assert revoke_b.status_code == 404
+
+
+def test_related_role_share_persists_and_serializes_logical_role_context(client, db):
+    headers, email = auth_headers(client)
+    _owner, related, application, _evaluation = _make_related_share_membership(
+        db,
+        user_email=email,
+    )
+
+    recruiter_link = client.post(
+        f"/api/v1/applications/{application.id}/share-links",
+        json={
+            "mode": "recruiter",
+            "expiry": "7d",
+            "view_role_id": int(related.id),
+        },
+        headers=headers,
+    )
+    assert recruiter_link.status_code == 200, recruiter_link.text
+    assert recruiter_link.json()["view_role_id"] == int(related.id)
+    persisted = db.get(ShareLink, int(recruiter_link.json()["id"]))
+    assert persisted.view_role_id == int(related.id)
+    listing = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["links"][0]["view_role_id"] == int(related.id)
+
+    recruiter_view = client.get(f"/share/{recruiter_link.json()['token']}")
+    assert recruiter_view.status_code == 200, recruiter_view.text
+    recruiter_payload = recruiter_view.json()
+    assert recruiter_payload["view_role_id"] == int(related.id)
+    inner = recruiter_payload["application"]
+    assert inner["role_id"] == int(related.id)
+    assert inner["role_name"] == "Logical Reliability Role"
+    assert inner["pipeline_stage"] == "review"
+    assert inner["application_outcome"] == "open"
+    assert inner["taali_score"] == 91
+    assert inner["rank_score"] == 91
+    assert inner["pre_screen_score"] == 91
+    assert inner["requirements_fit_score"] == 88
+    assert inner["cv_match_score"] == 91
+    assert inner["cv_match_details"]["summary"] == "Logical role evidence summary"
+    assert inner["cv_match_details"]["requirements"][0]["evidence_quote"] == (
+        "Led production incident response."
+    )
+    assert "source_role_score" not in inner
+    assert "pre_screen_evidence" not in inner
+
+    client_link = client.post(
+        f"/api/v1/applications/{application.id}/share-links",
+        json={
+            "mode": "client",
+            "expiry": "7d",
+            "view_role_id": int(related.id),
+        },
+        headers=headers,
+    )
+    assert client_link.status_code == 200, client_link.text
+    client_view = client.get(f"/share/{client_link.json()['token']}")
+    assert client_view.status_code == 200, client_view.text
+    client_inner = client_view.json()["application"]
+    assert client_inner["role_id"] == int(related.id)
+    assert client_inner["taali_score"] == 91
+    assert client_inner["client_share_summary"]["role"] == (
+        "Logical Reliability Role"
+    )
+    assert client_inner["client_share_summary"]["score_100"] == 91
+    assert "integrity_signals" not in client_inner["cv_match_details"]
+    assert client_inner["cv_match_details"]["requirements"][0]["requirement"] == (
+        "Production reliability"
+    )
+
+
+def test_related_role_share_lifecycle_survives_deleted_evidence(client, db):
+    """A live logical membership—not its evidence-row lifecycle—owns links."""
+
+    headers, email = auth_headers(client)
+    _owner, related, application, _evaluation = _make_related_share_membership(
+        db,
+        user_email=email,
+    )
+    application.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    created = client.post(
+        f"/api/v1/applications/{application.id}/share-links",
+        json={
+            "mode": "recruiter",
+            "expiry": "7d",
+            "view_role_id": int(related.id),
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    link = created.json()
+    assert link["view_role_id"] == int(related.id)
+
+    # The legacy physical context cannot resurrect the deleted evidence row.
+    unscoped = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        headers=headers,
+    )
+    assert unscoped.status_code == 404
+
+    listing = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert listing.status_code == 200, listing.text
+    assert [row["id"] for row in listing.json()["links"]] == [link["id"]]
+
+    public_view = client.get(f"/share/{link['token']}")
+    assert public_view.status_code == 200, public_view.text
+    assert public_view.json()["application"]["role_id"] == int(related.id)
+
+    revoked = client.delete(
+        f"/api/v1/share-links/{link['id']}",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["revoked"] is True
+
+    after_revoke = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert after_revoke.status_code == 200, after_revoke.text
+    assert after_revoke.json()["links"][0]["revoked"] is True
+    assert client.get(f"/share/{link['token']}").status_code == 410
+
+
+def test_related_role_share_requires_a_live_exact_membership(client, db):
+    headers, email = auth_headers(client)
+    _owner, related, application, evaluation = _make_related_share_membership(
+        db,
+        user_email=email,
+    )
+    unrelated = Role(
+        organization_id=int(related.organization_id),
+        name="Unrelated Logical Role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        related_source_role_id=int(related.related_source_role_id),
+        ats_owner_role_id=int(related.ats_owner_role_id),
+        job_spec_text="A separate logical role.",
+    )
+    db.add(unrelated)
+    db.commit()
+
+    wrong_role = client.post(
+        f"/api/v1/applications/{application.id}/share-links",
+        json={
+            "mode": "client",
+            "expiry": "7d",
+            "view_role_id": int(unrelated.id),
+        },
+        headers=headers,
+    )
+    assert wrong_role.status_code == 404
+
+    wrong_role_listing = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        params={"view_role_id": int(unrelated.id)},
+        headers=headers,
+    )
+    assert wrong_role_listing.status_code == 404
+
+    valid = client.post(
+        f"/api/v1/applications/{application.id}/share-links",
+        json={
+            "mode": "client",
+            "expiry": "7d",
+            "view_role_id": int(related.id),
+        },
+        headers=headers,
+    )
+    assert valid.status_code == 200, valid.text
+
+    wrong_role_revoke = client.delete(
+        f"/api/v1/share-links/{valid.json()['id']}",
+        params={"view_role_id": int(unrelated.id)},
+        headers=headers,
+    )
+    assert wrong_role_revoke.status_code == 404
+
+    evaluation.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    removed_listing = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert removed_listing.status_code == 404
+
+    unavailable = client.get(f"/share/{valid.json()['token']}")
+    assert unavailable.status_code == 404
+
+    removed_revoke = client.delete(
+        f"/api/v1/share-links/{valid.json()['id']}",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert removed_revoke.status_code == 404
+
+    removed_create = client.post(
+        f"/api/v1/applications/{application.id}/share-links",
+        json={
+            "mode": "client",
+            "expiry": "7d",
+            "view_role_id": int(related.id),
+        },
+        headers=headers,
+    )
+    assert removed_create.status_code == 404
+
+    db.expire_all()
+    persisted = db.get(ShareLink, int(valid.json()["id"]))
+    assert persisted.view_count == 0
+    assert persisted.revoked_at is None

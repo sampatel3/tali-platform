@@ -20,6 +20,7 @@ from typing import Any
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..models.agent_conversation import (
     AUTHOR_ROLE_USER,
     AgentConversation,
@@ -34,6 +35,10 @@ from ..models.agent_needs_input import AgentNeedsInput
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..models.role_criterion import RoleCriterion
+from ..models.sister_role_evaluation import SisterRoleEvaluation
+from ..services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 from .draft_tasks import count_role_drafts
 from .health import role_health_check
 from .service import conversation_agent_working, post_agent_message
@@ -84,9 +89,12 @@ def _digest(value: Any) -> str:
 
 def _open_questions(db: Session, role: Role) -> list[AgentNeedsInput]:
     rows = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(role.organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == int(role.organization_id),
             AgentNeedsInput.role_id == int(role.id),
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),
@@ -103,14 +111,32 @@ def _open_questions(db: Session, role: Role) -> list[AgentNeedsInput]:
     )
 
 
-def _unsnoozed_decisions(db: Session, role: Role) -> list[AgentDecision]:
-    now = datetime.now(timezone.utc)
-    return (
+def _live_pending_decision_query(db: Session, role: Role):
+    scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+    )
+    query = (
         db.query(AgentDecision)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == AgentDecision.application_id,
+        )
         .filter(
             AgentDecision.organization_id == int(role.organization_id),
             AgentDecision.role_id == int(role.id),
             AgentDecision.status == "pending",
+        )
+    )
+    return scope.scope_visible_roster(query)
+
+
+def _unsnoozed_decisions(db: Session, role: Role) -> list[AgentDecision]:
+    now = datetime.now(timezone.utc)
+    return (
+        _live_pending_decision_query(db, role)
+        .filter(
             or_(
                 AgentDecision.snoozed_until.is_(None),
                 AgentDecision.snoozed_until <= now,
@@ -125,11 +151,9 @@ def _unsnoozed_decisions(db: Session, role: Role) -> list[AgentDecision]:
 def _unsnoozed_decision_count(db: Session, role: Role) -> int:
     now = datetime.now(timezone.utc)
     return int(
-        db.query(func.count(AgentDecision.id))
+        _live_pending_decision_query(db, role)
+        .with_entities(func.count(AgentDecision.id))
         .filter(
-            AgentDecision.organization_id == int(role.organization_id),
-            AgentDecision.role_id == int(role.id),
-            AgentDecision.status == "pending",
             or_(
                 AgentDecision.snoozed_until.is_(None),
                 AgentDecision.snoozed_until <= now,
@@ -144,9 +168,12 @@ def _source_signal(db: Session, role: Role) -> tuple[str, int]:
     """Cheap material-state token used to avoid running health checks on polls."""
 
     question_count, question_max = (
-        db.query(func.count(AgentNeedsInput.id), func.max(AgentNeedsInput.id))
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(func.count(AgentNeedsInput.id), func.max(AgentNeedsInput.id)),
+            organization_id=int(role.organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == int(role.organization_id),
             AgentNeedsInput.role_id == int(role.id),
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),
@@ -155,11 +182,9 @@ def _source_signal(db: Session, role: Role) -> tuple[str, int]:
     )
     now = datetime.now(timezone.utc)
     decision_count, decision_max = (
-        db.query(func.count(AgentDecision.id), func.max(AgentDecision.id))
+        _live_pending_decision_query(db, role)
+        .with_entities(func.count(AgentDecision.id), func.max(AgentDecision.id))
         .filter(
-            AgentDecision.organization_id == int(role.organization_id),
-            AgentDecision.role_id == int(role.id),
-            AgentDecision.status == "pending",
             or_(
                 AgentDecision.snoozed_until.is_(None),
                 AgentDecision.snoozed_until <= now,
@@ -167,20 +192,41 @@ def _source_signal(db: Session, role: Role) -> tuple[str, int]:
         )
         .one()
     )
-    app_count, app_max_id, app_updated = (
-        db.query(
-            func.count(CandidateApplication.id),
-            func.max(CandidateApplication.id),
-            func.max(CandidateApplication.updated_at),
-        )
-        .filter(
-            CandidateApplication.organization_id == int(role.organization_id),
-            CandidateApplication.role_id == int(role.id),
-            CandidateApplication.application_outcome == "open",
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .one()
+    scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
     )
+    if scope.is_related:
+        app_count, app_max_id, app_updated = (
+            db.query(
+                func.count(SisterRoleEvaluation.id),
+                func.max(SisterRoleEvaluation.id),
+                func.max(SisterRoleEvaluation.updated_at),
+            )
+            .filter(
+                SisterRoleEvaluation.organization_id == int(role.organization_id),
+                SisterRoleEvaluation.role_id == int(role.id),
+                SisterRoleEvaluation.application_outcome == "open",
+                SisterRoleEvaluation.deleted_at.is_(None),
+            )
+            .one()
+        )
+    else:
+        app_count, app_max_id, app_updated = (
+            db.query(
+                func.count(CandidateApplication.id),
+                func.max(CandidateApplication.id),
+                func.max(CandidateApplication.updated_at),
+            )
+            .filter(
+                CandidateApplication.organization_id == int(role.organization_id),
+                CandidateApplication.role_id == int(role.id),
+                CandidateApplication.application_outcome == "open",
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .one()
+        )
     criterion_count, criterion_max, criterion_updated = (
         db.query(
             func.count(RoleCriterion.id),

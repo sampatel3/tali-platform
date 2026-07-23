@@ -200,8 +200,12 @@ const RouteSwitchButton = () => {
 
 const deferred = () => {
   let resolve;
-  const promise = new Promise((settle) => { resolve = settle; });
-  return { promise, resolve };
+  let reject;
+  const promise = new Promise((settle, fail) => {
+    resolve = settle;
+    reject = fail;
+  });
+  return { promise, reject, resolve };
 };
 
 describe('JobPipelinePage', () => {
@@ -233,6 +237,7 @@ describe('JobPipelinePage', () => {
     });
     apiClient.agent.listDecisions.mockResolvedValue({ data: [] });
     apiClient.agent.status.mockResolvedValue({ data: { can_control_agent: true } });
+    apiClient.agent.usageBreakdown.mockResolvedValue({ data: null });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
     requisitionApi.createRelated.mockResolvedValue({ id: 44 });
   });
@@ -282,6 +287,71 @@ describe('JobPipelinePage', () => {
       node.textContent?.includes('Loading pipeline summary…')
     ))).toBe(true);
     expect(apiClient.roles.getShell).toHaveBeenCalledWith(101);
+  });
+
+  it('clears role A before an unresolved role B workspace can paint', async () => {
+    const roleB = { ...baseRole, id: 202, name: 'Data Engineer' };
+    const roleBShell = deferred();
+    apiClient.roles.getShell.mockImplementation((id) => (
+      Number(id) === 202 ? roleBShell.promise : Promise.resolve({ data: baseRole })
+    ));
+    apiClient.roles.get.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? roleB : baseRole,
+    }));
+
+    renderPipeline();
+    expect(await screen.findByRole('heading', { name: /AI Native Engineer/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    await waitFor(() => expect(apiClient.roles.getShell).toHaveBeenCalledWith(202));
+    expect(screen.queryByRole('heading', { name: /AI Native Engineer/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Data Engineer/i })).not.toBeInTheDocument();
+
+    await act(async () => {
+      roleBShell.resolve({ data: roleB });
+      await roleBShell.promise;
+    });
+    expect(await screen.findByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+  });
+
+  it('does not display role A usage details while role B usage is unresolved', async () => {
+    const roleB = { ...baseRole, id: 202, name: 'Data Engineer' };
+    const roleBUsage = deferred();
+    apiClient.roles.getShell.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? roleB : baseRole,
+    }));
+    apiClient.roles.get.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? roleB : baseRole,
+    }));
+    apiClient.agent.usageBreakdown.mockImplementation((id) => (
+      Number(id) === 202
+        ? roleBUsage.promise
+        : Promise.resolve({
+            data: {
+              by_feature: [{ label: 'Role A semantic search', cost_cents: 123, event_count: 4 }],
+            },
+          })
+    ));
+
+    renderPipeline();
+    await openAgentSettingsTab('Budget & limits');
+    expect(await screen.findByText('Role A semantic search')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+    await openAgentSettingsTab('Budget & limits');
+    expect(apiClient.agent.usageBreakdown).toHaveBeenCalledWith(202);
+    expect(screen.queryByText('Role A semantic search')).not.toBeInTheDocument();
+
+    await act(async () => {
+      roleBUsage.resolve({
+        data: {
+          by_feature: [{ label: 'Role B agent reasoning', cost_cents: 77, event_count: 2 }],
+        },
+      });
+      await roleBUsage.promise;
+    });
+    expect(await screen.findByText('Role B agent reasoning')).toBeInTheDocument();
   });
 
   it('does not refill the private workspace cache after session cleanup', async () => {
@@ -781,7 +851,7 @@ describe('JobPipelinePage', () => {
     expect(apiClient.roles.setJobStatus).not.toHaveBeenCalled();
   });
 
-  it('defers related-role lifecycle to its original role instead of an ATS provider', async () => {
+  it('keeps related-role lifecycle independent in Taali', async () => {
     const relatedRole = {
       ...baseRole,
       source: 'sister',
@@ -793,17 +863,91 @@ describe('JobPipelinePage', () => {
     };
     apiClient.roles.getShell.mockResolvedValue({ data: relatedRole });
     apiClient.roles.get.mockResolvedValue({ data: relatedRole });
+    apiClient.roles.setJobStatus.mockResolvedValue({
+      data: { ...relatedRole, version: 8, job_status: 'cancelled' },
+    });
 
     renderPipeline();
     fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
     const lifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
 
-    expect(within(lifecycle).getByText('Managed on the original role')).toBeInTheDocument();
-    expect(within(lifecycle).getByText(/Archive or reopen AI Engineer #77/i)).toBeInTheDocument();
+    expect(within(lifecycle).getByText(/Managed in Taali for this role/i)).toBeInTheDocument();
+    expect(within(lifecycle).getByText(/ATS link does not control this role's lifecycle/i)).toBeInTheDocument();
     expect(within(lifecycle).queryByText(/Managed in Workable/i)).not.toBeInTheDocument();
-    expect(within(lifecycle).queryByRole('button')).not.toBeInTheDocument();
-    expect(apiClient.roles.setJobStatus).not.toHaveBeenCalled();
+    expect(within(lifecycle).getByText('Open')).toBeInTheDocument();
+    fireEvent.click(within(lifecycle).getByRole('button', { name: 'Archive role' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive role' }));
+
+    await waitFor(() => expect(apiClient.roles.setJobStatus).toHaveBeenCalledWith(
+      101,
+      'cancelled',
+      undefined,
+      7,
+    ));
+    expect(within(await screen.findByRole('group', { name: 'Role lifecycle' })).getByText('Archived'))
+      .toBeInTheDocument();
   });
+
+  it.each(['success', 'failure'])(
+    'does not commit or toast a stale related-role lifecycle %s after navigation',
+    async (outcome) => {
+      const roleA = {
+        ...baseRole,
+        source: 'sister',
+        role_kind: 'sister',
+        ats_provider: null,
+        job_status: 'open',
+      };
+      const roleB = {
+        ...baseRole,
+        id: 202,
+        name: 'Data Engineer',
+        source: 'manual',
+        ats_provider: null,
+        job_status: 'open',
+      };
+      const lifecycleRequest = deferred();
+      apiClient.roles.getShell.mockImplementation((id) => Promise.resolve({
+        data: Number(id) === 202 ? roleB : roleA,
+      }));
+      apiClient.roles.get.mockImplementation((id) => Promise.resolve({
+        data: Number(id) === 202 ? roleB : roleA,
+      }));
+      apiClient.roles.setJobStatus.mockReturnValueOnce(lifecycleRequest.promise);
+
+      renderPipeline();
+      fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+      const lifecycle = await screen.findByRole('group', { name: 'Role lifecycle' });
+      fireEvent.click(within(lifecycle).getByRole('button', { name: 'Archive role' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', {
+        name: 'Archive role',
+      }));
+      await waitFor(() => expect(apiClient.roles.setJobStatus).toHaveBeenCalledWith(
+        101,
+        'cancelled',
+        undefined,
+        7,
+      ));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+      expect(await screen.findByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+      showToast.mockClear();
+
+      await act(async () => {
+        if (outcome === 'success') {
+          lifecycleRequest.resolve({ data: { ...roleA, version: 8, job_status: 'cancelled' } });
+        } else {
+          lifecycleRequest.reject(new Error('role A lifecycle failed'));
+        }
+        await lifecycleRequest.promise.catch(() => {});
+      });
+
+      expect(screen.getByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: /AI Native Engineer/i })).not.toBeInTheDocument();
+      expect(showToast).not.toHaveBeenCalled();
+    },
+  );
 
   it('renders a related role in the ordinary job shell with an exact original-role control', async () => {
     apiClient.roles.get.mockResolvedValue({
@@ -832,7 +976,7 @@ describe('JobPipelinePage', () => {
     expect(screen.getAllByText('Workable').length).toBeGreaterThan(0);
     expect(screen.queryByText('Related · Workable')).not.toBeInTheDocument();
     expect(screen.getByRole('note')).toHaveTextContent(
-      'Shared Workable candidate pool with AI Engineer #77 (original). Rejecting and advancing apply to AI Engineer #77, AI Native Engineer #101.',
+      'Independent related role with a Workable link to AI Engineer #77. Each role keeps its own candidate membership, scores, decisions, and pipeline state.',
     );
     expect(screen.queryByRole('columnheader', { name: /Original fit/i })).not.toBeInTheDocument();
     const row = screen.getByText('Sam Patel').closest('tr');
@@ -861,8 +1005,8 @@ describe('JobPipelinePage', () => {
     expect(screen.getByRole('button', { name: 'Auto-send assessments' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' })).not.toBeDisabled();
     expect(screen.queryByText('Shared-pool candidate actions remain behind recruiter approval.')).not.toBeInTheDocument();
     expect(screen.queryByText(/Related-role scoring/i)).not.toBeInTheDocument();
 
@@ -1233,9 +1377,9 @@ describe('JobPipelinePage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
     expect(await screen.findByRole('heading', { name: /Turn on the agent for AI Native Engineer/i }))
       .toBeInTheDocument();
-    expect(screen.getByText(/This role shares candidates with AI Engineer #77/i))
+    expect(screen.getByText(/uses an ATS link to AI Engineer #77/i))
       .toBeInTheDocument();
-    expect(screen.getByText(/The agent scores them separately for AI Native Engineer/i))
+    expect(screen.getByText(/candidate membership, scores, decisions, and pipeline state are separate/i))
       .toBeInTheDocument();
     expect(screen.getByText(/Assessments: You approve invitations and retries/i))
       .toBeInTheDocument();
@@ -1254,7 +1398,7 @@ describe('JobPipelinePage', () => {
     expect(activationPayload).not.toHaveProperty('activation_assessment_action');
   });
 
-  it('explains that automatic related-role advances update every linked role', async () => {
+  it('explains that automatic related-role advances stay in that role', async () => {
     apiClient.roles.get.mockResolvedValue({
       data: {
         ...baseRole,
@@ -1280,9 +1424,9 @@ describe('JobPipelinePage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^turn on$/i }));
 
     expect(await screen.findByText(
-      /Advances happen automatically across the original role and every related role/i,
+      /Qualified candidates advance automatically in this role/i,
     )).toBeInTheDocument();
-    expect(screen.getByText(/You approve rejections; an approved rejection applies across every role/i))
+    expect(screen.getByText(/Rejections follow this role’s own approval settings/i))
       .toBeInTheDocument();
   });
 
@@ -1397,7 +1541,7 @@ describe('JobPipelinePage', () => {
     expect(apiClient.roles.getShell.mock.calls.at(-1)[0]).toBe(202);
   });
 
-  it('names a failed slow activation after the recruiter opens another role', async () => {
+  it('does not announce a failed slow activation after the recruiter opens another role', async () => {
     const nextRole = {
       ...baseRole,
       id: 202,
@@ -1426,10 +1570,10 @@ describe('JobPipelinePage', () => {
       });
     });
 
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
-      'Could not turn on the agent for AI Native Engineer. Activation rejected by readiness gate.',
+    expect(showToast).not.toHaveBeenCalledWith(
+      expect.stringContaining('Could not turn on the agent for AI Native Engineer'),
       'error',
-    ));
+    );
     expect(screen.getByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
     expect(screen.getByText('Agent off')).toBeInTheDocument();
   });
@@ -1737,7 +1881,7 @@ describe('JobPipelinePage', () => {
     expect(within(reviewCard).queryByText(longReasoning)).not.toBeInTheDocument();
   });
 
-  it('names every linked role before approving a reject recommendation', async () => {
+  it('confirms a reject only for the current related role', async () => {
     const roleFamily = {
       owner: { id: 77, name: 'AI Engineer' },
       related: [
@@ -1771,14 +1915,14 @@ describe('JobPipelinePage', () => {
     const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
     fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
 
-    expect(await screen.findByRole('heading', { name: 'Reject across linked roles?' })).toBeInTheDocument();
-    expect(within(screen.getByRole('dialog')).getByText(
-      /AI Engineer #77, AI Native Engineer #101, ML Platform Engineer #109/,
-    ))
+    expect(await screen.findByRole('heading', { name: 'Reject candidate in AI Native Engineer #101?' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByText(/changes only AI Native Engineer #101.*candidate state/i))
+      .toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByText(/linked ATS application and other roles are unchanged/i))
       .toBeInTheDocument();
     expect(apiClient.agent.approveDecision).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reject across all linked roles' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reject in this role' }));
     await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(502, {}, {}));
     expect(showToast).toHaveBeenCalledWith(
       'Recommendation accepted for processing.',
@@ -2275,7 +2419,7 @@ describe('JobPipelinePage', () => {
     expect(within(reviewCard).getByRole('button', { name: /^Approve$/i })).toBeEnabled();
   });
 
-  it('names every linked role before approving an advance recommendation', async () => {
+  it('confirms an advance only for the current related role', async () => {
     const roleFamily = {
       owner: { id: 77, name: 'AI Engineer' },
       related: [
@@ -2309,14 +2453,12 @@ describe('JobPipelinePage', () => {
     const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
     fireEvent.click(await within(reviewCard).findByRole('button', { name: /^Approve$/i }));
 
-    expect(await screen.findByRole('heading', { name: 'Advance across linked roles?' })).toBeInTheDocument();
-    expect(within(screen.getByRole('dialog')).getByText(
-      /AI Engineer #77, AI Native Engineer #101, ML Platform Engineer #109/,
-    ))
+    expect(await screen.findByRole('heading', { name: 'Advance candidate in AI Native Engineer #101?' })).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog')).getByText(/other roles keep their own pipeline state/i))
       .toBeInTheDocument();
     expect(apiClient.agent.approveDecision).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Advance across all linked roles' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Advance in this role' }));
     await waitFor(() => expect(apiClient.agent.approveDecision).toHaveBeenCalledWith(503, {}, {}));
   });
 
@@ -2353,7 +2495,10 @@ describe('JobPipelinePage', () => {
     const appliedLink = within(appliedCard).getByRole('link', { name: /Open Sam Patel/i });
     // Modifier-clicking a kanban card still falls through to the link's
     // default behaviour (open in new tab), so the href is preserved.
-    expect(appliedLink).toHaveAttribute('href', '/candidates/1?from=jobs/101');
+    expect(appliedLink).toHaveAttribute(
+      'href',
+      '/candidates/1?from=jobs/101&view_role_id=101',
+    );
 
     fireEvent.click(appliedLink);
 
@@ -2363,6 +2508,40 @@ describe('JobPipelinePage', () => {
     // the redesigned drawer.
     expect(await screen.findByText(/Closes the application/i)).toBeInTheDocument();
     expect(onNavigate).not.toHaveBeenCalledWith('candidate-report', expect.anything());
+  });
+
+  it('opens a related-role report with independent breadcrumb and logical view scope', async () => {
+    const relatedRole = {
+      ...baseRole,
+      role_kind: 'sister',
+      source: 'sister',
+      ats_owner_role_id: 77,
+      ats_owner_role_name: 'AI Engineer',
+    };
+    apiClient.roles.getShell.mockResolvedValue({ data: relatedRole });
+    apiClient.roles.get.mockResolvedValue({ data: relatedRole });
+    apiClient.roles.listApplications.mockResolvedValue({
+      data: [{ ...baseApplications[0], role_id: 101, role_name: relatedRole.name }],
+    });
+    const onNavigate = vi.fn();
+    renderPipeline({ onNavigate });
+    await switchToPipelineView();
+
+    const card = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    const cardLink = within(card).getByRole('link', { name: /Open Sam Patel/i });
+    expect(cardLink).toHaveAttribute(
+      'href',
+      '/candidates/1?from=jobs/101&view_role_id=101',
+    );
+
+    fireEvent.click(cardLink);
+    fireEvent.click(await screen.findByRole('link', { name: /View full report/i }));
+
+    expect(onNavigate).toHaveBeenCalledWith('candidate-report', {
+      candidateApplicationId: 1,
+      roleId: 101,
+      viewRoleId: 101,
+    });
   });
 
   it('patches just the rejected row instead of re-downloading the whole workspace', async () => {
@@ -2398,6 +2577,59 @@ describe('JobPipelinePage', () => {
     // No full-workspace refetch: the 2×2000-row listApplications call count is
     // unchanged after the reject.
     expect(apiClient.roles.listApplications.mock.calls.length).toBe(beforeRejectCalls);
+  });
+
+  it('does not apply a role A row patch after role B has loaded', async () => {
+    const roleB = { ...baseRole, id: 202, name: 'Data Engineer' };
+    const roleBApplication = {
+      ...baseApplications[0],
+      candidate_name: 'Role B Candidate',
+      candidate_email: 'role-b@example.com',
+    };
+    const staleApplication = deferred();
+    const staleRoleSummary = deferred();
+    apiClient.roles.updateApplicationOutcome.mockResolvedValue({ data: null });
+    apiClient.roles.getShell.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? roleB : baseRole,
+    }));
+    apiClient.roles.get.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? roleB : baseRole,
+    }));
+    apiClient.roles.listApplications.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? [roleBApplication] : baseApplications,
+    }));
+
+    renderPipeline();
+    await switchToPipelineView();
+    const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    fireEvent.click(within(appliedCard).getByRole('link', { name: /Open Sam Patel/i }));
+    await screen.findByText(/Closes the application/i);
+
+    apiClient.roles.getApplication.mockReturnValueOnce(staleApplication.promise);
+    apiClient.roles.get.mockImplementation((id) => (
+      Number(id) === 202 ? Promise.resolve({ data: roleB }) : staleRoleSummary.promise
+    ));
+    fireEvent.click((await screen.findByText('Closes the application')).closest('button'));
+    fireEvent.click(screen.getByRole('button', { name: /Reject candidate/i }));
+    await waitFor(() => expect(apiClient.roles.getApplication).toHaveBeenCalledWith(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+    expect(await screen.findByText('Role B Candidate')).toBeInTheDocument();
+
+    await act(async () => {
+      staleApplication.resolve({
+        data: { ...baseApplications[0], application_outcome: 'rejected' },
+      });
+      staleRoleSummary.resolve({
+        data: { ...baseRole, active_candidates_count: 0, stage_counts: { rejected: 2 } },
+      });
+      await Promise.all([staleApplication.promise, staleRoleSummary.promise]);
+    });
+
+    expect(screen.getByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+    expect(screen.getByText('Role B Candidate')).toBeInTheDocument();
+    expect(screen.queryByText('Sam Patel')).not.toBeInTheDocument();
   });
 
   it('formats Workable job specs instead of showing flattened markdown', async () => {
@@ -2671,6 +2903,62 @@ Banking transformation experience
       expect.stringContaining('updated criteria affect 2 existing candidates'),
       'success',
     ));
+  });
+
+  it('keeps role B job-spec editor open when role A save resolves after navigation', async () => {
+    const roleASpec = 'Build reliable AI services and own production evaluation outcomes.';
+    const roleADraft = `${roleASpec} Add a requirement for model observability.`;
+    const roleBSpec = 'Build dependable data platforms and own governed batch processing.';
+    const roleA = { ...baseRole, job_spec_text: roleASpec };
+    const roleB = {
+      ...baseRole,
+      id: 202,
+      version: 12,
+      name: 'Data Engineer',
+      job_spec_text: roleBSpec,
+    };
+    const roleASave = deferred();
+    apiClient.roles.getShell.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? roleB : roleA,
+    }));
+    apiClient.roles.get.mockImplementation((id) => Promise.resolve({
+      data: Number(id) === 202 ? roleB : roleA,
+    }));
+    apiClient.roles.updateJobSpec.mockReturnValueOnce(roleASave.promise);
+
+    renderPipeline();
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    fireEvent.change(screen.getByLabelText('Job description'), {
+      target: { value: roleADraft },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Save job spec/i }));
+    await waitFor(() => expect(apiClient.roles.updateJobSpec).toHaveBeenCalledWith(101, {
+      job_spec_text: roleADraft,
+      expected_version: 7,
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open role 202' }));
+    expect(await screen.findByRole('heading', { name: /Data Engineer/i })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('link', { name: /^Job spec$/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Edit$/i }));
+    expect(await screen.findByLabelText('Job description')).toHaveValue(roleBSpec);
+
+    await act(async () => {
+      roleASave.resolve({
+        data: {
+          applied: true,
+          role: { ...roleA, version: 8, job_spec_text: roleADraft },
+          diff: { added: 1, removed: 0, criteria_count: 1 },
+          would_rescreen: { count: 0, est_cost_usd: 0 },
+        },
+      });
+      await roleASave.promise;
+    });
+
+    expect(screen.getByLabelText('Job description')).toHaveValue(roleBSpec);
+    expect(screen.getByRole('button', { name: /Save job spec/i })).toBeInTheDocument();
+    expect(showToast).not.toHaveBeenCalledWith('Job spec saved.', 'success');
   });
 
   it('keeps a stale job-spec draft and offers the collaborator version on conflict', async () => {
@@ -3157,5 +3445,44 @@ Banking transformation experience
       expected_version: 7,
     }));
     await waitFor(() => expect(apiClient.agent.discardPending).toHaveBeenCalledWith(101, 7));
+  });
+
+  it('keeps the agent authoritatively off when the optional decision discard fails', async () => {
+    let disabled = false;
+    const enabledRole = { ...baseRole, agentic_mode_enabled: true };
+    const disabledRole = { ...baseRole, version: 8, agentic_mode_enabled: false };
+    apiClient.roles.getShell.mockResolvedValue({ data: enabledRole });
+    apiClient.roles.get.mockImplementation(() => Promise.resolve({
+      data: disabled ? disabledRole : enabledRole,
+    }));
+    apiClient.roles.update.mockImplementation(() => {
+      disabled = true;
+      return Promise.resolve({ data: disabledRole });
+    });
+    apiClient.agent.status.mockResolvedValue({
+      data: {
+        can_control_agent: true,
+        paused_at: null,
+        monthly_spent_cents: 100,
+        monthly_budget_cents: 10000,
+        pending_decisions: 4,
+      },
+    });
+    apiClient.agent.discardPending.mockRejectedValueOnce(new Error('queue unavailable'));
+
+    renderPipeline();
+
+    fireEvent.click(await screen.findByRole('button', { name: /turn off agent/i }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /also discard/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^turn off$/i }));
+
+    await waitFor(() => expect(apiClient.agent.discardPending).toHaveBeenCalledWith(101, 8));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(
+      'Agent turned off, but pending decisions could not be discarded. They remain available for review.',
+      'error',
+    ));
+    expect(await screen.findByText('Agent off')).toBeInTheDocument();
+    expect(screen.queryByText('Agent on')).not.toBeInTheDocument();
+    expect(apiClient.roles.get).toHaveBeenCalledTimes(2);
   });
 });

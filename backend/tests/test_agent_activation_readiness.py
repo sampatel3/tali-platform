@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -428,24 +429,14 @@ def test_workable_readiness_uses_sole_cached_interview_kind_stage(_beat, db):
     "app.services.agent_worker_health.worker_beat_status",
     return_value={"ready": True, "reason": None},
 )
-def test_related_auto_advance_uses_owner_workable_stage_mapping(_beat, db):
+def test_related_role_activation_does_not_require_owner_workable_transport(
+    _beat, db
+):
     owner = _role(db)
     org = db.query(Organization).filter(
         Organization.id == owner.organization_id
     ).one()
-    org.workable_connected = True
-    org.workable_access_token = "token"
-    org.workable_subdomain = "ready"
-    org.workable_config = {"workable_writeback": True}
     owner.workable_job_id = "workable-owner"
-    owner.workable_stages = [
-        {"slug": "applied", "name": "Applied", "kind": "sourced"},
-        {
-            "slug": "final-interview",
-            "name": "Final interview",
-            "kind": "interview",
-        },
-    ]
     related = Role(
         organization_id=org.id,
         name="Related role",
@@ -465,7 +456,71 @@ def test_related_auto_advance_uses_owner_workable_stage_mapping(_beat, db):
 
     assert result["ready"] is True
     assert not any(
-        reason["code"] == "workable_interview_stage_missing"
+        reason["code"].startswith("workable_")
+        for reason in result["reasons"]
+    )
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_related_role_activation_survives_deleted_ats_owner(_beat, db):
+    owner = _role(db)
+    owner.workable_job_id = "deleted-owner"
+    owner.deleted_at = datetime.now(timezone.utc)
+    related = Role(
+        organization_id=owner.organization_id,
+        name="Independent role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        auto_reject=True,
+    )
+    db.add(related)
+    db.flush()
+
+    result = activation_readiness(
+        related,
+        settings_obj=_settings(),
+        auto_skip_assessment=True,
+    )
+
+    assert result["ready"] is True
+    assert "related_ats_owner_missing" not in {
+        reason["code"] for reason in result["reasons"]
+    }
+
+
+@patch(
+    "app.services.agent_worker_health.worker_beat_status",
+    return_value={"ready": True, "reason": None},
+)
+def test_related_role_activation_does_not_require_owner_bullhorn_transport(
+    _beat, db
+):
+    owner = _role(db, source="bullhorn")
+    owner.bullhorn_job_order_id = "owner-job-order"
+    related = Role(
+        organization_id=owner.organization_id,
+        name="Independent Bullhorn-related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+        auto_advance=True,
+    )
+    db.add(related)
+    db.flush()
+
+    result = activation_readiness(
+        related,
+        settings_obj=_settings(BULLHORN_ENABLED=False),
+        auto_skip_assessment=True,
+    )
+
+    assert result["ready"] is True
+    assert not any(
+        reason["code"].startswith("bullhorn_")
         for reason in result["reasons"]
     )
 

@@ -1304,15 +1304,15 @@ export const RequisitionsPage = ({ onNavigate, NavComponent = null }) => {
                       </div>
                       {!applied && relatedRolePreview ? (
                         <div className="rq-related-metrics" aria-label={`Related role scoring preview for ${relatedRoleReference}`}>
-                          <span><strong>{relatedRolePreview.candidates_total ?? 0}</strong> shared candidates</span>
+                          <span><strong>{relatedRolePreview.candidates_total ?? 0}</strong> candidates in initial snapshot</span>
                           <span><strong>{relatedRolePreview.candidates_with_cv ?? 0}</strong> ready to score</span>
                           <span><strong>${Number(relatedRolePreview.estimated_cost_usd || 0).toFixed(2)}</strong> estimated</span>
                         </div>
                       ) : null}
                       <p className="rq-related-hint">
                         {applied
-                          ? `${relatedRoleReference} remains coupled to ${sourceRoleReference}, the original ATS job, for candidate stages and actions.`
-                          : `Edit the cloned specification for ${relatedRoleReference} in this chat. Creating it makes a separate Taali scoring view while candidate stages and actions stay coupled to ${sourceRoleReference}, the original ATS job.`}
+                          ? `${relatedRoleReference} is an independent role with its own candidate pool, scores, decisions, and pipeline state. Its link to ${sourceRoleReference} is only for ATS evidence, permitted write-backs, and restrictions.`
+                          : `Edit the cloned specification for ${relatedRoleReference} in this chat. Creating it takes a one-time candidate snapshot into a new, independent role; the link to ${sourceRoleReference} is only for ATS evidence, permitted write-backs, and restrictions.`}
                       </p>
                       <div className="rq-published-actions">
                         {applied && brief.job?.role_id ? (

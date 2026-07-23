@@ -9,6 +9,7 @@ from app.models.role import (
     Role,
 )
 from app.services.job_page_lifecycle import role_allows_new_paid_ats_work
+from app.services.ats_role_lifecycle import job_lifecycle_write_conflict
 from app.services.role_execution_guard import automatic_role_action_block_reason
 
 
@@ -136,7 +137,7 @@ def test_automatic_guard_blocks_closed_bullhorn_role(db):
     )
 
 
-def test_automatic_guard_uses_related_roles_ats_owner_lifecycle(db):
+def test_automatic_guard_keeps_related_role_local_work_independent_of_ats_owner(db):
     owner = _role(
         db,
         source="workable",
@@ -157,6 +158,13 @@ def test_automatic_guard_uses_related_roles_ats_owner_lifecycle(db):
     db.add(related)
     db.flush()
 
-    assert automatic_role_action_block_reason(related, db=db) == (
+    assert automatic_role_action_block_reason(owner, db=db) == (
         "linked workable job is not live"
     )
+    assert automatic_role_action_block_reason(related, db=db) is None
+
+    payload = role_to_response(related, summary=True).model_dump()
+    assert payload["job_status"] == JOB_STATUS_OPEN
+    assert payload["external_job_id"] == "WORK-RELATED-CLOSED"
+    assert payload["external_job_live"] is False
+    assert job_lifecycle_write_conflict(related) is None

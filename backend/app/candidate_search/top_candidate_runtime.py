@@ -26,16 +26,22 @@ def load_candidates(
     score_attr,
     size: int,
     row_adapter: Callable[[Any], Any] | None = None,
+    candidate_loader: Any | None = None,
 ):
     """Load a bounded, score-ordered window without materialising the pool."""
 
+    if candidate_loader is not None:
+        return candidate_loader.load_candidates(
+            base_query,
+            matcher_ids=matcher_ids,
+            score_attr=score_attr,
+            size=size,
+        )
     if size <= 0:
         return []
     order = [score_attr.is_(None), score_attr.desc()]
     if matcher_ids:
-        order = [
-            case((CandidateApplication.id.in_(matcher_ids), 0), else_=1)
-        ] + order
+        order = [case((CandidateApplication.id.in_(matcher_ids), 0), else_=1)] + order
     ids = [
         row[0]
         for row in base_query.with_entities(CandidateApplication.id)
@@ -61,9 +67,17 @@ def load_candidates_by_ids(
     application_ids: list[int],
     *,
     row_adapter: Callable[[Any], Any] | None = None,
+    score_attr: Any | None = None,
+    candidate_loader: Any | None = None,
 ):
     """Hydrate a relevance-ordered id list without losing its order."""
 
+    if candidate_loader is not None:
+        return candidate_loader.load_candidates_by_ids(
+            base_query,
+            application_ids,
+            score_attr=score_attr,
+        )
     if not application_ids:
         return []
     apps = (

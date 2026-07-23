@@ -16,18 +16,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from typing import Any
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..domains.assessments_runtime.job_authorization import (
     JobPermission,
     require_job_permission,
 )
-from ..models.candidate_application import CandidateApplication
-from ..models.agent_decision import AgentDecision
 from ..models.decision_feedback import (
     ATTRIBUTED_TO_VALUES,
     FAILURE_MODES,
@@ -38,6 +34,12 @@ from ..models.org_criterion import BUCKET_MUST, CRITERION_BUCKETS
 from ..models.organization import Organization
 from ..models.role import Role
 from ..models.role_criterion import CRITERION_SOURCE_DERIVED
+from ..mcp.catalog import AGENT_CHAT as AGENT_CHAT_EXPOSURE, get_tool_spec
+from ..mcp.shared_reads import (
+    dispatch_shared_read,
+    shared_read_definitions,
+    shared_read_specs_for,
+)
 from ..services import related_role_service as _related_roles
 from ..services.role_change_audit import (
     ROLE_CHANGE_ACTION_JOB_SPEC_UPDATED,
@@ -51,6 +53,7 @@ from ..services.requisition_template_service import resolve_template
 from ..services.sister_role_service import text_fingerprint
 from . import application_commands as _application_commands
 from . import assessments as _assessments
+from . import candidate_read_tools as _candidate_reads
 from . import constraints as _constraints
 from . import controls as _controls
 from . import decision_commands as _decision_commands
@@ -150,6 +153,30 @@ def _locked_authorized_role(
     # released immediately without rolling back the already-persisted tool-use
     # message in the outer chat transaction.
     with db.begin_nested():
+        # Paid/side-effect workers use Organization -> Role as their global
+        # admission order. Agent Chat must enter the same order before its
+        # authorization Role lock; otherwise a confirmed re-screen could hold
+        # Role while waiting for a scoring worker that holds Organization.
+        from ..services.workspace_agent_control import (
+            workspace_agent_control_snapshot,
+        )
+
+        workspace_agent_control_snapshot(
+            db,
+            organization_id=int(role.organization_id),
+            lock=True,
+        )
+        role_ids = {int(role.id)}
+        if getattr(role, "ats_owner_role_id", None) is not None:
+            role_ids.add(int(role.ats_owner_role_id))
+        if len(role_ids) > 1:
+            from ..services.decision_membership import lock_resolution_roles
+
+            lock_resolution_roles(
+                db,
+                organization_id=int(role.organization_id),
+                role_ids=role_ids,
+            )
         locked = require_job_permission(
             db,
             current_user=user,
@@ -238,7 +265,12 @@ _DECISION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "include_snoozed": {"type": "boolean", "default": False},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 20,
+                },
             },
             "required": [],
         },
@@ -276,7 +308,12 @@ _DECISION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "decision_id": {"type": "integer"},
                 "alternative": {
                     "type": "string",
-                    "enum": ["reject", "advance", "send_assessment", "skip_assessment_advance"],
+                    "enum": [
+                        "reject",
+                        "advance",
+                        "send_assessment",
+                        "skip_assessment_advance",
+                    ],
                 },
                 "note": {"type": "string", "minLength": 1, "maxLength": 2000},
                 "workable_target_stage": {"type": ["string", "null"], "maxLength": 200},
@@ -322,7 +359,11 @@ _DECISION_TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "properties": {
                 "decision_id": {"type": "integer"},
                 "failure_mode": {"type": "string", "enum": list(FAILURE_MODES)},
-                "correction_text": {"type": "string", "minLength": 1, "maxLength": 8000},
+                "correction_text": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8000,
+                },
                 "scope": {"type": "string", "enum": list(FEEDBACK_SCOPES)},
                 "attributed_to": {
                     "type": ["string", "null"],
@@ -409,46 +450,34 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
-        "name": "list_candidates",
+        "name": "search_candidate_comments",
         "description": (
-            "List candidates on this role by bucket, best score first. bucket: "
-            "'above'/'below' (the effective threshold), 'advanced', 'rejected', "
-            "'pending' (awaiting a decision), or 'all' (open apps). Each candidate "
-            "returns name, pre-screen score, Taali pipeline stage, and a normalized "
-            "`ats_context` for native, Workable, or Bullhorn. It also returns the "
-            "synced `workable_stage` for Workable roles. Pass "
-            "`workable_stage` to filter to a specific Workable stage — that's how you "
-            "answer 'who's in final interview?' (Taali's pipeline_stage does NOT track "
-            "Workable's interview stages; workable_stage is the source of truth). You can "
-            "ALSO see the recruiter's **Workable comments / ratings** on each candidate: "
-            "set `include_comments=true` to return them ([{author, created_at, body}], "
-            "newest first), and `comment_contains` to filter to candidates a recruiter "
-            "commented on (e.g. comment_contains='yes'). So 'top 5 in technical interview "
-            "with a Yes comment' = workable_stage='technical interview', "
-            "comment_contains='yes', limit=5."
+            "Search synced recruiter comments/ratings for candidates who are live "
+            "members of THIS role. Optionally filter by the validated external ATS "
+            "stage and comment text. Returns only candidate identity plus comments; "
+            "it deliberately does NOT return or prove current pipeline state, outcome, "
+            "score, pending decisions, or completed actions. Use "
+            "search_role_candidates for current state and list_candidate_actions for "
+            "history. A zero here means no matching synced comments, never zero "
+            "candidates in the role."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "bucket": {
-                    "type": "string",
-                    "enum": ["above", "below", "advanced", "rejected", "pending", "all"],
-                    "default": "all",
-                },
-                "workable_stage": {
+                "ats_stage": {
                     "type": ["string", "null"],
-                    "description": "Filter to candidates whose synced Workable stage contains this (case-insensitive), e.g. 'final interview'. Applies to the open buckets (not 'rejected').",
+                    "description": "Filter comments to live role members whose validated external ATS stage contains this text (case-insensitive).",
                 },
                 "comment_contains": {
                     "type": ["string", "null"],
                     "description": "Filter to candidates who have a synced Workable recruiter comment/rating whose text matches this — whole-word for a single word (comment_contains='yes' matches a 'Yes' comment but not 'yesterday'), substring for a phrase ('strong hire'). Implies include_comments. Open buckets only (not 'rejected').",
                 },
-                "include_comments": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Include each candidate's synced Workable recruiter comments [{author, created_at, body}] (newest first, capped) in the result, so you can read/cite them. Set true even without a filter to show what recruiters wrote.",
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "default": 20,
                 },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
             },
             "required": [],
         },
@@ -462,7 +491,7 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "sync / refresh Workable comments. Comments normally sync automatically "
             "every few minutes; this forces a refresh now. It's ASYNCHRONOUS — tell "
             "the recruiter it's underway and to ask again in a moment so you can "
-            "re-read the freshly-synced comments with list_candidates."
+            "re-read the freshly-synced comments with search_candidate_comments."
         ),
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
@@ -597,7 +626,10 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "job_spec_text": {"type": "string", "description": "The full new job description text the recruiter pasted."},
+                "job_spec_text": {
+                    "type": "string",
+                    "description": "The full new job description text the recruiter pasted.",
+                },
             },
             "required": ["job_spec_text"],
         },
@@ -606,12 +638,13 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
         "name": "start_related_role_draft",
         "description": (
             "Start the existing conversational job-creation flow as a NEW related-role "
-            "draft cloned from this ATS role. Its full specification, structured fields, "
+            "draft seeded from this selected logical role. Its full specification, structured fields, "
             "and labelled responsibilities are copied; intake reads that source and asks "
             "only for genuine gaps before the recruiter describes just the differences. "
-            "Use this for open-ended cousin/sister-role requests or whenever the recruiter "
+            "Use this for open-ended related-role requests or whenever the recruiter "
             "wants to refine the new role conversationally. This creates only a draft and "
-            "does not spend scoring usage."
+            "does not spend scoring usage. Candidate membership is a one-time seed from "
+            "the selected logical role's explicit pool; any ATS link is transport/restrictions only."
         ),
         "input_schema": {
             "type": "object",
@@ -631,9 +664,9 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "preview_related_role",
         "description": (
-            "Preview creating a NEW related Taali role over this ATS role's "
-            "existing candidate pool, using a complete cousin/alternate job spec. "
-            "Returns the shared roster size, scorable count, and estimated AI "
+            "Preview creating a NEW related Taali role seeded once from the selected "
+            "logical role's explicit candidate pool, using a complete alternate job spec. "
+            "Returns the size of the initial roster to copy, scorable count, and estimated AI "
             "usage without creating anything. Use this instead of update_job_spec "
             "when the recruiter wants a separate role/view while preserving this "
             "original role. Always show the preview and wait for a later explicit "
@@ -648,7 +681,7 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
                 },
                 "job_spec_text": {
                     "type": "string",
-                    "description": "The complete updated/cousin job specification, not only the differences.",
+                    "description": "The complete alternate job specification, not only the differences.",
                 },
             },
             "required": ["name", "job_spec_text"],
@@ -657,9 +690,10 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
     {
         "name": "create_related_role",
         "description": (
-            "Create the related role and queue fresh scores for the shared roster. "
-            "It is a full Taali role with independent scoring, assessments, Agent policy, and budget. "
-            "Rejection and advancement affect every linked role because they share one ATS application. "
+            "Create the related role, copy its explicit initial roster, and queue fresh scores. "
+            "It is a full Taali role with independent membership, scoring, state, action history, "
+            "assessments, Agent policy, and budget. Shared ATS linkage can restrict provider mutations "
+            "but never makes rejection or advancement state apply to every linked role. "
             "This paid mutation requires a preview and explicit confirmation in a later message."
         ),
         "input_schema": {
@@ -762,7 +796,13 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "scope": {
                     "type": "string",
-                    "enum": ["all", "top_n", "above_threshold", "below_threshold", "none"],
+                    "enum": [
+                        "all",
+                        "top_n",
+                        "above_threshold",
+                        "below_threshold",
+                        "none",
+                    ],
                 },
                 "limit": {
                     "type": "integer",
@@ -854,7 +894,12 @@ AGENT_CHAT_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 10},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 25,
+                    "default": 10,
+                },
                 "rank_by": {
                     "type": "string",
                     "enum": [
@@ -917,6 +962,21 @@ AGENT_CHAT_TOOLS.extend(_APPLICATION_TOOL_DEFINITIONS)
 AGENT_CHAT_TOOLS.append(_proactive.HELPER_TOOL_DEFINITION)
 AGENT_CHAT_TOOLS.append(_run_history.RUN_HISTORY_TOOL_DEFINITION)
 
+# Candidate reads are generated from the same typed catalogue used by Taali
+# Chat, the autonomous runtime, and public MCP.  The role id is deliberately
+# absent from these definitions: the conversation owns that scope and the
+# dispatcher injects it server-side.
+_SHARED_AGENT_CHAT_SPECS = shared_read_specs_for(AGENT_CHAT_EXPOSURE)
+_SHARED_AGENT_CHAT_NAMES = frozenset(spec.name for spec in _SHARED_AGENT_CHAT_SPECS)
+AGENT_CHAT_TOOLS = shared_read_definitions(
+    AGENT_CHAT_EXPOSURE,
+    bound_role=True,
+) + [
+    tool
+    for tool in AGENT_CHAT_TOOLS
+    if str(tool.get("name") or "") not in _SHARED_AGENT_CHAT_NAMES
+]
+
 # A model round may fan out reads, but it may request at most one stateful
 # command.  This prevents ambiguous ordering (for example, changing a policy
 # and approving a decision against its pre-change snapshot in the same batch).
@@ -955,239 +1015,57 @@ MUTATING_TOOL_NAMES = frozenset(
 
 
 def _role_overview(db: Session, role: Role) -> dict[str, Any]:
-    rows = _impact.load_open_candidates(db, role)
-    effective = _impact.effective_threshold(db, role)
-    above, below = _impact.split_by_threshold(rows, effective)
-
-    # Full funnel: counts by pipeline_stage across all non-deleted apps.
-    stage_rows = (
-        db.query(CandidateApplication.pipeline_stage, func.count(CandidateApplication.id))
-        .filter(
-            CandidateApplication.role_id == int(role.id),
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .group_by(CandidateApplication.pipeline_stage)
-        .all()
+    return _candidate_reads.role_overview(
+        db,
+        role,
+        impact=_impact,
+        constraints=_constraints,
     )
-    funnel = {str(stage or "unknown"): int(n) for stage, n in stage_rows}
-
-    # Provider-neutral external-stage breakdown of the open pool.  Keep the
-    # Workable-specific field for backwards compatibility with the existing UI.
-    workable_funnel: dict[str, int] = {}
-    ats_stage_funnel: dict[str, int] = {}
-    for r in rows:
-        key = r.workable_stage or "(unsynced)"
-        workable_funnel[key] = workable_funnel.get(key, 0) + 1
-        provider = "bullhorn" if r.bullhorn_status else "workable" if r.workable_stage else "native"
-        raw_stage = r.bullhorn_status or r.workable_stage or r.pipeline_stage or "(unsynced)"
-        ats_key = f"{provider}:{raw_stage}"
-        ats_stage_funnel[ats_key] = ats_stage_funnel.get(ats_key, 0) + 1
-
-    pending_rows = (
-        db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
-        .filter(
-            AgentDecision.role_id == int(role.id),
-            AgentDecision.status == "pending",
-        )
-        .group_by(AgentDecision.decision_type)
-        .all()
-    )
-    pending_by_type = {str(t): int(n) for t, n in pending_rows}
-
-    # Budget event cards point recruiters back to this read-only overview. Keep
-    # the spend lookup isolated so a metering/query problem cannot make the
-    # whole role snapshot unavailable. Report the effective cap as well as the
-    # raw override because unset roles still use the platform default cap.
-    effective_monthly_budget_cents: int | None = None
-    month_to_date_spend_cents: int | None = None
-    remaining_monthly_budget_cents: int | None = None
-    try:
-        from ..agent_runtime import budget_guard
-
-        effective_monthly_budget_cents = budget_guard.role_monthly_usd_cents(role)
-        month_to_date_spend_cents = max(
-            0, int(budget_guard.month_to_date_spend_cents(db, role=role))
-        )
-        if effective_monthly_budget_cents > 0:
-            remaining_monthly_budget_cents = max(
-                0, effective_monthly_budget_cents - month_to_date_spend_cents
-            )
-    except Exception:  # pragma: no cover - overview remains useful without usage data
-        month_to_date_spend_cents = None
-        remaining_monthly_budget_cents = None
-
-    return {
-        "role": {"id": int(role.id), "name": role.name},
-        "agent": {
-            "enabled": bool(role.agentic_mode_enabled),
-            "paused": role.agent_paused_at is not None,
-            "paused_reason": role.agent_paused_reason,
-            "monthly_budget_cents": role.monthly_usd_budget_cents,
-            "effective_monthly_budget_cents": effective_monthly_budget_cents,
-            "month_to_date_spend_cents": month_to_date_spend_cents,
-            "remaining_monthly_budget_cents": remaining_monthly_budget_cents,
-            "auto_reject": bool(role.auto_reject),
-            "auto_reject_pre_screen": bool(role.auto_reject_pre_screen),
-            "auto_promote": bool(role.auto_promote),
-            "auto_send_assessment": getattr(role, "auto_send_assessment", None),
-            "auto_resend_assessment": getattr(role, "auto_resend_assessment", None),
-            "auto_advance": getattr(role, "auto_advance", None),
-            "auto_skip_assessment": bool(role.auto_skip_assessment),
-        },
-        "threshold": {
-            "effective": effective,
-            "role_override": role.score_threshold,
-            "mode": role.auto_reject_threshold_mode or "manual",
-        },
-        "constraints": _constraints.list_constraints(role),
-        "funnel": funnel,
-        "workable_stage_funnel": workable_funnel,
-        "ats_stage_funnel": ats_stage_funnel,
-        "open_candidates": len(rows),
-        "above_threshold": len(above),
-        "below_threshold": len(below),
-        "pending_decisions": sum(pending_by_type.values()),
-        "pending_by_type": pending_by_type,
-    }
 
 
 def _comment_match(comments: list[dict[str, Any]] | None, term: str) -> bool:
-    """True when any of the candidate's Workable comment bodies matches ``term``.
-
-    A single word matches whole-word (so 'yes' hits a "Yes" comment but not
-    "yesterday"); a phrase matches as a case-insensitive substring.
-    """
-    t = (term or "").strip().lower()
-    if not t:
-        return False
-    bodies = [str((c or {}).get("body") or "") for c in (comments or [])]
-    if " " not in t and t.isalnum():
-        pat = re.compile(rf"\b{re.escape(t)}\b", re.IGNORECASE)
-        return any(pat.search(b) for b in bodies)
-    return any(t in b.lower() for b in bodies)
+    return _candidate_reads.comment_match(comments, term)
 
 
 def _compact_comments(
     comments: list[dict[str, Any]] | None, *, max_items: int = 3, max_len: int = 240
 ) -> list[dict[str, Any]]:
-    """Trim a candidate's comments for the tool result — a few, newest first,
-    bodies bounded so a chatty Workable thread can't blow up the turn."""
-    out: list[dict[str, Any]] = []
-    for c in (comments or [])[:max_items]:
-        body = str((c or {}).get("body") or "").strip()
-        if len(body) > max_len:
-            body = body[:max_len].rstrip() + "…"
-        out.append({"author": (c or {}).get("author"), "created_at": (c or {}).get("created_at"), "body": body})
-    return out
+    return _candidate_reads.compact_comments(
+        comments,
+        max_items=max_items,
+        max_len=max_len,
+    )
 
 
-def _list_candidates(
+def _search_candidate_comments(
     db: Session,
     role: Role,
     *,
-    bucket: str,
     limit: int,
-    workable_stage: str | None = None,
+    ats_stage: str | None = None,
     comment_contains: str | None = None,
-    include_comments: bool = False,
 ) -> dict[str, Any]:
-    # Only pay for the comment JSON read when the recruiter is filtering or asking
-    # to see comments; a comment filter implies returning the matched comments.
-    cc = (comment_contains or "").strip()
-    want_comments = bool(cc) or bool(include_comments)
-    rows = _impact.load_open_candidates(db, role, with_comments=want_comments)
-    effective = _impact.effective_threshold(db, role)
-    above, below = _impact.split_by_threshold(rows, effective)
-
-    if bucket == "above":
-        chosen = above
-    elif bucket == "below":
-        chosen = below
-    elif bucket == "advanced":
-        chosen = [r for r in rows if r.pipeline_stage == "advanced"]
-    elif bucket == "rejected":
-        # Rejected apps aren't "open" so they aren't in `rows`; query directly.
-        return _list_resolved(db, role, outcome="rejected", limit=limit)
-    elif bucket == "pending":
-        chosen = [r for r in rows if r.has_pending_decision]
-    else:
-        chosen = rows
-
-    # Optional filter by the SYNCED Workable stage (e.g. "Final Interview",
-    # "Technical Interview"). Taali's pipeline_stage doesn't track Workable's
-    # internal interview stages — `workable_stage` is the source of truth — so
-    # this lets the agent answer "who's in final interview" directly.
-    wk_filter = (workable_stage or "").strip().lower()
-    if wk_filter:
-        chosen = [r for r in chosen if wk_filter in (r.workable_stage or "").lower()]
-
-    # Optional filter by a recruiter's synced Workable comment (e.g. a "Yes"
-    # verdict). The data is always synced onto the candidate — this just lets the
-    # agent reach it.
-    if cc:
-        chosen = [r for r in chosen if _comment_match(r.comments, cc)]
-
-    chosen = sorted(chosen, key=lambda r: (r.score if r.score is not None else -1), reverse=True)
-    from ..services.ats_context_service import application_ats_context
-
-    apps_by_id = {
-        int(app.id): app
-        for app in db.query(CandidateApplication)
-        .filter(CandidateApplication.id.in_([r.application_id for r in chosen[: int(limit)]] or [-1]))
-        .all()
-    }
-    return {
-        "bucket": bucket,
-        "workable_stage_filter": workable_stage or None,
-        "comment_filter": cc or None,
-        "count": len(chosen),
-        "effective_threshold": effective,
-        "candidates": [
-            {
-                "application_id": r.application_id,
-                "name": r.candidate_name,
-                "score": r.score,
-                "stage": r.pipeline_stage,
-                "workable_stage": r.workable_stage,
-                "bullhorn_status": r.bullhorn_status,
-                "ats_context": application_ats_context(apps_by_id[r.application_id]),
-                "pending_decision": r.pending_decision_type,
-                **({"comments": _compact_comments(r.comments)} if want_comments else {}),
-            }
-            for r in chosen[: int(limit)]
-        ],
-    }
-
-
-def _list_resolved(db: Session, role: Role, *, outcome: str, limit: int) -> dict[str, Any]:
-    from ..models.candidate import Candidate
-
-    rows = (
-        db.query(CandidateApplication, Candidate.full_name)
-        .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplication.role_id == int(role.id),
-            CandidateApplication.application_outcome == outcome,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .limit(int(limit))
-        .all()
+    return _candidate_reads.search_candidate_comments(
+        db,
+        role,
+        limit=limit,
+        ats_stage=ats_stage,
+        comment_contains=comment_contains,
+        impact=_impact,
+        matches_comment=_comment_match,
+        compact=_compact_comments,
     )
-    return {
-        "bucket": outcome,
-        "count": len(rows),
-        "candidates": [
-            {
-                "application_id": int(app.id),
-                "name": (name or "Unnamed candidate"),
-                "score": float(app.pre_screen_score_100)
-                if app.pre_screen_score_100 is not None
-                else None,
-                "stage": app.pipeline_stage,
-            }
-            for app, name in rows
-        ],
-    }
+
+
+def _list_resolved(
+    db: Session, role: Role, *, outcome: str, limit: int
+) -> dict[str, Any]:
+    return _candidate_reads.list_resolved(
+        db,
+        role,
+        outcome=outcome,
+        limit=limit,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1195,7 +1073,9 @@ def _list_resolved(db: Session, role: Role, *, outcome: str, limit: int) -> dict
 # ---------------------------------------------------------------------------
 
 
-def _confirmation_binding(*, role: Role, user: Any, conversation: Any) -> dict[str, int]:
+def _confirmation_binding(
+    *, role: Role, user: Any, conversation: Any
+) -> dict[str, int]:
     """Authorization boundary persisted into every server preview receipt."""
     binding = {"organization_id": int(role.organization_id)}
     # Production Agent Chat is authenticated. Keeping read/helper dispatches
@@ -1216,7 +1096,8 @@ def _decision_fingerprint(snapshot: dict[str, Any]) -> str:
         "decision_id",
         "application_id",
         "decision_type",
-        "recommendation", "role_family",
+        "recommendation",
+        "role_family",
         "status",
         "created_at",
         "is_stale",
@@ -1259,9 +1140,7 @@ def _normalized_decision_action_args(
                 failure_mode=str(args.get("failure_mode") or ""),
                 correction_text=str(args.get("correction_text") or ""),
                 scope=str(args.get("scope") or ""),
-                attributed_to=(
-                    str(args.get("attributed_to") or "").strip() or None
-                ),
+                attributed_to=(str(args.get("attributed_to") or "").strip() or None),
                 direction=str(args.get("direction") or "").strip() or None,
             )
         )
@@ -1340,9 +1219,8 @@ def _dispatch_confirmed_decision_action(
                 "decision": snapshot,
                 "message": "This decision is stale. Re-evaluate it before approval.",
             }
-        if (
-            snapshot.get("approval_requires_workable_stage")
-            and not normalized.get("workable_target_stage")
+        if snapshot.get("approval_requires_workable_stage") and not normalized.get(
+            "workable_target_stage"
         ):
             return {
                 "type": "decision_action_blocked",
@@ -1351,7 +1229,9 @@ def _dispatch_confirmed_decision_action(
                 "message": "Choose the destination Workable stage before approval.",
             }
     elif action == "override_decision":
-        if normalized.get("alternative") not in snapshot.get("supported_alternatives", []):
+        if normalized.get("alternative") not in snapshot.get(
+            "supported_alternatives", []
+        ):
             raise ValueError(
                 f"unsupported alternative; choose one of {snapshot.get('supported_alternatives', [])}"
             )
@@ -1405,14 +1285,10 @@ def _dispatch_confirmed_decision_action(
         )
 
     if action == "approve_decision":
-        result = _decision_commands.approve_decision(
-            db, role, user, **normalized
-        )
+        result = _decision_commands.approve_decision(db, role, user, **normalized)
         message = f"Decision {decision_id} was accepted for processing."
     elif action == "override_decision":
-        result = _decision_commands.override_decision(
-            db, role, user, **normalized
-        )
+        result = _decision_commands.override_decision(db, role, user, **normalized)
         message = f"Decision {decision_id} override was accepted for processing."
     elif action == "teach_decision":
         result = _decision_commands.teach_decision(db, role, user, **normalized)
@@ -1432,7 +1308,8 @@ def _dispatch_confirmed_decision_action(
     receipt = {
         "type": "operation_receipt",
         "operation": action,
-        "status": result.get("status") or ("queued" if result.get("queued") else "accepted"),
+        "status": result.get("status")
+        or ("queued" if result.get("queued") else "accepted"),
         "message": message,
         "result": result,
         "_terminal_message": message,
@@ -1478,9 +1355,7 @@ def _application_action_preview(
             db, role, user, **normalized
         )
     if action == "post_workable_note":
-        return _application_commands.preview_workable_note(
-            db, role, user, **normalized
-        )
+        return _application_commands.preview_workable_note(db, role, user, **normalized)
     return _application_commands.preview_manual_run(db, role, user, **normalized)
 
 
@@ -1577,24 +1452,18 @@ def _dispatch_confirmed_application_action(
         )
 
     if action == "create_application":
-        result = _application_commands.create_application(
-            db, role, user, **normalized
-        )
+        result = _application_commands.create_application(db, role, user, **normalized)
         message = (
             f"Application {result['application_id']} was created for "
             f"{result['candidate_email']}."
         )
     elif action == "post_workable_note":
-        result = _application_commands.queue_workable_note(
-            db, role, user, **normalized
-        )
+        result = _application_commands.queue_workable_note(db, role, user, **normalized)
         message = (
             f"The Workable note for application {result['application_id']} is queued."
         )
     else:
-        result = _application_commands.enqueue_manual_run(
-            db, role, user, **normalized
-        )
+        result = _application_commands.enqueue_manual_run(db, role, user, **normalized)
         message = (
             "The focused agent run is queued."
             if normalized.get("application_id") is not None and result.get("queued")
@@ -1614,7 +1483,9 @@ def _dispatch_confirmed_application_action(
     return mark_confirmation_consumed(receipt, check=check)
 
 
-def _maybe_report_rescreen(db: Session, *, role: Role, conversation: Any, result: Any) -> None:
+def _maybe_report_rescreen(
+    db: Session, *, role: Role, conversation: Any, result: Any
+) -> None:
     """When a constraint edit kicked a re-screen, schedule the proactive
     "re-screen complete" impact message. Captures the qualified-pool baseline
     now (scores are still the old, visible values until the re-score lands).
@@ -1661,6 +1532,20 @@ def dispatch_tool(
     """Run one tool against the conversation's role. Raises on unknown tool
     or bad arguments; the engine converts exceptions to a tool_result error."""
     args = arguments or {}
+    if name in _SHARED_AGENT_CHAT_NAMES:
+        result = dispatch_shared_read(
+            name,
+            args,
+            exposure=AGENT_CHAT_EXPOSURE,
+            db=db,
+            principal=user,
+            bound_role_id=int(role.id),
+        )
+        if get_tool_spec(name).renderer == "candidate_evidence" and isinstance(
+            result, dict
+        ):
+            return {"type": "candidate_evidence", **result}
+        return result
     permission = _MUTATION_PERMISSIONS.get(name)
     if permission is not None:
         role = _locked_authorized_role(
@@ -1800,15 +1685,13 @@ def dispatch_tool(
             "result": result,
             "_terminal_message": message,
         }
-    if name == "list_candidates":
-        return _list_candidates(
+    if name == "search_candidate_comments":
+        return _search_candidate_comments(
             db,
             role,
-            bucket=str(args.get("bucket") or "all"),
             limit=int(args.get("limit") or 20),
-            workable_stage=args.get("workable_stage"),
+            ats_stage=args.get("ats_stage"),
             comment_contains=args.get("comment_contains"),
-            include_comments=bool(args.get("include_comments") or False),
         )
     if name == "simulate_threshold":
         return _impact.simulate_threshold(db, role, float(args["threshold"]))
@@ -1932,8 +1815,7 @@ def dispatch_tool(
             actor_user_id=int(user.id),
             action="role_criteria_updated",
             reason=(
-                "agent chat criterion removed: "
-                f"criterion_id={removed_criterion_id}"
+                f"agent chat criterion removed: criterion_id={removed_criterion_id}"
             ),
             allow_empty_changes=True,
         )
@@ -1982,11 +1864,7 @@ def dispatch_tool(
             )
         return result
     if name == "start_related_role_draft":
-        org = (
-            db.query(Organization)
-            .filter(Organization.id == int(org_id))
-            .one()
-        )
+        org = db.query(Organization).filter(Organization.id == int(org_id)).one()
         brief = _related_roles.create_related_role_draft(
             db,
             role_id=int(role.id),
@@ -2022,6 +1900,9 @@ def dispatch_tool(
                 "role_id": int(role.id),
                 "name": clean_name,
                 "spec_fingerprint": text_fingerprint(clean_spec),
+                "source_snapshot_fingerprint": str(
+                    result.get("source_snapshot_fingerprint") or ""
+                ),
                 "max_total": int(result.get("candidates_total") or 0),
                 "max_scorable": int(result.get("candidates_with_cv") or 0),
             },
@@ -2050,6 +1931,8 @@ def dispatch_tool(
             and str(check.payload.get("name") or "") == clean_name
             and str(check.payload.get("spec_fingerprint") or "")
             == text_fingerprint(clean_spec)
+            and str(check.payload.get("source_snapshot_fingerprint") or "")
+            == str(current.get("source_snapshot_fingerprint") or "")
             and int(current.get("candidates_total") or 0)
             <= int(check.payload.get("max_total") or 0)
             and int(current.get("candidates_with_cv") or 0)
@@ -2073,6 +1956,9 @@ def dispatch_tool(
                     "role_id": int(role.id),
                     "name": clean_name,
                     "spec_fingerprint": text_fingerprint(clean_spec),
+                    "source_snapshot_fingerprint": str(
+                        current.get("source_snapshot_fingerprint") or ""
+                    ),
                     "max_total": int(current.get("candidates_total") or 0),
                     "max_scorable": int(current.get("candidates_with_cv") or 0),
                 },
@@ -2084,10 +1970,11 @@ def dispatch_tool(
             creator_user_id=int(user.id),
             name=clean_name,
             job_spec_text=clean_spec,
+            expected_source_snapshot_fingerprint=str(
+                check.payload.get("source_snapshot_fingerprint") or ""
+            ),
         )
-        result = _related_roles.related_role_created_payload(
-            related, evaluation_counts
-        )
+        result = _related_roles.related_role_created_payload(related, evaluation_counts)
         return mark_confirmation_consumed(result, check=check)
     if name == "rescreen_role":
         if conversation is not None:
@@ -2101,9 +1988,13 @@ def dispatch_tool(
             if not check.ok:
                 return blocked_confirmation_result("rescreen_role", check.reason)
             if int(check.payload.get("role_id") or 0) != int(role.id):
-                return blocked_confirmation_result("rescreen_role", "The preview belongs to a different role.")
+                return blocked_confirmation_result(
+                    "rescreen_role", "The preview belongs to a different role."
+                )
             current = _constraints.estimate_rescreen(db, role)
-            if int(current.get("count") or 0) > int(check.payload.get("max_count") or 0):
+            if int(current.get("count") or 0) > int(
+                check.payload.get("max_count") or 0
+            ):
                 return attach_confirmation(
                     {
                         "type": "rescreen_preview",
@@ -2127,7 +2018,9 @@ def dispatch_tool(
         common = {
             "scope": str(args.get("scope") or "all"),
             "limit": int(args["limit"]) if args.get("limit") is not None else 10,
-            "threshold": float(args["threshold"]) if args.get("threshold") is not None else None,
+            "threshold": float(args["threshold"])
+            if args.get("threshold") is not None
+            else None,
         }
         if confirm and conversation is not None:
             check = require_later_turn_confirmation(
@@ -2148,7 +2041,8 @@ def dispatch_tool(
             if (
                 int(check.payload.get("role_id") or 0) != int(role.id)
                 or approved_scope != common
-                or int(current.get("selected_count") or 0) > int(check.payload.get("max_count") or 0)
+                or int(current.get("selected_count") or 0)
+                > int(check.payload.get("max_count") or 0)
             ):
                 return attach_confirmation(
                     current,
@@ -2168,7 +2062,11 @@ def dispatch_tool(
         )
         if confirm and conversation is not None:
             result = mark_confirmation_consumed(result, check=check)
-        if not confirm and isinstance(result, dict) and result.get("type") == "rescore_preview":
+        if (
+            not confirm
+            and isinstance(result, dict)
+            and result.get("type") == "rescore_preview"
+        ):
             result = attach_confirmation(
                 result,
                 operation="rescore_candidates",
@@ -2217,10 +2115,13 @@ def dispatch_tool(
                         "max_count": len(ids),
                     },
                 )
-            approved_statuses = tuple(str(s) for s in (check.payload.get("statuses") or []))
+            approved_statuses = tuple(
+                str(s) for s in (check.payload.get("statuses") or [])
+            )
             if (
                 int(check.payload.get("role_id") or 0) != int(role.id)
-                or int(check.payload.get("criterion_id") or 0) != int(args["criterion_id"])
+                or int(check.payload.get("criterion_id") or 0)
+                != int(args["criterion_id"])
                 or approved_statuses != statuses
                 or len(ids) > int(check.payload.get("max_count") or 0)
             ):
@@ -2241,7 +2142,9 @@ def dispatch_tool(
                     },
                 )
         result = _constraints.rescreen_role(
-            db, role, application_ids=ids,
+            db,
+            role,
+            application_ids=ids,
             reason=f"agent_chat:scoped_rescreen:crit_{args['criterion_id']}",
         )
         _maybe_report_rescreen(db, role=role, conversation=conversation, result=result)

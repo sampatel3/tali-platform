@@ -93,6 +93,40 @@ def test_activity_timeseries(client, db):
     db.add(AgentNeedsInput(id=1, organization_id=org_id, role_id=role.id, kind="monthly_budget_missing",
                            prompt="?", created_at=now - timedelta(days=3)))
 
+    # A removed candidate's structured question is unavailable everywhere:
+    # it must affect neither historical backlog nor the current pending count.
+    removed_app = _app(
+        db,
+        org_id,
+        role.id,
+        _candidate(db, org_id, "removed@x.test").id,
+    )
+    db.add(
+        AgentNeedsInput(
+            id=2,
+            organization_id=org_id,
+            role_id=role.id,
+            kind="candidate_tie_break",
+            subject_id=removed_app.id,
+            prompt="Private removed-candidate question",
+            created_at=now - timedelta(days=20),
+        )
+    )
+    _decision(
+        db,
+        org_id,
+        role.id,
+        removed_app.id,
+        decision_type="resend_assessment_invite",
+        status="pending",
+        created_at=now - timedelta(days=20),
+        resolution_note=(
+            "Returned to queue: Workable writeback failed "
+            "(private removed candidate)."
+        ),
+    )
+    removed_app.deleted_at = now
+
     # Second role + a pending decision today — exercises role filtering.
     role2 = Role(organization_id=org_id, name="Other", source="manual", agentic_mode_enabled=True)
     db.add(role2)
@@ -112,6 +146,7 @@ def test_activity_timeseries(client, db):
     assert today["created"] == 2  # D1 (advance) + D5 (reject)
     assert today["by_type"].get("advance_to_interview") == 1
     assert today["by_type"].get("reject") == 1
+    assert p["series"][14]["backlog"] == 0
 
     five_days_ago = p["series"][24]  # index 29-5
     assert five_days_ago["resolved"] == 1  # D2
@@ -121,7 +156,9 @@ def test_activity_timeseries(client, db):
         "decisions": 4, "questions": 1, "total": 5,
         "by_type": {"advance_to_interview": 3, "reject": 1},
     }
+    assert "resend_assessment_invite" not in p["pending_now"]["by_type"]
     assert set(p["decision_types"]) >= {"advance_to_interview", "reject"}
+    assert "resend_assessment_invite" not in p["decision_types"]
 
     assert p["workable_errors"]["total"] == 1
     assert len(p["workable_errors"]["by_role"]) == 1

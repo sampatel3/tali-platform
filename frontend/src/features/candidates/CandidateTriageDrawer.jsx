@@ -25,7 +25,6 @@ import {
   CandidateAvatar,
   WorkableScorePip,
 } from '../../shared/ui/RecruiterDesignPrimitives';
-import { formatRoleFamilyReferences } from '../../shared/decisions/decisionActions';
 import { isPostHandoverWorkableStage } from '../../shared/metrics';
 import { formatStatusLabel } from './candidatesUiUtils';
 
@@ -57,16 +56,29 @@ const formatAtsStageOption = (stage) => {
   };
 };
 
-export const candidateReportHref = (application, fromRoleId = null) => {
+export const candidateReportHref = (
+  application,
+  fromRoleId = null,
+  viewRoleId = null,
+) => {
   if (!application?.id) return '/jobs';
   const base = `/candidates/${encodeURIComponent(application.id)}`;
+  const params = [];
   // Guard against null/undefined explicitly: Number(null) === 0 is finite,
   // so the old check happily produced "?from=jobs/null", which the report's
   // back-link parser then rejected and fell back to "Back to home".
-  if (fromRoleId != null && Number.isFinite(Number(fromRoleId))) {
-    return `${base}?from=jobs/${encodeURIComponent(fromRoleId)}`;
+  const numericFromRoleId = Number(fromRoleId);
+  if (Number.isInteger(numericFromRoleId) && numericFromRoleId > 0) {
+    params.push(`from=jobs/${encodeURIComponent(numericFromRoleId)}`);
   }
-  return base;
+  // Breadcrumb provenance and logical candidate membership are intentionally
+  // separate. Related roles reuse a physical evidence application id, so
+  // ``from`` alone must never decide which role-local score/state is loaded.
+  const numericViewRoleId = Number(viewRoleId);
+  if (Number.isInteger(numericViewRoleId) && numericViewRoleId > 0) {
+    params.push(`view_role_id=${encodeURIComponent(numericViewRoleId)}`);
+  }
+  return params.length ? `${base}?${params.join('&')}` : base;
 };
 
 const resolveAssessmentId = (application) => (
@@ -118,7 +130,6 @@ export function CandidateTriageDrawer({
   roleId = null,
   isRelatedRole = false,
   hasRelatedRoles = false,
-  roleFamily = null,
   roleTasks = EMPTY_LIST,
   mode = 'inline',
   activityLabel = '',
@@ -183,7 +194,6 @@ export function CandidateTriageDrawer({
   const resolvedAtsProvider = atsProvider
     || applicationAtsProvider;
   const providerLabel = resolvedAtsProvider === 'bullhorn' ? 'Bullhorn' : 'Workable';
-  const linkedRoleReferences = formatRoleFamilyReferences(roleFamily);
   const sourceLabel = applicationAtsProvider
     ? `Imported from ${applicationAtsProvider === 'bullhorn' ? 'Bullhorn' : 'Workable'}`
     : 'Added in Taali';
@@ -293,7 +303,7 @@ export function CandidateTriageDrawer({
 
   if (!application) return null;
 
-  const reportHref = candidateReportHref(application, roleId);
+  const reportHref = candidateReportHref(application, roleId, roleId);
   const sendLabel = assessmentId ? 'Send retake' : 'Send invite';
   const isRejectSelected = selectedMoveAction === REJECT_VALUE;
   const selectedAtsStage = isRejectSelected
@@ -419,7 +429,7 @@ export function CandidateTriageDrawer({
           />
           {applicationId ? (
             <div className="ctc-timeline">
-              <CandidateAuditTimeline applicationId={applicationId} />
+              <CandidateAuditTimeline applicationId={applicationId} roleId={roleId} />
             </div>
           ) : null}
         </div>
@@ -615,26 +625,20 @@ export function CandidateTriageDrawer({
               <div className="ctc-card-sub">Closes the application</div>
             </button>
           </div>
-          {/* Rejection changes the one canonical ATS application, so it is
-              global across the original and every related-role funnel. */}
           {isRejectSelected ? (
             <div className="ctc-reject-warning" role="alert">
-              {isRelatedRole || hasRelatedRoles ? (
+              {isRelatedRole ? (
                 <>
-                  {linkedRoleReferences ? (
-                    <>
-                      <strong>Reject everywhere —</strong> rejecting here affects the shared {providerLabel}{' '}
-                      application across all linked roles: {linkedRoleReferences}.
-                    </>
-                  ) : (
-                    <>
-                      <strong>Reject everywhere —</strong> this is one shared {providerLabel} application.
-                      Rejecting here disqualifies the candidate in the original role and every related role.
-                    </>
-                  )}
+                  <strong>Reject in {roleLabel} —</strong> this changes only this role.
+                  {' '}The linked {providerLabel} application and other roles are unchanged.
                   {isPostHandoverAtsStage ? (
-                    <> They are currently in <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}.</>
+                    <> The linked application is currently in <strong>{formatStatusLabel(currentAtsStage)}</strong> in {providerLabel}.</>
                   ) : null}
+                </>
+              ) : hasRelatedRoles ? (
+                <>
+                  <strong>Reject in {roleLabel} —</strong> this role owns the {providerLabel} write-back.
+                  {' '}Related roles keep their own Taali candidate status.
                 </>
               ) : (
                 <>
@@ -647,17 +651,9 @@ export function CandidateTriageDrawer({
           ) : null}
           {isSharedMoveSelected ? (
             <div className="ctc-reject-warning" role="alert">
-              {linkedRoleReferences ? (
-                <>
-                  <strong>Shared ATS move —</strong> moving the shared {providerLabel} application to{' '}
-                  <strong>{selectedAtsStage.label}</strong> updates all linked roles: {linkedRoleReferences}.
-                </>
-              ) : (
-                <>
-                  <strong>Shared ATS move —</strong> moving this shared {providerLabel} application to{' '}
-                  <strong>{selectedAtsStage.label}</strong> updates the original role and every related role.
-                </>
-              )}
+              <strong>Move in {roleLabel} —</strong> this changes only this role&apos;s Taali pipeline state.
+              {' '}The linked {providerLabel} application is used for the{' '}
+              <strong>{selectedAtsStage.label}</strong> write-back; other roles do not move.
             </div>
           ) : null}
           <div className="ctc-action-row">

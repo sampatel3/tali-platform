@@ -17,6 +17,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..decision_policy.abstention import (
     DEFAULT_CONFIDENCE_FLOOR,
     DEFAULT_PER_AGENT_UNCERTAINTY_THRESHOLD,
@@ -32,7 +33,7 @@ from ..decision_policy.engine import (
 from ..decision_policy.schema import PolicyJson
 from ..models.candidate_application import CandidateApplication
 from ..models.assessment import Assessment, AssessmentStatus
-from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.role import Role
 from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..services.decision_evidence_service import must_have_blocked
 from ..components.scoring.freshness import application_scores_allow_decision
@@ -219,12 +220,19 @@ def evaluate_for_application(
     Returns ``(verdict, sub_agent_outputs)``. The orchestrator stamps
     both onto ``AgentDecision.evidence`` for the audit trail.
     """
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+    )
+    app_query = db.query(CandidateApplication).filter(
+        CandidateApplication.id == application_id,
+        CandidateApplication.organization_id == role.organization_id,
+    )
     app = (
-        db.query(CandidateApplication)
+        role_scope.scope_visible_roster(app_query)
         .filter(
-            CandidateApplication.id == application_id,
-            CandidateApplication.organization_id == role.organization_id,
-            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.candidate_id.isnot(None),
         )
         .one_or_none()
     )
@@ -238,47 +246,7 @@ def evaluate_for_application(
             {},
         )
 
-    expected_application_role_id = int(role.id)
-    if str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER:
-        owner_role_id = getattr(role, "ats_owner_role_id", None)
-        if owner_role_id is None:
-            return (
-                PolicyDecision(
-                    decision_type="no_action",
-                    reasoning="Related role has no available ATS owner pipeline",
-                    rule_path=["sister_role_owner_unavailable"],
-                ),
-                {},
-            )
-        owner_exists = (
-            db.query(Role.id)
-            .filter(
-                Role.id == int(owner_role_id),
-                Role.organization_id == int(role.organization_id),
-                Role.deleted_at.is_(None),
-            )
-            .one_or_none()
-        )
-        if owner_exists is None:
-            return (
-                PolicyDecision(
-                    decision_type="no_action",
-                    reasoning="Related role has no available ATS owner pipeline",
-                    rule_path=["sister_role_owner_unavailable"],
-                ),
-                {},
-            )
-        expected_application_role_id = int(owner_role_id)
-    if app.role_id is None or int(app.role_id) != expected_application_role_id:
-        return (
-            PolicyDecision(
-                decision_type="no_action",
-                reasoning="Application does not belong to this role's ATS pipeline",
-                rule_path=["application_role_mismatch"],
-            ),
-            {},
-        )
-    if str(getattr(role, "role_kind", "") or "") == ROLE_KIND_SISTER:
+    if role_scope.is_related:
         # Related roles own their score and funnel state in
         # SisterRoleEvaluation. Generic CandidateApplication sub-agents would
         # read the ATS owner's cached scores, so this bridge must defer to the
@@ -393,6 +361,7 @@ def evaluate_for_application(
     actions = read_recent_manual_actions(
         db,
         application_id=int(application_id),
+        role_id=int(role.id),
         lookback_hours=lookback,
     )
 

@@ -77,10 +77,12 @@ vi.mock('../shared/api', () => ({
     createApplicationShareLink: vi.fn(),
     revokeShareLink: vi.fn(),
     listApplicationEvents: vi.fn().mockResolvedValue({ data: [] }),
+    addApplicationNote: vi.fn().mockResolvedValue({ data: {} }),
     listTasks: vi.fn().mockResolvedValue({ data: [] }),
     batchScoreStatus: vi.fn(),
     fetchCvsStatus: vi.fn(),
     batchScore: vi.fn(),
+    scoreSelected: vi.fn(),
     fetchCvs: vi.fn(),
     regenerateInterviewFocus: vi.fn(),
     generateApplicationInterviewDebrief: vi.fn(),
@@ -122,6 +124,21 @@ vi.mock('../shared/api/authClient', () => ({
   auth: { me: vi.fn(), login: vi.fn(), register: vi.fn() },
 }));
 
+vi.mock('../shared/api/orgClient', () => ({
+  organizations: {
+    get: vi.fn().mockResolvedValue({ data: { id: 1, name: 'Taali' } }),
+  },
+}));
+
+// Candidate report tests do not exercise background batch/sync discovery.
+// AppShell mounts JobStatusProvider on every authenticated recruiter route;
+// leaving the real provider active starts low-level API polling outside the
+// mocked report client and leaks XMLHttpRequests into jsdom.
+vi.mock('../contexts/JobStatusContext', () => ({
+  JobStatusProvider: ({ children }) => children,
+  useJobStatus: () => null,
+}));
+
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
   RadarChart: () => <div data-testid="radar-chart" />,
@@ -135,6 +152,7 @@ vi.mock('recharts', () => ({
   YAxis: () => <div />,
   CartesianGrid: () => <div />,
   Tooltip: () => <div />,
+  Legend: () => <div />,
 }));
 
 vi.mock('@monaco-editor/react', () => ({
@@ -186,6 +204,20 @@ const renderAppAt = (path) => {
   );
 };
 
+const navigateAppTo = async (path) => {
+  await act(async () => {
+    window.history.pushState(null, '', path);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    await Promise.resolve();
+  });
+};
+
+const deferred = () => {
+  let resolve;
+  const promise = new Promise((settle) => { resolve = settle; });
+  return { promise, resolve };
+};
+
 describe('Candidate report back link', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -198,6 +230,8 @@ describe('Candidate report back link', () => {
     agentApi.overrideDecision.mockReset();
     agentApi.snoozeDecision.mockReset().mockResolvedValue({ data: {} });
     agentApi.reEvaluateDecision.mockReset().mockResolvedValue({ data: {} });
+    rolesApi.addApplicationNote.mockReset().mockResolvedValue({ data: {} });
+    rolesApi.scoreSelected.mockReset().mockResolvedValue({ data: {} });
   });
 
   afterEach(() => {
@@ -315,7 +349,252 @@ describe('Candidate report back link', () => {
     expect(screen.getByLabelText('77 of 100')).toBeInTheDocument();
   });
 
-  it('keeps the decision aligned if a viewed role can no longer be projected', async () => {
+  it('mints a share link in the logical role rendered by the report', async () => {
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        ...roleBearingApplication,
+        role_id: 135,
+        role_name: 'Related AI Engineer',
+        cv_match_score: 77,
+        taali_score: 77,
+      },
+    });
+    rolesApi.createApplicationShareLink.mockResolvedValue({
+      data: { token: 'shr_related_role_report' },
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    renderAppAt('/candidates/77?from=home&view_role_id=135');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Share with client' }));
+    await waitFor(() => {
+      expect(rolesApi.createApplicationShareLink).toHaveBeenCalledWith(77, {
+        mode: 'client',
+        expiry: '7d',
+        viewRoleId: 135,
+      });
+    });
+    expect(writeText).toHaveBeenCalledWith(
+      `${window.location.origin}/share/shr_related_role_report`,
+    );
+  });
+
+  it('saves notes and supporting links in the viewed logical role', async () => {
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        ...roleBearingApplication,
+        role_id: 135,
+        role_name: 'Related AI Engineer',
+      },
+    });
+
+    renderAppAt('/candidates/77?from=jobs/135&view_role_id=135');
+
+    fireEvent.click(await screen.findByRole('link', { name: 'Notes & timeline' }));
+    await waitFor(() => {
+      expect(rolesApi.listApplicationEvents).toHaveBeenCalledWith(77, {
+        role_id: 135,
+      });
+    });
+    fireEvent.change(await screen.findByPlaceholderText('Write a note for the hiring team…'), {
+      target: { value: 'Use the related-role interview rubric.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+
+    await waitFor(() => {
+      expect(rolesApi.addApplicationNote).toHaveBeenCalledWith(
+        77,
+        'Use the related-role interview rubric.',
+        true,
+        { role_id: 135 },
+      );
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /add supporting link/i }));
+    fireEvent.change(await screen.findByLabelText(/^URL$/), {
+      target: { value: 'https://example.com/related-role-portfolio' },
+    });
+    fireEvent.change(screen.getByLabelText(/Label/), {
+      target: { value: 'Portfolio' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add link' }));
+
+    await waitFor(() => {
+      expect(rolesApi.addApplicationNote).toHaveBeenLastCalledWith(
+        77,
+        'Portfolio',
+        true,
+        {
+          kind: 'link',
+          link_url: 'https://example.com/related-role-portfolio',
+          link_label: 'Portfolio',
+          role_id: 135,
+        },
+      );
+    });
+  });
+
+  it('keeps the newest same-role report read when overlapping refreshes resolve backwards', async () => {
+    const olderRefresh = deferred();
+    const newerRefresh = deferred();
+    const initialApplication = {
+      ...roleBearingApplication,
+      role_id: 135,
+      role_name: 'Related AI Engineer',
+    };
+    rolesApi.getApplication
+      .mockResolvedValueOnce({ data: initialApplication })
+      .mockReturnValueOnce(olderRefresh.promise)
+      .mockReturnValueOnce(newerRefresh.promise);
+
+    renderAppAt('/candidates/77?from=home&view_role_id=135&tab=notes');
+    const note = await screen.findByPlaceholderText('Write a note for the hiring team…');
+    await waitFor(() => expect(rolesApi.getApplication).toHaveBeenCalledTimes(1));
+
+    fireEvent.change(note, { target: { value: 'Start the older refresh' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    await waitFor(() => expect(rolesApi.getApplication).toHaveBeenCalledTimes(2));
+
+    fireEvent.change(note, { target: { value: 'Start the newer refresh' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    await waitFor(() => expect(rolesApi.getApplication).toHaveBeenCalledTimes(3));
+
+    await act(async () => {
+      newerRefresh.resolve({
+        data: { ...initialApplication, cv_match_score: 91, taali_score: 91 },
+      });
+      await newerRefresh.promise;
+    });
+    expect(await screen.findByLabelText('91 of 100')).toBeInTheDocument();
+
+    await act(async () => {
+      olderRefresh.resolve({
+        data: { ...initialApplication, cv_match_score: 33, taali_score: 33 },
+      });
+      await olderRefresh.promise;
+    });
+    expect(screen.getByLabelText('91 of 100')).toBeInTheDocument();
+    expect(screen.queryByLabelText('33 of 100')).not.toBeInTheDocument();
+  });
+
+  it('clears role-local drafts and ignores a stale note completion after a logical-role switch', async () => {
+    const staleSave = deferred();
+    rolesApi.addApplicationNote
+      .mockReturnValueOnce(staleSave.promise)
+      .mockResolvedValue({ data: {} });
+    rolesApi.getApplication.mockImplementation((_applicationId, config = {}) => {
+      const logicalRoleId = Number(config?.params?.view_role_id || 31);
+      return Promise.resolve({
+        data: {
+          ...roleBearingApplication,
+          role_id: logicalRoleId,
+          role_name: `Role ${logicalRoleId}`,
+        },
+      });
+    });
+
+    renderAppAt('/candidates/77?from=home&view_role_id=135&tab=notes');
+    const roleANote = await screen.findByPlaceholderText('Write a note for the hiring team…');
+    fireEvent.change(roleANote, { target: { value: 'Guidance for role A' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    await waitFor(() => expect(rolesApi.addApplicationNote).toHaveBeenCalledWith(
+      77,
+      'Guidance for role A',
+      true,
+      { role_id: 135 },
+    ));
+
+    await navigateAppTo('/candidates/77?from=home&view_role_id=246&tab=notes');
+    const roleBNote = await screen.findByPlaceholderText('Write a note for the hiring team…');
+    expect(roleBNote).toHaveValue('');
+    fireEvent.change(roleBNote, { target: { value: 'Draft for role B' } });
+    expect(screen.getByRole('button', { name: 'Add note' })).toBeEnabled();
+
+    await act(async () => {
+      staleSave.resolve({ data: {} });
+      await staleSave.promise;
+    });
+    expect(roleBNote).toHaveValue('Draft for role B');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add note' }));
+    await waitFor(() => expect(rolesApi.addApplicationNote).toHaveBeenLastCalledWith(
+      77,
+      'Draft for role B',
+      true,
+      { role_id: 246 },
+    ));
+  });
+
+  it('resets an active full-evaluation state when the logical role changes', async () => {
+    rolesApi.getApplication.mockImplementation((_applicationId, config = {}) => {
+      const logicalRoleId = Number(config?.params?.view_role_id || 31);
+      return Promise.resolve({
+        data: {
+          ...roleBearingApplication,
+          role_id: logicalRoleId,
+          role_name: `Role ${logicalRoleId}`,
+          cv_match_score: null,
+          taali_score: null,
+          pre_screen_recommendation: 'Below threshold',
+          pre_screen_evidence: { decision: 'no', summary: 'Missing required evidence.' },
+        },
+      });
+    });
+
+    renderAppAt('/candidates/77?from=home&view_role_id=135');
+    fireEvent.click(await screen.findByRole('button', { name: 'Run full evaluation' }));
+    expect(await screen.findByRole('button', { name: 'Evaluating…' })).toBeDisabled();
+
+    await navigateAppTo('/candidates/77?from=home&view_role_id=246');
+
+    expect(await screen.findByRole('button', { name: 'Run full evaluation' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Evaluating…' })).not.toBeInTheDocument();
+    expect(rolesApi.scoreSelected).toHaveBeenCalledWith(
+      135,
+      [77],
+      { force: true, bypassPreScreen: true },
+    );
+  });
+
+  it('ignores a full-evaluation completion from the previous logical role', async () => {
+    const staleEvaluation = deferred();
+    rolesApi.scoreSelected.mockReturnValueOnce(staleEvaluation.promise);
+    rolesApi.getApplication.mockImplementation((_applicationId, config = {}) => {
+      const logicalRoleId = Number(config?.params?.view_role_id || 31);
+      return Promise.resolve({
+        data: {
+          ...roleBearingApplication,
+          role_id: logicalRoleId,
+          role_name: `Role ${logicalRoleId}`,
+          cv_match_score: null,
+          taali_score: null,
+          pre_screen_recommendation: 'Below threshold',
+          pre_screen_evidence: { decision: 'no', summary: 'Missing required evidence.' },
+        },
+      });
+    });
+
+    renderAppAt('/candidates/77?from=home&view_role_id=135');
+    fireEvent.click(await screen.findByRole('button', { name: 'Run full evaluation' }));
+    expect(await screen.findByRole('button', { name: 'Queuing…' })).toBeDisabled();
+
+    await navigateAppTo('/candidates/77?from=home&view_role_id=246');
+    expect(await screen.findByRole('button', { name: 'Run full evaluation' })).toBeEnabled();
+
+    await act(async () => {
+      staleEvaluation.resolve({ data: {} });
+      await staleEvaluation.promise;
+    });
+
+    expect(screen.getByRole('button', { name: 'Run full evaluation' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Evaluating…' })).not.toBeInTheDocument();
+  });
+
+  it('fails closed if the application response does not belong to the requested role', async () => {
     rolesApi.getApplication.mockResolvedValue({
       data: {
         ...roleBearingApplication,
@@ -325,41 +604,23 @@ describe('Candidate report back link', () => {
       },
     });
     agentApi.listDecisions
-      .mockResolvedValueOnce({ data: [{ id: 900, application_id: 77, role_id: 135 }] })
-      .mockResolvedValueOnce({ data: [{
-        id: 901,
-        application_id: 77,
-        role_id: 31,
-        candidate_name: 'Rami Reddy',
-        status: 'pending',
-        decision_type: 'reject',
-        reasoning: 'Below the role-fit bar.',
-        evidence: {},
-      }] })
-      .mockResolvedValueOnce({ data: [] });
+      .mockResolvedValueOnce({ data: [{ id: 900, application_id: 77, role_id: 135 }] });
 
     renderAppAt('/candidates/77?from=home&view_role_id=135');
 
-    expect(await screen.findByLabelText('67 of 100', {}, { timeout: 5000 })).toBeInTheDocument();
-    await waitFor(() => {
-      expect(agentApi.listDecisions).toHaveBeenCalledWith({
-        application_id: 77,
-        role_id: 31,
-        status: 'current',
-        limit: 1,
-      });
+    expect(await screen.findByText('Candidate is not available in this role.'))
+      .toBeInTheDocument();
+    expect(screen.queryByLabelText('67 of 100')).not.toBeInTheDocument();
+    expect(agentApi.listDecisions).toHaveBeenCalledWith({
+      application_id: 77,
+      role_id: 135,
+      status: 'current',
+      limit: 1,
     });
-
-    fireEvent.click(await screen.findByRole('button', { name: 'Snooze' }));
-    await waitFor(() => {
-      expect(agentApi.snoozeDecision).toHaveBeenCalledWith(901);
-      expect(agentApi.listDecisions).toHaveBeenLastCalledWith({
-        application_id: 77,
-        role_id: 31,
-        status: 'current',
-        limit: 1,
-      });
-    });
+    expect(agentApi.listDecisions).not.toHaveBeenCalledWith(expect.objectContaining({
+      role_id: 31,
+    }));
+    expect(agentApi.snoozeDecision).not.toHaveBeenCalled();
   });
 
   const pendingDecision = {

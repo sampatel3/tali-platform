@@ -5,7 +5,8 @@ import itertools
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.services.threshold_calibration.label_builder import (
     build_labelled_pairs,
     label_for_application,
@@ -83,3 +84,51 @@ def test_build_pairs_excludes_unscored_and_open(db):
     assert ls.n_positive == 1
     assert ls.n_negative == 1
     assert sorted(ls.pairs) == [(20.0, 0), (80.0, 1)]
+
+
+def test_labels_preserve_opposing_owner_and_related_membership_truth(db):
+    """One physical row contributes two independent role-local labels/scores."""
+
+    org, owner = _org_role(db)
+    related = Role(
+        organization_id=org.id,
+        name="Independent related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    db.add(related)
+    db.flush()
+    app = _app(db, org, owner, score=90.0, outcome="hired", stage="advanced")
+    app.cv_match_details = {"prompt_version": "owner-prompt"}
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=org.id,
+            role_id=related.id,
+            candidate_id=app.candidate_id,
+            source_application_id=app.id,
+            ats_application_id=app.id,
+            status="done",
+            pipeline_stage="applied",
+            application_outcome="rejected",
+            membership_source="ground_truth_eval",
+            spec_fingerprint="threshold-related-truth",
+            role_fit_score=10.0,
+            prompt_version="related-prompt",
+        )
+    )
+    db.commit()
+
+    owner_labels = build_labelled_pairs(
+        db, organization_id=org.id, role_id=owner.id
+    )
+    related_labels = build_labelled_pairs(
+        db, organization_id=org.id, role_id=related.id
+    )
+    organization_labels = build_labelled_pairs(db, organization_id=org.id)
+
+    assert owner_labels.pairs == [(90.0, 1)]
+    assert owner_labels.prompt_version == "owner-prompt"
+    assert related_labels.pairs == [(10.0, 0)]
+    assert related_labels.prompt_version == "related-prompt"
+    assert sorted(organization_labels.pairs) == [(10.0, 0), (90.0, 1)]

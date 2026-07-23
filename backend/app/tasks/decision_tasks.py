@@ -7,10 +7,10 @@ activity note) and the recruiter-action graph episode — run here, off the
 request path. Previously they ran inline and added 20-30s to every Approve
 click.
 
-Everything the task needs is re-read from the committed decision row; only
-``workable_target_stage`` (the recruiter's Workable stage pick, not stored)
-and ``reject_notify`` (the "this resolution freshly rejected the candidate"
-freshness signal) are passed through from the route.
+Everything the task needs is re-read from the committed decision row.  The
+recruiter's selected target is stored durably on that row before dispatch;
+``workable_target_stage`` remains an optional compatibility override for jobs
+queued before that contract existed.
 """
 
 from __future__ import annotations
@@ -39,7 +39,9 @@ def apply_decision_side_effects(
     from ..models.agent_decision import AgentDecision
     from ..models.candidate_application import CandidateApplication
     from ..models.organization import Organization
+    from ..models.role import Role
     from ..platform.database import SessionLocal
+    from ..services.decision_resolution_provenance import requested_target_stage
 
     db = SessionLocal()
     try:
@@ -63,7 +65,16 @@ def apply_decision_side_effects(
             if app is not None
             else None
         )
-        role = getattr(app, "role", None) if app is not None else None
+        role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(decision.role_id),
+                Role.organization_id == int(decision.organization_id),
+            )
+            .one_or_none()
+            if app is not None
+            else None
+        )
         actor = Actor(type=ACTOR_RECRUITER, user_id=decision.resolved_by_user_id)
         disposition = "overridden" if decision.status == "overridden" else "approved"
 
@@ -77,7 +88,9 @@ def apply_decision_side_effects(
             disposition=disposition,
             override_action=decision.override_action,
             note=decision.resolution_note,
-            workable_target_stage=workable_target_stage,
+            workable_target_stage=requested_target_stage(
+                decision, workable_target_stage
+            ),
             reject_notify=reject_notify,
         )
 

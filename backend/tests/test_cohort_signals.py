@@ -18,12 +18,10 @@ from app.models.agent_run import AgentRun
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
-from app.models.role import Role
-from app.services import cohort_signals_service
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.services.cohort_signals_service import (
     MIN_LIFT,
-    MIN_POOL_SIZE,
-    MIN_TOP_FREQ,
     compute_cohort_signals,
     render_summary_for_prompt,
 )
@@ -313,6 +311,90 @@ def test_cohort_signals_excludes_unscored_applicants(db):
         db, role_id=int(role.id), organization_id=int(org.id)
     )
     assert result["pool_size"] == 7
+
+
+def test_related_cohort_signals_use_membership_and_role_local_score(db):
+    org = _make_org(db)
+    owner = _make_role(db, org, name="ATS owner")
+    related = Role(
+        organization_id=int(org.id),
+        name="Independent related cohort",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=int(owner.id),
+    )
+    db.add(related)
+    db.flush()
+
+    source_applications: list[CandidateApplication] = []
+    for index in range(10):
+        candidate = _make_candidate(
+            db,
+            org=org,
+            email=f"related-{index}@x.test",
+            skills=["top-local"] if index >= 5 else ["bottom-local"],
+        )
+        source = _make_application(
+            db,
+            org=org,
+            role=owner,
+            candidate=candidate,
+            # Deliberately the inverse of the role-local score.
+            taali=100.0 - index,
+        )
+        source_applications.append(source)
+        db.add(
+            SisterRoleEvaluation(
+                organization_id=int(org.id),
+                role_id=int(related.id),
+                candidate_id=int(candidate.id),
+                source_application_id=int(source.id),
+                ats_application_id=int(source.id),
+                status="done",
+                pipeline_stage="review",
+                application_outcome="open",
+                membership_source="initial_snapshot",
+                spec_fingerprint=f"related-signal-{index}",
+                role_fit_score=float(10 + index),
+            )
+        )
+
+    outsider = _make_candidate(
+        db,
+        org=org,
+        email="owner-only@x.test",
+        skills=["owner-only"],
+    )
+    _make_application(
+        db,
+        org=org,
+        role=owner,
+        candidate=outsider,
+        taali=999,
+    )
+    # Evidence-row deletion restricts ATS operations but does not remove the
+    # live independent membership or its role-local score from the cohort.
+    source_applications[-1].deleted_at = datetime.now(timezone.utc)
+    db.flush()
+
+    run = _make_agent_run(db, related)
+    result = tool_registry.dispatch(
+        "get_cohort_signals",
+        {"force_recompute": True},
+        db=db,
+        agent_run=run,
+        role=related,
+    )
+
+    assert result["from_cache"] is False
+    assert result["pool_size"] == 10
+    assert result["top_size"] == 5
+    assert result["top_threshold_score"] == 15
+    skill_signals = {
+        item["feature"]: item for item in result["signals"]["skills"]
+    }
+    assert skill_signals["top-local"]["top_freq"] == 1.0
+    assert "owner-only" not in skill_signals
 
 
 # ---------------------------------------------------------------------------

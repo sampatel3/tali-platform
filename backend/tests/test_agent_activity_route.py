@@ -18,6 +18,7 @@ from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 
 
 # Same BigInteger autoincrement workaround the teach-decision tests use —
@@ -101,6 +102,7 @@ def _seed_activity(org_name: str = "Activity Org") -> dict:
         ev = CandidateApplicationEvent(
             application_id=app_row.id,
             organization_id=org.id,
+            role_id=role.id,
             event_type="stage_change",
             from_stage="applied",
             to_stage="review",
@@ -170,6 +172,228 @@ def test_agent_activity_route_returns_merged_feed(client):
     run_entry = next(e for e in entries if e["kind"] == "run")
     assert "decision" in run_entry["title"]
     assert run_entry["cost_micro_usd"] == 12345
+
+
+def test_related_role_activity_uses_event_logical_role_not_transport_role(client):
+    """A live related-role action remains visible and labelled in its role.
+
+    The application is deliberately persisted under the original role to model
+    an optional shared ATS transport. Event.role_id identifies the product role,
+    while its explicit evaluation row remains the current membership authority.
+    """
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_activity(org_name="Related Activity Org")
+    _attach_user_to_org(email, seeded["org_id"])
+
+    sess = TestingSessionLocal()
+    try:
+        related = Role(
+            organization_id=seeded["org_id"],
+            name="Independent Related Role",
+            source="manual",
+            role_kind="sister",
+            ats_owner_role_id=seeded["role_id"],
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=0,
+        )
+        sess.add(related)
+        sess.flush()
+        source_application = sess.get(
+            CandidateApplication,
+            seeded["application_id"],
+        )
+        assert source_application is not None
+        sess.add(
+            SisterRoleEvaluation(
+                organization_id=seeded["org_id"],
+                role_id=int(related.id),
+                candidate_id=int(source_application.candidate_id),
+                source_application_id=int(source_application.id),
+                ats_application_id=int(source_application.id),
+                status="done",
+                pipeline_stage="review",
+                application_outcome="open",
+                membership_source="test",
+                spec_fingerprint="related-activity-live-membership",
+            )
+        )
+        sess.flush()
+        related_event = CandidateApplicationEvent(
+            application_id=seeded["application_id"],
+            organization_id=seeded["org_id"],
+            role_id=related.id,
+            event_type="stage_change",
+            from_stage="review",
+            to_stage="technical_interview",
+            actor_type="agent",
+            reason="related-role advance",
+            created_at=datetime.now(timezone.utc),
+        )
+        sess.add(related_event)
+        sess.commit()
+        related_id = int(related.id)
+        event_id = int(related_event.id)
+    finally:
+        sess.close()
+
+    related_feed = client.get(
+        f"/api/v1/roles/{related_id}/agent/activity?limit=50",
+        headers=headers,
+    )
+    assert related_feed.status_code == 200, related_feed.text
+    assert [entry["id"] for entry in related_feed.json()["entries"]] == [event_id]
+
+    owner_feed = client.get(
+        f"/api/v1/roles/{seeded['role_id']}/agent/activity?limit=50",
+        headers=headers,
+    )
+    assert owner_feed.status_code == 200, owner_feed.text
+    assert event_id not in {
+        entry["id"]
+        for entry in owner_feed.json()["entries"]
+        if entry["kind"] == "event"
+    }
+
+    org_feed = client.get("/api/v1/agent/activity?limit=50", headers=headers)
+    assert org_feed.status_code == 200, org_feed.text
+    entry = next(
+        item
+        for item in org_feed.json()["entries"]
+        if item["kind"] == "event" and item["id"] == event_id
+    )
+    assert entry["role_id"] == related_id
+    assert entry["role_name"] == "Independent Related Role"
+
+    org_status = client.get("/api/v1/agent/org-status", headers=headers)
+    assert org_status.status_code == 200, org_status.text
+    assert "Independent Related Role" in org_status.json()["last_activity"]["summary"]
+
+
+def test_related_role_agent_status_resolves_linked_legacy_event_without_owner_leak(
+    client,
+):
+    """Status uses event authority and returns the logical application id."""
+
+    from tests.conftest import TestingSessionLocal, auth_headers
+
+    headers, email = auth_headers(client)
+    seeded = _seed_activity(org_name="Related Status Activity Org")
+    _attach_user_to_org(email, seeded["org_id"])
+
+    sess = TestingSessionLocal()
+    try:
+        owner = sess.get(Role, seeded["role_id"])
+        assert owner is not None
+        related = Role(
+            organization_id=seeded["org_id"],
+            name="Related Status Role",
+            source="sister",
+            role_kind="sister",
+            ats_owner_role_id=owner.id,
+            agentic_mode_enabled=True,
+            monthly_usd_budget_cents=0,
+        )
+        member = Candidate(
+            organization_id=seeded["org_id"],
+            email="status-member@x.test",
+            full_name="Status Member",
+        )
+        owner_only = Candidate(
+            organization_id=seeded["org_id"],
+            email="status-owner-only@x.test",
+            full_name="Owner Only Distractor",
+        )
+        sess.add_all([related, member, owner_only])
+        sess.flush()
+        local_application = CandidateApplication(
+            organization_id=seeded["org_id"],
+            candidate_id=member.id,
+            role_id=related.id,
+            status="applied",
+            pipeline_stage="review",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            source="manual",
+        )
+        ats_transport = CandidateApplication(
+            organization_id=seeded["org_id"],
+            candidate_id=member.id,
+            role_id=owner.id,
+            status="applied",
+            pipeline_stage="review",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            source="workable",
+            workable_candidate_id="wk-status-member",
+        )
+        owner_only_application = CandidateApplication(
+            organization_id=seeded["org_id"],
+            candidate_id=owner_only.id,
+            role_id=owner.id,
+            status="applied",
+            pipeline_stage="review",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            source="workable",
+            workable_candidate_id="wk-status-owner-only",
+        )
+        sess.add_all(
+            [local_application, ats_transport, owner_only_application]
+        )
+        sess.flush()
+        membership = SisterRoleEvaluation(
+            organization_id=seeded["org_id"],
+            role_id=related.id,
+            candidate_id=member.id,
+            source_application_id=local_application.id,
+            ats_application_id=ats_transport.id,
+            status="done",
+            pipeline_stage="review",
+            application_outcome="open",
+            membership_source="direct_application",
+            spec_fingerprint="status-event-oracle",
+        )
+        sess.add(membership)
+        sess.flush()
+        event_time = datetime.now(timezone.utc) + timedelta(minutes=1)
+        legacy_related_event = CandidateApplicationEvent(
+            application_id=ats_transport.id,
+            organization_id=seeded["org_id"],
+            role_id=None,
+            event_type="pipeline_stage_changed",
+            actor_type="agent",
+            reason="legacy related-role action",
+            event_metadata={"acting_role_id": related.id},
+            created_at=event_time,
+        )
+        owner_only_event = CandidateApplicationEvent(
+            application_id=owner_only_application.id,
+            organization_id=seeded["org_id"],
+            role_id=owner.id,
+            event_type="pipeline_stage_changed",
+            actor_type="agent",
+            reason="newer owner-only action",
+            created_at=event_time + timedelta(minutes=1),
+        )
+        sess.add_all([legacy_related_event, owner_only_event])
+        sess.commit()
+        related_id = int(related.id)
+        logical_application_id = int(local_application.id)
+    finally:
+        sess.close()
+
+    response = client.get(
+        f"/api/v1/roles/{related_id}/agent/status",
+        headers=headers,
+    )
+
+    assert response.status_code == 200, response.text
+    activity = response.json()["last_activity"]
+    assert activity["reason"] == "legacy related-role action"
+    assert activity["application_id"] == logical_application_id
+    assert activity["candidate_name"] == "Status Member"
 
 
 def test_agent_activity_route_404s_for_other_org(client):

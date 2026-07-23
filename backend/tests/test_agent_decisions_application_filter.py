@@ -133,6 +133,23 @@ def test_related_role_decision_includes_complete_named_role_family(client, db):
     db.add(related)
     db.flush()
     app = _app(db, org_id, owner.id, "related-decision@x.test")
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=org_id,
+            role_id=related.id,
+            candidate_id=app.candidate_id,
+            source_application_id=app.id,
+            ats_application_id=app.id,
+            status="done",
+            pipeline_stage="review",
+            pipeline_stage_source="recruiter",
+            application_outcome="open",
+            application_outcome_source="recruiter",
+            membership_source="test",
+            spec_fingerprint="related-decision-family",
+        )
+    )
+    db.flush()
     decision = _decision(db, org_id, related.id, app.id)
     db.commit()
 

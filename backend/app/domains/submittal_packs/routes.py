@@ -29,12 +29,19 @@ from sqlalchemy.orm import Session
 from ...deps import get_current_user, get_optional_current_user
 from ...domains.assessments_runtime.role_support import (
     application_detail_payload,
-    get_role,
 )
-from ...models.candidate_application import CandidateApplication
+from ...domains.assessments_runtime.job_authorization import (
+    JobPermission,
+    require_job_permission,
+)
 from ...models.submittal_pack import SubmittalPack
 from ...models.user import User
 from ...platform.database import get_db
+from ...services.logical_role_application_authority import (
+    LogicalRoleApplicationAuthorizationError,
+    LogicalRoleApplicationContext,
+    authorize_logical_role_applications,
+)
 
 
 router = APIRouter(tags=["Submittal packs"])
@@ -66,7 +73,10 @@ def _generate_token() -> str:
     return f"sub_{secrets.token_urlsafe(24)}"
 
 
-def _candidate_entry(app: CandidateApplication, note: str | None) -> dict[str, Any]:
+def _candidate_entry(
+    context: LogicalRoleApplicationContext,
+    note: str | None,
+) -> dict[str, Any]:
     """Freeze one client-safe candidate entry from the scrubbed payload.
 
     Takes ONLY fields the client-safe payload already exposes — name, the
@@ -74,11 +84,14 @@ def _candidate_entry(app: CandidateApplication, note: str | None) -> dict[str, A
     the optional recruiter note. Recruiter-internal fields stripped by
     ``application_detail_payload(client_safe=True)`` are never read here.
     """
+    app = context.presented_application
     payload = application_detail_payload(app, include_cv_text=False, client_safe=True)
     summary = payload.get("client_share_summary")
     summary = summary if isinstance(summary, dict) else {}
     return {
         "application_id": app.id,
+        "logical_membership_id": f"{int(context.role.id)}:{int(app.id)}",
+        "role_id": int(context.role.id),
         "candidate_name": payload.get("candidate_name"),
         "client_share_summary": summary,
         "verdict": summary.get("verdict"),
@@ -152,8 +165,12 @@ def create_submittal_pack(
             detail=f"A submittal pack can hold at most {_MAX_CANDIDATES} candidates",
         )
 
-    # 404 if the role isn't the caller's org's — reuse the shared guard.
-    role = get_role(role_id, current_user.organization_id, db)
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=int(role_id),
+        permission=JobPermission.EDIT_ROLE,
+    )
 
     # De-dupe while preserving submitted order.
     ordered_ids: list[int] = []
@@ -163,25 +180,18 @@ def create_submittal_pack(
             seen.add(app_id)
             ordered_ids.append(app_id)
 
-    apps = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id.in_(ordered_ids),
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role.id,
-            CandidateApplication.deleted_at.is_(None),
+    try:
+        contexts = authorize_logical_role_applications(
+            db,
+            role=role,
+            application_ids=ordered_ids,
         )
-        .all()
-    )
-    by_id = {app.id: app for app in apps}
-    # Any id not resolvable to a live application on this role+org is a 404 —
-    # a foreign / cross-org / wrong-role id must not silently drop out.
-    missing = [app_id for app_id in ordered_ids if app_id not in by_id]
-    if missing:
+    except LogicalRoleApplicationAuthorizationError as exc:
         raise HTTPException(
             status_code=404,
             detail="One or more candidates do not belong to this role",
-        )
+        ) from exc
+    by_id = {context.application_id: context for context in contexts}
 
     notes = payload.notes or {}
     candidates = [
@@ -227,8 +237,12 @@ def list_submittal_packs(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # 404 if the role isn't the caller's org's.
-    role = get_role(role_id, current_user.organization_id, db)
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=int(role_id),
+        permission=JobPermission.VIEW,
+    )
     packs = (
         db.query(SubmittalPack)
         .filter(
@@ -257,6 +271,12 @@ def revoke_submittal_pack(
     )
     if pack is None:
         raise HTTPException(status_code=404, detail="Submittal pack not found")
+    require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=int(pack.role_id),
+        permission=JobPermission.EDIT_ROLE,
+    )
     if pack.revoked_at is None:
         pack.revoked_at = _utcnow()
         db.commit()

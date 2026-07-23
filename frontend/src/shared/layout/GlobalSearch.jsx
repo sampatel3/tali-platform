@@ -18,6 +18,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Briefcase, CheckSquare, MessageSquare, Search, User } from 'lucide-react';
 
 import { roles as rolesApi, tasks as tasksApi } from '../api';
+import {
+  applicationLogicalMembershipId,
+  applicationLogicalRoleId,
+  applicationPhysicalId,
+} from '../applicationMembership';
 import { AnimatePresence, m, popoverVariants } from '../motion';
 
 const MAX_PER_GROUP = 5;
@@ -223,8 +228,10 @@ export const GlobalSearch = ({ onNavigate }) => {
     setQuery('');
     if (group === 'candidates') {
       onNavigate?.('candidate-report', {
-        candidateApplicationId: row?.id,
-        roleId: row?.role_id,
+        // The report/evidence API is keyed by the physical application, while
+        // the role context belongs to this independently rendered membership.
+        candidateApplicationId: applicationPhysicalId(row),
+        viewRoleId: applicationLogicalRoleId(row),
       });
     } else if (group === 'roles') {
       onNavigate?.('job-pipeline', { roleId: row?.id });
@@ -304,7 +311,7 @@ export const GlobalSearch = ({ onNavigate }) => {
                     </div>
                     {rows.map((row) => (
                       <button
-                        key={`${id}-${row.id || primary(row)}`}
+                        key={`${id}-${applicationLogicalMembershipId(row) || row.id || primary(row)}`}
                         type="button"
                         className="mc-nav-search-row"
                         onClick={() => handleSelect(id, row)}

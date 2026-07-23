@@ -33,6 +33,8 @@ def test_db_surface_is_limited_to_candidate_fingerprint_state():
 def test_sync_event_attributes_explicit_org():
     ev = MagicMock()
     ev.organization_id = 99
+    ev.role_id = 12
+    ev.application.role_id = 11
     captured: dict = {}
     with patch.object(graph_client, "is_configured", return_value=True), patch.object(
         episode_module, "build_event_episode", return_value=MagicMock()
@@ -41,15 +43,18 @@ def test_sync_event_attributes_explicit_org():
     ):
         sync_module.sync_event(ev, bill_organization_id=99)
     assert captured["bill_organization_id"] == 99
+    assert captured["bill_role_id"] == 12
     assert "db" not in captured
     assert captured["require_hard_admission"] is True
-    assert captured["require_role_admission"] is False
+    assert captured["require_role_admission"] is True
 
 
 def test_sync_event_falls_back_to_event_org():
     """No explicit org → use the event's own (non-nullable) organization_id."""
     ev = MagicMock()
     ev.organization_id = 77
+    ev.role_id = 12
+    ev.application.role_id = 11
     captured: dict = {}
     with patch.object(graph_client, "is_configured", return_value=True), patch.object(
         episode_module, "build_event_episode", return_value=MagicMock()
@@ -58,8 +63,10 @@ def test_sync_event_falls_back_to_event_org():
     ):
         sync_module.sync_event(ev)
     assert captured["bill_organization_id"] == 77
+    assert captured["bill_role_id"] == 12
     assert "db" not in captured
     assert captured["require_hard_admission"] is True
+    assert captured["require_role_admission"] is True
 
 
 def test_sync_interview_attributes_explicit_org():

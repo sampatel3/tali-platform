@@ -61,6 +61,8 @@ from app.domains.assessments_runtime.search_canary_auth import (
 from app.llm import StructuredResult
 from app.main import app
 from app.mcp import handlers
+from app.mcp.catalog import CANDIDATE_QUALITATIVE_EVIDENCE
+from app.mcp.shared_reads import capabilities_for_successful_read
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -299,7 +301,12 @@ def sister_search_world(
     postgres_search_db,
     search_world: SearchWorld,
 ) -> SisterSearchWorld:
-    """A related role whose searchable rows exist only on its ATS owner role."""
+    """A related role with an explicit independent membership set.
+
+    Each ``SisterRoleEvaluation`` is the role's candidate membership and owns
+    that role's score/stage/outcome. The linked application contributes shared
+    candidate/CV evidence and an optional ATS transport only.
+    """
 
     sister_role = Role(
         organization_id=search_world.role.organization_id,
@@ -854,18 +861,19 @@ def test_real_postgres_search_is_identical_across_all_product_surfaces(
     assert boundaries.graph_calls == []
 
 
-def test_related_role_top_candidates_uses_owner_applications_and_grounded_truth(
+def test_related_role_top_candidates_uses_explicit_membership_and_grounded_truth(
     postgres_search_db,
     search_world: SearchWorld,
     sister_search_world: SisterSearchWorld,
     boundaries: BoundaryFakes,
 ) -> None:
-    """The Agent Chat regression: a sister role must not search an empty role id.
+    """The Agent Chat regression: query the related role's own membership.
 
-    The related role has no direct applications. Its canonical candidates live
-    on the ATS owner role and are projected through SisterRoleEvaluation. The
-    oracle deliberately separates a structured PySpark tag from cited CV truth:
-    only one of the two structural matches has direct PySpark evidence.
+    The role's membership is represented by ``SisterRoleEvaluation`` rather
+    than physical application rows. Linked applications provide shared CV
+    evidence but do not own the related role's pool or judgments. The oracle
+    separates a structured PySpark tag from cited CV truth: only one of the two
+    structural matches has direct PySpark evidence.
     """
 
     query = "give me the top candidates with PySpark experience"
@@ -946,6 +954,12 @@ def test_related_role_top_candidates_uses_owner_applications_and_grounded_truth(
     assert all("client" not in call for call in boundaries.evidence_calls)
     assert all(
         call["route_client_factory"] is None for call in boundaries.evidence_calls
+    )
+    assert CANDIDATE_QUALITATIVE_EVIDENCE in capabilities_for_successful_read(
+        "find_top_candidates",
+        result,
+        arguments={"query": query},
+        request_text=query,
     )
     assert len(boundaries.graph_calls) == 1
     assert boundaries.graph_calls[0]["query"] == query

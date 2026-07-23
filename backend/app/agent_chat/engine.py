@@ -64,6 +64,12 @@ from ..models.agent_conversation import (
 from ..models.organization import Organization
 from ..models.role import Role
 from ..models.user import User
+from ..mcp.provenance import (
+    grounding_required_message,
+    latest_user_text,
+)
+from ..mcp.required_reads import RequiredReadController
+from ..mcp.shared_reads import GroundingLedger
 from ..llm.tool_pairs import sanitize_tool_pairs
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
@@ -267,6 +273,12 @@ def _run_agent_response(
     client = None
     system_blocks = build_system_blocks(db, role=role)
     messages = _load_history(db, conversation)
+    user_request_text = latest_user_text(messages)
+    grounding_ledger = GroundingLedger(user_request_text)
+    required_reads = RequiredReadController(
+        grounding_ledger,
+        current_user_id=user_id,
+    )
     # Immutable-at-enqueue baseline, advanced only after this turn completes one
     # of its own successful mutation tools. Read-only tools deliberately ignore
     # this cursor so a stale turn can still answer using the latest role state.
@@ -319,6 +331,7 @@ def _run_agent_response(
         # PostgreSQL cannot detect). This checkpoint also makes hidden tool
         # plumbing durable and replay-safe if the worker later fails.
         db.commit()
+        required_read = required_reads.next_plan()
         try:
             if route is None:
                 route = prepare_route(
@@ -327,6 +340,11 @@ def _run_agent_response(
                         system=system_blocks,
                         messages=messages,
                         tools=AGENT_CHAT_TOOLS,
+                        tool_choice=(
+                            required_read.tool_choice
+                            if required_read is not None
+                            else None
+                        ),
                         max_tokens=MAX_TOKENS_PER_ROUND,
                     ),
                     attribution=RoutingAttribution(
@@ -346,6 +364,9 @@ def _run_agent_response(
                 messages=messages,
                 max_tokens=MAX_TOKENS_PER_ROUND,
                 tools=AGENT_CHAT_TOOLS,
+                tool_choice=(
+                    required_read.tool_choice if required_read is not None else None
+                ),
                 metering=meter,
                 usage_sink=usage,
             )
@@ -356,14 +377,21 @@ def _run_agent_response(
             break
 
         blocks = [_block_to_dict(b) for b in (response.content or [])]
+        blocks = required_reads.bind_assistant_blocks(required_read, blocks)
         stop_reason = getattr(response, "stop_reason", None)
         final_stop = stop_reason
         messages.append({"role": "assistant", "content": blocks})
 
         if stop_reason != "tool_use":
             # Terminal turn — this is the visible answer.
-            final_text = _extract_text(blocks)
-            if stop_reason == "max_tokens":
+            candidate_text = _extract_text(blocks)
+            missing_grounding = grounding_ledger.missing_for_answer(candidate_text)
+            if missing_grounding:
+                final_text = grounding_required_message(missing_grounding)
+                final_stop = "grounding_required"
+            else:
+                final_text = candidate_text
+            if stop_reason == "max_tokens" and not missing_grounding:
                 # The model was cut off at the length ceiling. Don't leave a bare
                 # mid-word cutoff — flag it so the recruiter can pick it up.
                 final_text = (final_text or "").rstrip() + (
@@ -413,6 +441,9 @@ def _run_agent_response(
         error_count = 0
         terminal_receipt_message: str | None = None
         round_cards: list[dict[str, Any]] = []
+        round_grounding_observations: list[
+            tuple[str, dict[str, Any], dict[str, Any]]
+        ] = []
         search_failure_incident: str | None = None
         tool_results_by_id: dict[str, dict[str, Any]] = {}
         requested_mutations = [
@@ -482,6 +513,9 @@ def _run_agent_response(
                                 role.version or expected_role_version
                             )
                         if not is_error and isinstance(result, dict):
+                            round_grounding_observations.append(
+                                (name, result, dict(args))
+                            )
                             if result.get("type") in CARD_TYPES:
                                 round_cards.append(result)
                             if result.get("_terminal_message"):
@@ -571,6 +605,22 @@ def _run_agent_response(
             error_count = tool_count
         else:
             collected_cards.extend(round_cards)
+            for (
+                observed_name,
+                observed_result,
+                observed_args,
+            ) in round_grounding_observations:
+                grounding_ledger.observe(
+                    observed_name,
+                    observed_result,
+                    arguments=observed_args,
+                )
+                required_reads.observe(
+                    required_read,
+                    tool_name=observed_name,
+                    result=observed_result,
+                    arguments=observed_args,
+                )
 
         tool_results = [
             tool_results_by_id[str(block.get("id") or "")] for block in tool_blocks

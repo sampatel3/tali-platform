@@ -764,7 +764,7 @@ describe('JobsPage Workable sync states', () => {
     expect(unknownStateCard).not.toHaveClass('not-live');
     expect(inactiveSisterCard).toHaveClass('not-live');
     expect(inactiveSisterCard).toHaveClass('is-compact');
-    expect(within(inactiveSisterCard).getByText('Shared pool · Original: Original Data Role #302'))
+    expect(within(inactiveSisterCard).getByText('ATS link · Original: Original Data Role #302'))
       .toBeInTheDocument();
     expect(publishedCard).toHaveClass('agent-on');
     expect(pausedPublishedCard).not.toHaveClass('agent-on');
@@ -1004,7 +1004,7 @@ describe('JobsPage Workable sync states', () => {
     const roleCard = (await screen.findByText('Bullhorn Related Role')).closest('.job-card');
     const familyGroup = roleCard.closest('.job-family-group');
     expect(within(roleCard).getByText('Related · Bullhorn')).toBeInTheDocument();
-    expect(familyGroup).toHaveAttribute('aria-label', 'Shared candidate pool');
+    expect(familyGroup).toHaveAttribute('aria-label', 'Related ATS-linked roles');
     expect(familyGroup.querySelector('.job-family-heading')).not.toBeInTheDocument();
     expect(within(roleCard).queryByText('Shared candidate pool')).not.toBeInTheDocument();
     expect(within(roleCard).queryByText(/in Workable/i)).not.toBeInTheDocument();
@@ -1074,7 +1074,7 @@ describe('JobsPage Workable sync states', () => {
     const familyGroup = originalCard.closest('.job-family-group');
     expect(familyGroup).toHaveClass('is-size-3');
     expect(familyGroup).toHaveAttribute('data-family-size', '3');
-    expect(familyGroup).toHaveAttribute('aria-label', 'Shared candidate pool');
+    expect(familyGroup).toHaveAttribute('aria-label', 'Related ATS-linked roles');
     expect(familyGroup).toContainElement(relatedCard);
     expect(familyGroup.querySelectorAll('.job-family-grid > .job-card')).toHaveLength(4);
     expect(familyGroup).not.toContainElement(
@@ -1119,7 +1119,7 @@ describe('JobsPage Workable sync states', () => {
 
     const card = (await screen.findByText('Incomplete Family Owner')).closest('.job-card');
     const familyGroup = card.closest('.job-family-group');
-    expect(familyGroup).toHaveAttribute('aria-label', 'Shared candidate pool');
+    expect(familyGroup).toHaveAttribute('aria-label', 'Related ATS-linked roles');
     expect(familyGroup.querySelector('.job-family-heading')).not.toBeInTheDocument();
     expect(within(familyGroup).queryByText('Linked role details unavailable')).not.toBeInTheDocument();
     expect(within(card).queryByText('Linked role details unavailable')).not.toBeInTheDocument();

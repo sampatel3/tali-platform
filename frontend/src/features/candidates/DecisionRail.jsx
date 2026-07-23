@@ -118,9 +118,16 @@ export const DecisionRail = ({
   // primary button (the copy previously lived only in the alt-reject modal). The
   // stale/old-engine warning still takes precedence in the tooltip.
   const isRejectDecision = isActionable && isRejectDecisionType(decision.decision_type);
-  const rejectConsequenceCopy = buildRejectConsequenceCopy(decision?.role_family);
+  const rejectConsequenceCopy = buildRejectConsequenceCopy(
+    decision?.role_family,
+    decision?.role_id,
+  );
   const alternatives = (spec?.alternatives || [])
-    .map((alternative) => withRoleAwareRejectCopy(alternative, decision?.role_family));
+    .map((alternative) => withRoleAwareRejectCopy(
+      alternative,
+      decision?.role_family,
+      decision?.role_id,
+    ));
   const primaryButtonTitle = primaryTitle ?? (isRejectDecision ? rejectConsequenceCopy : undefined);
   const decisionSource = decision?.decision_explanation?.source === 'policy' ? 'policy' : 'agent';
   // The rule chip (score / must-have / confidence) rides the kicker; the full

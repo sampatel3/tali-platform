@@ -57,6 +57,69 @@ describe('versioned role mutation clients', () => {
     expect(http.get).toHaveBeenCalledWith('/agent/org-status', { timeout: 10000 });
   });
 
+  it('forwards the standing report logical role across the share-link lifecycle', () => {
+    roles.createApplicationShareLink(77, {
+      mode: 'client',
+      expiry: '7d',
+      viewRoleId: 135,
+    });
+    roles.createApplicationShareLink(78, {
+      mode: 'recruiter',
+      expiry: '24h',
+    });
+    roles.listApplicationShareLinks(77, 135);
+    roles.listApplicationShareLinks(78);
+    roles.revokeShareLink(41, 135);
+    roles.revokeShareLink(42);
+
+    expect(http.post).toHaveBeenNthCalledWith(
+      1,
+      '/applications/77/share-links',
+      { mode: 'client', expiry: '7d', view_role_id: 135 },
+    );
+    expect(http.post).toHaveBeenNthCalledWith(
+      2,
+      '/applications/78/share-links',
+      { mode: 'recruiter', expiry: '24h' },
+    );
+    expect(http.get).toHaveBeenNthCalledWith(
+      1,
+      '/applications/77/share-links',
+      { params: { view_role_id: 135 } },
+    );
+    expect(http.get).toHaveBeenNthCalledWith(
+      2,
+      '/applications/78/share-links',
+    );
+    expect(http.delete).toHaveBeenNthCalledWith(
+      1,
+      '/share-links/41',
+      { params: { view_role_id: 135 } },
+    );
+    expect(http.delete).toHaveBeenNthCalledWith(
+      2,
+      '/share-links/42',
+    );
+  });
+
+  it('binds manual decisions and PDF exports to the standing report role', () => {
+    roles.updateApplicationDecision(77, { decision: 'advance' }, 135);
+    roles.downloadApplicationReport(77, 135);
+
+    expect(http.patch).toHaveBeenCalledWith(
+      '/applications/77/manual-decision',
+      { decision: 'advance' },
+      { params: { view_role_id: 135 } },
+    );
+    expect(http.get).toHaveBeenCalledWith(
+      '/applications/77/report.pdf',
+      {
+        responseType: 'blob',
+        params: { view_role_id: 135 },
+      },
+    );
+  });
+
   it('versions draft approval and structured revision commands', () => {
     agentChat.approveDraftTask(26, 81, 9);
     agentChat.reviseDraftTask(26, 81, {

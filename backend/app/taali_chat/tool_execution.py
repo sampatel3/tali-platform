@@ -20,6 +20,7 @@ from ..candidate_search.tool_failure_contract import (
 )
 from ..models.taali_chat_conversation import TaaliChatConversation
 from ..models.user import User
+from ..mcp.catalog import get_tool_spec
 from .persistence import result_for_storage
 from .tool_registry import dispatch_tool
 
@@ -48,11 +49,17 @@ def _arguments_with_role_scope(
     *,
     conversation_role_id: int | None,
 ) -> dict[str, Any]:
+    try:
+        catalog_role_scoped = get_tool_spec(name).role_scoped
+    except KeyError:
+        catalog_role_scoped = False
     if (
-        name in _ROLE_SCOPED_TOOLS
+        (catalog_role_scoped or name in _ROLE_SCOPED_TOOLS)
         and conversation_role_id is not None
-        and arguments.get("role_id") is None
     ):
+        # The persisted conversation, not model-generated JSON, owns the
+        # logical role.  Always replace a supplied role id so a guessed id can
+        # never redirect a candidate read to another pool.
         return {**arguments, "role_id": int(conversation_role_id)}
     return arguments
 

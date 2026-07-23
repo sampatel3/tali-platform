@@ -45,7 +45,7 @@ describe('AgentNeedsInputCard', () => {
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
-  it('names the complete linked family before a CV-gap cohort rejection', async () => {
+  it('keeps a related-role CV-gap cohort rejection inside that role', async () => {
     mocks.get.mockResolvedValue({
       data: [{
         id: 19,
@@ -65,7 +65,7 @@ describe('AgentNeedsInputCard', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Reject — no CV' }));
 
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Rejects the shared ATS application across all linked roles: Data Platform Lead #31 (original) and AI Engineer #47 (related).',
+      'Rejects this candidate only for AI Engineer #47 (related). The linked ATS application and other roles are unchanged.',
     );
     expect(screen.getByRole('button', { name: 'Confirm reject' })).toBeInTheDocument();
     expect(mocks.post).not.toHaveBeenCalled();

@@ -168,24 +168,80 @@ def test_sync_interview_threads_org():
     )
 
 
-def test_sync_event_threads_org():
+def test_sync_event_uses_logical_event_role_not_shared_application_owner():
     ev = MagicMock()
     ev.id = 9
     ev.organization_id = 99
     ev.application.role_id = 13
+    ev.role_id = 14
     with patch.object(git, "SessionLocal", return_value=_fake_session(ev)), patch(
         "app.candidate_graph.sync.sync_event",
         autospec=True,
-    ) as sync_event:
+    ) as sync_event, patch.object(
+        git,
+        "_listener_graph_role_is_active",
+        side_effect=lambda _db, *, organization_id, role_id: (
+            organization_id == 99 and role_id == 14
+        ),
+    ) as role_gate:
         res = _run(git.sync_event_to_graph, 9)
     assert res["status"] == "ok"
+    role_gate.assert_called_once()
+    assert role_gate.call_args.kwargs == {"organization_id": 99, "role_id": 14}
     sync_event.assert_called_once_with(
         ev,
         bill_organization_id=99,
-        bill_role_id=13,
+        bill_role_id=14,
         require_role_admission=True,
         raise_on_error=True,
     )
+
+
+def test_sync_event_does_not_fall_back_to_active_owner_when_event_role_is_paused():
+    ev = MagicMock()
+    ev.id = 9
+    ev.organization_id = 99
+    ev.application.role_id = 13
+    ev.role_id = 14
+
+    with patch.object(git, "SessionLocal", return_value=_fake_session(ev)), patch.object(
+        git,
+        "_listener_graph_role_is_active",
+        side_effect=lambda _db, *, organization_id, role_id: (
+            organization_id == 99 and role_id == 13
+        ),
+    ) as role_gate, patch(
+        "app.candidate_graph.sync.sync_event"
+    ) as sync_event:
+        res = _run(git.sync_event_to_graph, 9)
+
+    assert res == {"status": "skipped", "reason": "role_not_running", "id": 9}
+    role_gate.assert_called_once()
+    assert role_gate.call_args.kwargs == {"organization_id": 99, "role_id": 14}
+    sync_event.assert_not_called()
+
+
+def test_sync_event_does_not_attribute_legacy_null_role_to_transport_owner():
+    ev = MagicMock()
+    ev.id = 9
+    ev.organization_id = 99
+    ev.application.role_id = 13
+    ev.role_id = None
+
+    with patch.object(git, "SessionLocal", return_value=_fake_session(ev)), patch.object(
+        git, "_listener_graph_role_is_active"
+    ) as role_gate, patch(
+        "app.candidate_graph.sync.sync_event"
+    ) as sync_event:
+        res = _run(git.sync_event_to_graph, 9)
+
+    assert res == {
+        "status": "skipped",
+        "reason": "role_attribution_unavailable",
+        "id": 9,
+    }
+    role_gate.assert_not_called()
+    sync_event.assert_not_called()
 
 
 def test_sync_interview_skips_when_role_is_paused():
@@ -207,6 +263,7 @@ def test_sync_event_skips_when_role_is_paused():
     ev.id = 9
     ev.organization_id = 99
     ev.application.role_id = 13
+    ev.role_id = 14
     with patch.object(git, "SessionLocal", return_value=_fake_session(ev)), patch.object(
         git, "_listener_graph_role_is_active", return_value=False
     ), patch("app.candidate_graph.sync.sync_event") as sync_event:

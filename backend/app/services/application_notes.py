@@ -92,6 +92,7 @@ def create_recruiter_note(
     ranking: int | None = None,
     link_url: str | None = None,
     link_label: str | None = None,
+    role_id: int | None = None,
     now: datetime | None = None,
 ) -> CandidateApplicationEvent:
     """Append a recruiter note to the application's event timeline.
@@ -135,14 +136,16 @@ def create_recruiter_note(
     # ``reason`` mirrors the agent-readable body so existing readers (the audit
     # timeline, the events list, the org-scoping test that checks ``reason``)
     # keep showing something sensible for the structured kinds too.
+    logical_role_id = int(role_id) if role_id is not None else int(app.role_id)
     row = CandidateApplicationEvent(
         application_id=app.id,
         organization_id=app.organization_id,
+        role_id=logical_role_id,
         event_type=RECRUITER_NOTE_EVENT,
         actor_type="recruiter",
         actor_id=int(getattr(author, "id", 0) or 0) or None,
         reason=_agent_readable_note(meta) or cleaned,
-        event_metadata=meta,
+        event_metadata={**meta, "acting_role_id": logical_role_id},
         created_at=now or datetime.now(timezone.utc),
     )
     db.add(row)
@@ -179,9 +182,13 @@ def recruiter_notes_for_agent(app: CandidateApplication) -> list[dict[str, Any]]
     reads as standing guidance about this candidate.
     """
     events = list(getattr(app, "events", None) or [])
+    logical_role_id = int(getattr(app, "role_id", 0) or 0)
     notes: list[dict[str, Any]] = []
     for event in events:
         if str(getattr(event, "event_type", "")) != RECRUITER_NOTE_EVENT:
+            continue
+        event_role_id = int(getattr(event, "role_id", 0) or 0)
+        if logical_role_id and event_role_id != logical_role_id:
             continue
         meta = getattr(event, "event_metadata", None) or {}
         if meta.get("for_agent") is False:
@@ -273,6 +280,7 @@ def create_interview_transcript_note(
     row = CandidateApplicationEvent(
         application_id=app.id,
         organization_id=app.organization_id,
+        role_id=int(app.role_id),
         event_type=RECRUITER_NOTE_EVENT,
         actor_type="recruiter",
         actor_id=int(getattr(author, "id", 0) or 0) or None,

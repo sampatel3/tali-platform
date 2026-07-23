@@ -24,14 +24,27 @@ def approval_staleness_report(db: Session, decision: AgentDecision) -> Any:
         load_related_evaluation,
         related_decision_staleness,
     )
+    from .related_role_application_runtime import (
+        related_role_evaluation_for_application,
+    )
 
     application = db.get(CandidateApplication, int(decision.application_id))
-    if is_cross_role_decision(decision, application):
-        evaluation = load_related_evaluation(
+    evaluation = (
+        related_role_evaluation_for_application(
             db,
-            decision=decision,
+            role_id=int(decision.role_id),
             application=application,
         )
+        if application is not None
+        else None
+    )
+    if evaluation is not None or is_cross_role_decision(decision, application):
+        if evaluation is None:
+            evaluation = load_related_evaluation(
+                db,
+                decision=decision,
+                application=application,
+            )
         return related_decision_staleness(
             db,
             decision,
@@ -157,11 +170,16 @@ def enforce_decision_approval_eligibility(
             },
         )
 
-    # Lazy import avoids pulling the assessments runtime (which imports the
-    # pipeline service) into this small guard at module-import time.
-    from ..domains.assessments_runtime.role_support import is_resolved
+    # Resolve terminal state from the decision's logical role. For explicit
+    # related-role memberships the ATS application is transport only and its
+    # owner-role stage/outcome cannot freeze this independent decision.
+    from .related_role_application_runtime import role_application_is_resolved
 
-    if is_resolved(application):
+    if role_application_is_resolved(
+        db,
+        role_id=int(decision.role_id),
+        application=application,
+    ):
         raise HTTPException(
             status_code=409,
             detail={

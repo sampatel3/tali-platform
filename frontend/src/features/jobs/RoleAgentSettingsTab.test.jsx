@@ -150,7 +150,7 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(onAutonomyChange).toHaveBeenCalledWith('auto_send_assessment', true);
   });
 
-  it('keeps unrelated automation controls available for a related role', () => {
+  it('keeps every automation control independent and available for a related role', () => {
     render(<RoleAgentSettingsTab
       {...baseProps({
         name: 'AI Platform Engineer',
@@ -166,9 +166,9 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(screen.getByRole('button', { name: 'Auto-send assessments' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-retry assessment invites' })).not.toBeDisabled();
     expect(screen.getByRole('button', { name: 'Auto-advance qualified candidates' })).not.toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' })).toBeDisabled();
-    expect(screen.getByRole('note')).toHaveTextContent(/Automatic rejection is unavailable for linked roles/i);
+    expect(screen.getByRole('button', { name: 'Auto-reject pre-screen failures' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Auto-reject after scoring' })).not.toBeDisabled();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
     expect(screen.getByText('SAVES INSTANTLY')).toBeInTheDocument();
     expect(screen.queryByText('RECRUITER APPROVAL')).not.toBeInTheDocument();
     expect(screen.queryByText(/candidate actions remain behind recruiter approval/i)).not.toBeInTheDocument();
@@ -204,7 +204,7 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(screen.getByRole('button', { name: 'Skip assessment stage' })).not.toBeDisabled();
   });
 
-  it('confirms the shared-application effect before enabling auto-advance', async () => {
+  it('persists related-role auto-advance directly for that role', async () => {
     const onAutonomyChange = vi.fn();
     render(<RoleAgentSettingsTab
       {...baseProps({
@@ -225,14 +225,9 @@ describe('RoleAgentSettingsTab autonomy policy', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Auto-advance qualified candidates' }));
-    expect(onAutonomyChange).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('dialog', { name: 'Turn on auto-advance across linked roles?' }))
-      .toHaveTextContent(/advances qualified candidates in the original role and every related role/i);
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Turn on auto-advance' }));
-    });
+    await act(async () => {});
     expect(onAutonomyChange).toHaveBeenLastCalledWith('auto_advance', true);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('persists pre-screen and scored rejection controls independently', async () => {

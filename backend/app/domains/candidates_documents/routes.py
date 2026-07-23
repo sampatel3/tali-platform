@@ -6,6 +6,7 @@ from fastapi.responses import Response, FileResponse, RedirectResponse
 from pydantic import EmailStr
 from sqlalchemy.orm import Session
 
+from ...candidate_search.population import apply_live_candidate_scope
 from ...platform.database import get_db
 from ...deps import get_current_user
 from ...models.candidate import Candidate
@@ -32,9 +33,9 @@ def list_candidates(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Candidate).filter(
-        Candidate.organization_id == current_user.organization_id,
-        Candidate.deleted_at.is_(None),
+    query = apply_live_candidate_scope(
+        db.query(Candidate),
+        organization_id=int(current_user.organization_id),
     )
     if q:
         like = f"%{q}%"
@@ -143,9 +144,9 @@ def get_candidate(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    candidate = db.query(Candidate).filter(
-        Candidate.id == candidate_id,
-        Candidate.organization_id == current_user.organization_id,
+    candidate = apply_live_candidate_scope(
+        db.query(Candidate).filter(Candidate.id == candidate_id),
+        organization_id=int(current_user.organization_id),
     ).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -159,9 +160,9 @@ def update_candidate(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    candidate = db.query(Candidate).filter(
-        Candidate.id == candidate_id,
-        Candidate.organization_id == current_user.organization_id,
+    candidate = apply_live_candidate_scope(
+        db.query(Candidate).filter(Candidate.id == candidate_id),
+        organization_id=int(current_user.organization_id),
     ).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -182,9 +183,9 @@ def delete_candidate(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    candidate = db.query(Candidate).filter(
-        Candidate.id == candidate_id,
-        Candidate.organization_id == current_user.organization_id,
+    candidate = apply_live_candidate_scope(
+        db.query(Candidate).filter(Candidate.id == candidate_id),
+        organization_id=int(current_user.organization_id),
     ).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -202,9 +203,9 @@ def delete_candidate(
 # ---------------------------------------------------------------------------
 
 def _get_candidate_for_org(candidate_id: int, org_id: int, db: Session) -> Candidate:
-    candidate = db.query(Candidate).filter(
-        Candidate.id == candidate_id,
-        Candidate.organization_id == org_id,
+    candidate = apply_live_candidate_scope(
+        db.query(Candidate).filter(Candidate.id == candidate_id),
+        organization_id=int(org_id),
     ).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")

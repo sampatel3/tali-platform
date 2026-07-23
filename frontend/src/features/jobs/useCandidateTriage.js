@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 
 import * as apiClient from '../../shared/api';
 import { getErrorMessage } from '../candidates/candidatesUiUtils';
@@ -12,6 +12,12 @@ const BULLHORN_WRITABLE_INTENTS = ['invited', 'in_assessment', 'review', 'advanc
 const ATS_MOVE_STATUS_POLL_DELAYS_MS = [0, 500, 1000, 1500, 2500, 4000, 6000];
 const ATS_MOVE_SUCCESS_STATUS = 'completed';
 const ATS_MOVE_FAILURE_STATUSES = new Set(['completed_with_errors', 'failed']);
+const TRIAGE_OPERATION = Object.freeze({
+  assessment: 'candidate-triage-assessment',
+  move: 'candidate-triage-move',
+  reject: 'candidate-triage-reject',
+  atsMove: 'candidate-triage-ats-move',
+});
 
 const waitFor = (delayMs) => new Promise((resolve) => {
   window.setTimeout(resolve, delayMs);
@@ -109,7 +115,14 @@ export function buildBullhornAtsStageOptions(payload) {
  * behaviour.
  */
 export function useCandidateTriage({
+  beginRoleOperation,
+  captureRoleScope,
+  commitRoleScope,
+  finishRoleOperation,
+  isCurrentRoleScope,
+  isRoleOperationPending,
   role,
+  roleId = null,
   roleApplications,
   roleTasks,
   loadRoleWorkspace,
@@ -121,12 +134,13 @@ export function useCandidateTriage({
   viewCandidateReport,
 }) {
   const [triageApplicationId, setTriageApplicationId] = useState(null);
-  const [stageBusy, setStageBusy] = useState(false);
-  const [assessmentBusy, setAssessmentBusy] = useState(false);
-  const [rejectBusy, setRejectBusy] = useState(false);
-  const [atsMoveBusy, setAtsMoveBusy] = useState(false);
   const [atsStages, setAtsStages] = useState([]);
   const [loadingAtsStages, setLoadingAtsStages] = useState(false);
+  const logicalRoleId = Number(roleId ?? role?.id);
+  const stageBusy = isRoleOperationPending?.(TRIAGE_OPERATION.move, logicalRoleId) || false;
+  const assessmentBusy = isRoleOperationPending?.(TRIAGE_OPERATION.assessment, logicalRoleId) || false;
+  const rejectBusy = isRoleOperationPending?.(TRIAGE_OPERATION.reject, logicalRoleId) || false;
+  const atsMoveBusy = isRoleOperationPending?.(TRIAGE_OPERATION.atsMove, logicalRoleId) || false;
   const atsProvider = roleAtsProvider(role);
   const externalJobId = roleExternalJobId(role);
 
@@ -134,6 +148,16 @@ export function useCandidateTriage({
     () => roleApplications.find((a) => Number(a?.id) === Number(triageApplicationId)) || null,
     [roleApplications, triageApplicationId],
   );
+
+  // The same physical application can be a member of several logical roles.
+  // A drawer selection is therefore role-local even when its numeric id is the
+  // same. Clear it before paint; pending operations remain keyed by role in the
+  // shared scope so A -> B -> A cannot dispatch a duplicate write.
+  useLayoutEffect(() => {
+    setTriageApplicationId(null);
+    setAtsStages([]);
+    setLoadingAtsStages(false);
+  }, [logicalRoleId]);
 
   // Pull the owning provider's stages once the role is known. Workable exposes
   // the job's stage catalogue; Bullhorn exposes the org's explicit remote
@@ -170,7 +194,7 @@ export function useCandidateTriage({
         setLoadingAtsStages(false);
       });
     return () => { cancelled = true; };
-  }, [atsProvider, externalJobId]);
+  }, [atsProvider, externalJobId, logicalRoleId]);
 
   const closeDrawer = useCallback(() => {
     setTriageApplicationId(null);
@@ -186,7 +210,8 @@ export function useCandidateTriage({
 
   const handleMoveStage = useCallback(async (application, nextStage) => {
     if (!application?.id || !nextStage) return;
-    setStageBusy(true);
+    const actionScope = captureRoleScope?.(logicalRoleId);
+    if (!actionScope || !beginRoleOperation?.(actionScope, TRIAGE_OPERATION.move)) return;
     try {
       if (role?.role_kind === 'sister' && rolesApi.updateRelatedApplicationStage) {
         await rolesApi.updateRelatedApplicationStage(
@@ -197,18 +222,22 @@ export function useCandidateTriage({
       } else {
         await rolesApi.updateApplicationStage(application.id, { pipeline_stage: nextStage });
       }
+      if (!isCurrentRoleScope?.(actionScope)) return;
       showToast(`Moved to ${String(nextStage).replace(/_/g, ' ')}.`, 'success');
       await refreshRow(application.id);
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to move stage.'), 'error');
+      commitRoleScope?.(actionScope, () => {
+        showToast(getErrorMessage(error, 'Failed to move stage.'), 'error');
+      });
     } finally {
-      setStageBusy(false);
+      finishRoleOperation?.(actionScope, TRIAGE_OPERATION.move);
     }
-  }, [role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [beginRoleOperation, captureRoleScope, commitRoleScope, finishRoleOperation, isCurrentRoleScope, logicalRoleId, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   const handleSendAssessment = useCallback(async (application, taskId) => {
     if (!application?.id || !taskId) return;
-    setAssessmentBusy(true);
+    const actionScope = captureRoleScope?.(logicalRoleId);
+    if (!actionScope || !beginRoleOperation?.(actionScope, TRIAGE_OPERATION.assessment)) return;
     try {
       // 'auto' ⇒ omit task_id so an active A/B experiment on the role assigns
       // the arm (50/50, stable per candidate); otherwise force the picked task.
@@ -222,73 +251,82 @@ export function useCandidateTriage({
           ? relatedRoleContext
           : { ...relatedRoleContext, task_id: Number(taskId) },
       );
-      showToast(
-        isAuto ? 'Assessment invite sent (A/B-assigned task).' : 'Assessment invite sent.',
-        'success',
-      );
+      if (!isCurrentRoleScope?.(actionScope)) return;
+      showToast(isAuto ? 'Assessment invite sent (A/B-assigned task).' : 'Assessment invite sent.', 'success');
       await refreshRow(application.id);
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to send invite.'), 'error');
+      commitRoleScope?.(actionScope, () => {
+        showToast(getErrorMessage(error, 'Failed to send invite.'), 'error');
+      });
     } finally {
-      setAssessmentBusy(false);
+      finishRoleOperation?.(actionScope, TRIAGE_OPERATION.assessment);
     }
-  }, [role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [beginRoleOperation, captureRoleScope, commitRoleScope, finishRoleOperation, isCurrentRoleScope, logicalRoleId, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   const handleReject = useCallback(async (application) => {
     if (!application?.id) return;
-    setRejectBusy(true);
+    const actionScope = captureRoleScope?.(logicalRoleId);
+    if (!actionScope || !beginRoleOperation?.(actionScope, TRIAGE_OPERATION.reject)) return;
     try {
       const outcomeResponse = await rolesApi.updateApplicationOutcome(application.id, {
         application_outcome: 'rejected',
         reason: 'Rejected in Taali following recruiter review.',
         ...(role?.role_kind === 'sister' ? { acting_role_id: role.id } : {}),
       });
-      setTriageApplicationId(null);
+      commitRoleScope?.(actionScope, () => setTriageApplicationId(null));
       // Patch the one row: it flips application_outcome → 'rejected' and the
       // active/rejected buckets re-derive, so it leaves the open list without
       // a 4,000-row refetch.
-      await refreshRow(application.id);
+      if (isCurrentRoleScope?.(actionScope)) await refreshRow(application.id);
 
       const jobRunId = writebackRunId(outcomeResponse);
       if (!jobRunId) {
-        showToast('Candidate rejected.', 'success');
+        commitRoleScope?.(actionScope, () => showToast('Candidate rejected.', 'success'));
       } else {
         const providerLabel = atsProviderLabel(atsProvider);
-        showToast(
-          `Candidate rejected in Taali. Waiting for ${providerLabel} confirmation…`,
-          'info',
-        );
+        commitRoleScope?.(actionScope, () => showToast(
+          `Candidate rejected in Taali. Waiting for ${providerLabel} confirmation…`, 'info',
+        ));
         const terminalRun = await pollAtsWriteback(rolesApi, outcomeResponse);
         const terminalStatus = String(terminalRun?.status || '').trim().toLowerCase();
         if (terminalStatus === ATS_MOVE_SUCCESS_STATUS) {
           // Pull the worker's persisted confirmed receipt; otherwise reopening
           // the drawer from the locally-patched row would still say queued.
-          await refreshRow(application.id);
-          showToast(`Candidate rejected in ${providerLabel}.`, 'success');
+          if (isCurrentRoleScope?.(actionScope)) {
+            await refreshRow(application.id);
+            commitRoleScope?.(actionScope, () => {
+              showToast(`Candidate rejected in ${providerLabel}.`, 'success');
+            });
+          }
         } else if (ATS_MOVE_FAILURE_STATUSES.has(terminalStatus)) {
-          await refreshRow(application.id);
           const detail = terminalRun?.error
             || terminalRun?.counters?.message
             || terminalRun?.counters?.code
             || `${providerLabel} rejected the outcome update.`;
-          showToast(String(detail), 'error');
+          if (isCurrentRoleScope?.(actionScope)) {
+            await refreshRow(application.id);
+            commitRoleScope?.(actionScope, () => showToast(String(detail), 'error'));
+          }
         } else {
-          showToast(
+          commitRoleScope?.(actionScope, () => showToast(
             `${providerLabel} outcome sync is still queued and will retry automatically.`,
             'info',
-          );
+          ));
         }
       }
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to reject.'), 'error');
+      commitRoleScope?.(actionScope, () => {
+        showToast(getErrorMessage(error, 'Failed to reject.'), 'error');
+      });
     } finally {
-      setRejectBusy(false);
+      finishRoleOperation?.(actionScope, TRIAGE_OPERATION.reject);
     }
-  }, [atsProvider, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [atsProvider, beginRoleOperation, captureRoleScope, commitRoleScope, finishRoleOperation, isCurrentRoleScope, logicalRoleId, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   const handleMoveToAtsStage = useCallback(async (application, targetStage, targetLabel = null) => {
     if (!application?.id || !targetStage) return;
-    setAtsMoveBusy(true);
+    const actionScope = captureRoleScope?.(logicalRoleId);
+    if (!actionScope || !beginRoleOperation?.(actionScope, TRIAGE_OPERATION.atsMove)) return;
     const providerLabel = atsProviderLabel(atsProvider);
     try {
       const request = {
@@ -320,32 +358,40 @@ export function useCandidateTriage({
         throw new Error(`No ${providerLabel} move endpoint is available.`);
       }
 
-      showToast(`${providerLabel} move queued. Waiting for confirmation…`, 'info');
+      commitRoleScope?.(actionScope, () => {
+        showToast(`${providerLabel} move queued. Waiting for confirmation…`, 'info');
+      });
 
       const terminalRun = await pollAtsWriteback(rolesApi, moveResponse);
 
       const terminalStatus = String(terminalRun?.status || '').trim().toLowerCase();
       if (terminalStatus === ATS_MOVE_SUCCESS_STATUS) {
-        await refreshRow(application.id);
-        showToast(`Moved in ${providerLabel}: ${targetLabel || targetStage}.`, 'success');
+        if (isCurrentRoleScope?.(actionScope)) {
+          await refreshRow(application.id);
+          commitRoleScope?.(actionScope, () => {
+            showToast(`Moved in ${providerLabel}: ${targetLabel || targetStage}.`, 'success');
+          });
+        }
       } else if (ATS_MOVE_FAILURE_STATUSES.has(terminalStatus)) {
         const detail = terminalRun?.error
           || terminalRun?.counters?.message
           || terminalRun?.counters?.code
           || `${providerLabel} rejected the stage move.`;
-        showToast(String(detail), 'error');
+        commitRoleScope?.(actionScope, () => showToast(String(detail), 'error'));
       } else {
-        showToast(
+        commitRoleScope?.(actionScope, () => showToast(
           `${providerLabel} move is still queued. The stage will update after the provider confirms it.`,
           'info',
-        );
+        ));
       }
     } catch (error) {
-      showToast(getErrorMessage(error, `Failed to queue the move in ${providerLabel}.`), 'error');
+      commitRoleScope?.(actionScope, () => {
+        showToast(getErrorMessage(error, `Failed to queue the move in ${providerLabel}.`), 'error');
+      });
     } finally {
-      setAtsMoveBusy(false);
+      finishRoleOperation?.(actionScope, TRIAGE_OPERATION.atsMove);
     }
-  }, [atsProvider, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
+  }, [atsProvider, beginRoleOperation, captureRoleScope, commitRoleScope, finishRoleOperation, isCurrentRoleScope, logicalRoleId, role?.id, role?.role_kind, rolesApi, refreshRow, showToast]);
 
   // Plain click on a candidate row opens the drawer in-place. Modifier-
   // click (cmd/ctrl/shift/alt) and middle-click keep the anchor's

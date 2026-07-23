@@ -41,9 +41,24 @@ def _usage(db, org_id, role_id, *, feature, entity_id, charged_micro, created_at
     ))
 
 
-def _transition(db, org_id, app_id, *, event_type, to_stage=None, to_outcome=None, created_at=None):
+def _transition(
+    db,
+    org_id,
+    app_id,
+    *,
+    role_id=None,
+    event_type,
+    to_stage=None,
+    to_outcome=None,
+    created_at=None,
+):
+    app = db.get(CandidateApplication, int(app_id))
+    assert app is not None
     db.add(CandidateApplicationEvent(
-        organization_id=org_id, application_id=app_id, event_type=event_type,
+        organization_id=org_id,
+        application_id=app_id,
+        role_id=int(role_id or app.role_id),
+        event_type=event_type,
         to_stage=to_stage, to_outcome=to_outcome, actor_type="system",
         idempotency_key=f"t:{app_id}:{event_type}:{to_stage}:{to_outcome}:{created_at}",
         created_at=created_at or datetime.now(timezone.utc),
@@ -120,6 +135,75 @@ def test_cost_per_outcome_role_scoped(client, db):
     assert scoped["billed_spend_cents"] == 1
     assert scoped["counts"]["advanced"] == 1
     assert scoped["counts"]["pre_screened"] == 1
+
+
+def test_cost_per_outcome_uses_event_role_for_shared_related_application(client, db):
+    """One evidence row may transition independently in owner and related roles."""
+
+    headers, email = auth_headers(client)
+    org_id = db.query(User).filter(User.email == email).first().organization_id
+    owner = Role(organization_id=org_id, name="Owner", source="manual")
+    related = Role(
+        organization_id=org_id,
+        name="Related",
+        source="sister",
+        role_kind="sister",
+    )
+    db.add_all([owner, related])
+    db.flush()
+    shared = _app(db, org_id, owner.id, "shared@x.test")
+    _transition(
+        db,
+        org_id,
+        shared.id,
+        role_id=owner.id,
+        event_type="pipeline_stage_changed",
+        to_stage="advanced",
+    )
+    _transition(
+        db,
+        org_id,
+        shared.id,
+        role_id=owner.id,
+        event_type="application_outcome_changed",
+        to_outcome="hired",
+    )
+    _transition(
+        db,
+        org_id,
+        shared.id,
+        role_id=related.id,
+        event_type="role_application_outcome_changed",
+        to_outcome="hired",
+    )
+    _transition(
+        db,
+        org_id,
+        shared.id,
+        role_id=related.id,
+        event_type="role_pipeline_stage_changed",
+        to_stage="advanced",
+    )
+    db.commit()
+
+    org_payload = client.get(
+        "/api/v1/analytics/cost-per-outcome", headers=headers
+    ).json()
+    related_payload = client.get(
+        f"/api/v1/analytics/cost-per-outcome?role_id={related.id}",
+        headers=headers,
+    ).json()
+    owner_payload = client.get(
+        f"/api/v1/analytics/cost-per-outcome?role_id={owner.id}",
+        headers=headers,
+    ).json()
+
+    assert org_payload["counts"]["advanced"] == 2
+    assert related_payload["counts"]["advanced"] == 1
+    assert owner_payload["counts"]["advanced"] == 1
+    assert org_payload["counts"]["hired"] == 2
+    assert related_payload["counts"]["hired"] == 1
+    assert owner_payload["counts"]["hired"] == 1
 
 
 def test_cost_per_outcome_window_scoped(client, db):

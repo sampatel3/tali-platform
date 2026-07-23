@@ -26,12 +26,145 @@ from typing import Any, Sequence
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PRICING_PATH = BACKEND_ROOT / "app/services/pricing_service.py"
 DEFAULT_REGISTRY_PATH = BACKEND_ROOT / "app/evals/registry.json"
-SCHEMA_VERSION = "feature-ai-evals/v2"
+SCHEMA_VERSION = "feature-ai-evals/v4"
 FEATURE_ENUM = "app.services.pricing_service.Feature"
 ALLOWED_RISKS = {"critical", "high", "medium", "low"}
 ALLOWED_COVERAGE = {"grounded_truth", "behavioral", "contract"}
-BEHAVIORAL_KEYS = {"risk", "coverage", "test_paths"}
-GROUNDED_KEYS = {"risk", "coverage", "ground_truth_scope", "test_cases"}
+ALLOWED_CAPABILITY_SURFACES = {
+    "rest",
+    "public_mcp",
+    "taali_chat",
+    "agent_chat",
+    "autonomous_agent",
+    "frontend",
+}
+REQUIRED_CAPABILITIES = {
+    "candidate.pool_state": {
+        "search_role_candidates",
+        "get_role_candidate",
+        "compare_role_applications",
+        "get_recruiting_overview",
+    },
+    "candidate.action_history": {"list_candidate_actions"},
+    "candidate.decision_history": {"list_recent_agent_decisions"},
+}
+_CANDIDATE_TOOL_SURFACES = {
+    "public_mcp",
+    "taali_chat",
+    "agent_chat",
+    "autonomous_agent",
+}
+EXPECTED_CAPABILITY_BINDINGS = {
+    "candidate.pool_state": {
+        "rest": {
+            "GET /api/v1/roles/{role_id}/applications",
+            "GET /public/v1/roles/{role_id}/applications",
+            "GET /public/v1/roles/{role_id}/metrics",
+            "GET /public/v1/applications/{application_id}?view_role_id={role_id}",
+            "POST /public/v1/applications/{application_id}/share-links",
+            "GET /api/v1/applications?role_ids={role_ids}",
+            "GET /api/v1/applications/{application_id}?view_role_id={role_id}",
+            "GET /api/v1/roles/{role_id}/pipeline",
+            "GET /api/v1/analytics/reporting-summary?role_id={role_id}",
+            "GET /api/v1/analytics/decisions-breakdown?role_id={role_id}",
+        },
+        **{
+            surface: {
+                "search_role_candidates",
+                "get_role_candidate",
+                "compare_role_applications",
+                "find_top_candidates",
+                "get_recruiting_overview",
+            }
+            for surface in _CANDIDATE_TOOL_SURFACES
+        },
+        "public_mcp": {
+            "search_applications",
+            "search_role_candidates",
+            "get_role_candidate",
+            "compare_role_applications",
+            "find_top_candidates",
+            "get_recruiting_overview",
+        },
+        "taali_chat": {
+            "search_applications",
+            "search_role_candidates",
+            "get_role_candidate",
+            "compare_role_applications",
+            "find_top_candidates",
+            "get_recruiting_overview",
+        },
+        "autonomous_agent": {
+            "search_role_candidates",
+            "get_role_candidate",
+            "compare_role_applications",
+            "find_top_candidates",
+            "get_recruiting_overview",
+            "survey_role_state",
+            "find_apps_in_state",
+            "get_cohort_signals",
+        },
+        "frontend": {
+            "src/app/pageNavigation.test.js",
+            "src/shared/layout/GlobalSearch.test.jsx",
+            "src/features/jobs/JobPipelinePage.test.jsx",
+            "src/test/CandidateBackLink.test.jsx",
+        },
+    },
+    "candidate.action_history": {
+        "rest": {
+            "GET /api/v1/applications/{application_id}/events",
+            "GET /api/v1/roles/{role_id}/agent/status",
+        },
+        **{surface: {"list_candidate_actions"} for surface in _CANDIDATE_TOOL_SURFACES},
+        "frontend": {
+            "src/features/candidates/CandidateAuditTimeline.test.jsx",
+            "src/test/CandidateBackLink.test.jsx",
+        },
+    },
+    "candidate.decision_history": {
+        "rest": {"GET /api/v1/agent-decisions?role_id={role_id}"},
+        **{
+            surface: {"list_recent_agent_decisions"}
+            for surface in _CANDIDATE_TOOL_SURFACES
+        },
+        "frontend": {
+            "src/test/CandidateBackLink.test.jsx",
+            "src/features/candidates/DecisionRail.test.jsx",
+            "src/features/home/RecentDecisions.test.jsx",
+        },
+    },
+}
+CAPABILITY_REQUIRED_FEATURES = {
+    "taali_chat",
+    "agent_chat",
+    "agent_autonomous",
+}
+CAPABILITY_KEYS = {
+    "risk",
+    "ground_truth_scope",
+    "required_surfaces",
+    "bindings",
+    "ordinary_role_test_case",
+    "related_role_test_case",
+    "regression_test_cases",
+}
+CAPABILITY_REQUIRED_KEYS = set(CAPABILITY_KEYS)
+BEHAVIORAL_KEYS = {"risk", "coverage", "test_paths", "required_capabilities"}
+BEHAVIORAL_REQUIRED_KEYS = {"risk", "coverage", "test_paths"}
+GROUNDED_KEYS = {
+    "risk",
+    "coverage",
+    "ground_truth_scope",
+    "test_cases",
+    "required_capabilities",
+}
+GROUNDED_REQUIRED_KEYS = {
+    "risk",
+    "coverage",
+    "ground_truth_scope",
+    "test_cases",
+}
 EXEMPT_KEYS = {"risk", "infrastructure_exemption"}
 
 
@@ -175,18 +308,15 @@ def _validate_test_case(raw: Any, backend_root: Path, feature: str) -> list[str]
     if not isinstance(raw, str) or not raw.strip():
         return [f"{feature}: test_cases entries must be non-empty strings"]
     if raw != raw.strip() or raw.count("::") < 1:
-        return [
-            f"{feature}: grounded truth must name an exact pytest node: {raw!r}"
-        ]
+        return [f"{feature}: grounded truth must name an exact pytest node: {raw!r}"]
 
     path_text, *node_parts = raw.split("::")
     errors = _validate_test_path(path_text, backend_root, feature)
     if errors:
         return errors
-    if (
-        any(not part or "[" in part or "]" in part for part in node_parts)
-        or not node_parts[-1].startswith("test_")
-    ):
+    if any(
+        not part or "[" in part or "]" in part for part in node_parts
+    ) or not node_parts[-1].startswith("test_"):
         return [
             f"{feature}: grounded truth must use an unparameterized pytest node: "
             f"{raw!r}"
@@ -196,6 +326,201 @@ def _validate_test_case(raw: Any, backend_root: Path, feature: str) -> list[str]
     if not _has_pytest_case(path, node_parts):
         return [f"{feature}: registered pytest case does not exist: {raw}"]
     return []
+
+
+def _validate_capabilities(
+    raw: Any,
+    *,
+    backend_root: Path,
+) -> tuple[list[str], list[str], set[str]]:
+    """Validate cross-surface product capabilities and their truth matrices."""
+
+    if not isinstance(raw, dict):
+        return ["registry capabilities must be an object"], [], set()
+
+    errors: list[str] = []
+    test_targets: list[str] = []
+    names = set(raw)
+    missing = sorted(set(REQUIRED_CAPABILITIES) - names)
+    if missing:
+        errors.append(
+            "required product capabilities missing from eval registry: "
+            + ", ".join(missing)
+        )
+
+    for capability in sorted(names):
+        entry = raw[capability]
+        label = f"capability {capability}"
+        if not isinstance(entry, dict):
+            errors.append(f"{label}: registry entry must be an object")
+            continue
+
+        unknown_keys = sorted(set(entry) - CAPABILITY_KEYS)
+        missing_keys = sorted(CAPABILITY_REQUIRED_KEYS - set(entry))
+        if unknown_keys:
+            errors.append(f"{label}: unknown fields: {', '.join(unknown_keys)}")
+        if missing_keys:
+            errors.append(f"{label}: missing fields: {', '.join(missing_keys)}")
+
+        if entry.get("risk") != "critical":
+            errors.append(f"{label}: risk must be 'critical'")
+        scope = entry.get("ground_truth_scope")
+        if not isinstance(scope, str) or not scope.strip():
+            errors.append(f"{label}: ground_truth_scope needs a boundary")
+
+        surfaces = entry.get("required_surfaces")
+        if not isinstance(surfaces, list) or not surfaces:
+            errors.append(f"{label}: required_surfaces must be a non-empty list")
+            surface_names: set[str] = set()
+        else:
+            surface_names = {
+                surface for surface in surfaces if isinstance(surface, str)
+            }
+            if len(surface_names) != len(surfaces):
+                errors.append(f"{label}: required_surfaces must contain unique strings")
+            missing_surfaces = sorted(ALLOWED_CAPABILITY_SURFACES - surface_names)
+            unknown_surfaces = sorted(surface_names - ALLOWED_CAPABILITY_SURFACES)
+            if missing_surfaces:
+                errors.append(
+                    f"{label}: required surfaces missing: "
+                    + ", ".join(missing_surfaces)
+                )
+            if unknown_surfaces:
+                errors.append(
+                    f"{label}: unknown surfaces: " + ", ".join(unknown_surfaces)
+                )
+
+        bindings = entry.get("bindings")
+        if not isinstance(bindings, dict):
+            errors.append(f"{label}: bindings must be an object keyed by surface")
+        else:
+            binding_surfaces = set(bindings)
+            missing_bindings = sorted(surface_names - binding_surfaces)
+            unknown_bindings = sorted(binding_surfaces - surface_names)
+            if missing_bindings:
+                errors.append(
+                    f"{label}: bindings missing required surfaces: "
+                    + ", ".join(missing_bindings)
+                )
+            if unknown_bindings:
+                errors.append(
+                    f"{label}: bindings name undeclared surfaces: "
+                    + ", ".join(unknown_bindings)
+                )
+            for surface in sorted(binding_surfaces & surface_names):
+                values = bindings[surface]
+                if (
+                    not isinstance(values, list)
+                    or not values
+                    or any(
+                        not isinstance(value, str) or not value.strip()
+                        for value in values
+                    )
+                    or len(values) != len(set(values))
+                ):
+                    errors.append(
+                        f"{label}: {surface} bindings must be unique non-empty strings"
+                    )
+
+            expected_bindings = EXPECTED_CAPABILITY_BINDINGS.get(capability)
+            if expected_bindings is not None:
+                for surface in sorted(surface_names & set(expected_bindings)):
+                    values = bindings.get(surface)
+                    if not isinstance(values, list):
+                        continue
+                    actual_values = set(values)
+                    expected_values = expected_bindings[surface]
+                    missing_values = sorted(expected_values - actual_values)
+                    unknown_values = sorted(actual_values - expected_values)
+                    if missing_values:
+                        errors.append(
+                            f"{label}: {surface} is missing approved bindings: "
+                            + ", ".join(missing_values)
+                        )
+                    if unknown_values:
+                        errors.append(
+                            f"{label}: {surface} has unapproved bindings: "
+                            + ", ".join(unknown_values)
+                        )
+
+            expected_tools = REQUIRED_CAPABILITIES.get(capability, set())
+            for surface in sorted(_CANDIDATE_TOOL_SURFACES):
+                values = bindings.get(surface)
+                if not isinstance(values, list):
+                    continue
+                missing_tools = sorted(expected_tools - set(values))
+                if missing_tools:
+                    errors.append(
+                        f"{label}: {surface} is missing canonical tools: "
+                        + ", ".join(missing_tools)
+                    )
+
+            frontend_values = bindings.get("frontend")
+            if isinstance(frontend_values, list):
+                repository_root = backend_root.parent
+                workflow_path = repository_root / ".github/workflows/ci.yml"
+                try:
+                    workflow_text = workflow_path.read_text(encoding="utf-8")
+                except OSError as exc:
+                    errors.append(
+                        f"{label}: cannot read frontend CI workflow "
+                        f"{workflow_path}: {exc}"
+                    )
+                    workflow_text = ""
+                for raw_path in frontend_values:
+                    if not isinstance(raw_path, str):
+                        continue
+                    relative = PurePosixPath(raw_path)
+                    frontend_path = repository_root / "frontend" / relative
+                    if (
+                        relative.is_absolute()
+                        or ".." in relative.parts
+                        or not raw_path.startswith("src/")
+                        or ".test." not in relative.name
+                    ):
+                        errors.append(
+                            f"{label}: frontend binding must be a normalized "
+                            f"test path under frontend/src/: {raw_path!r}"
+                        )
+                    elif not frontend_path.is_file():
+                        errors.append(
+                            f"{label}: frontend binding does not exist: {raw_path}"
+                        )
+                    if raw_path not in workflow_text:
+                        errors.append(
+                            f"{label}: frontend binding is not executed by CI: "
+                            f"{raw_path}"
+                        )
+
+        ordinary = entry.get("ordinary_role_test_case")
+        related = entry.get("related_role_test_case")
+        if isinstance(ordinary, str) and ordinary == related:
+            errors.append(
+                f"{label}: ordinary and related roles require distinct truth cases"
+            )
+        for role_kind, case in (("ordinary", ordinary), ("related", related)):
+            errors.extend(
+                _validate_test_case(case, backend_root, f"{label} {role_kind}")
+            )
+            if isinstance(case, str):
+                test_targets.append(case)
+
+        regressions = entry.get("regression_test_cases")
+        if not isinstance(regressions, list) or not regressions:
+            errors.append(f"{label}: regression_test_cases must be a non-empty list")
+            continue
+        if len(regressions) != len(
+            set(case for case in regressions if isinstance(case, str))
+        ):
+            errors.append(f"{label}: regression_test_cases must not contain duplicates")
+        for case in regressions:
+            errors.extend(
+                _validate_test_case(case, backend_root, f"{label} regression")
+            )
+            if isinstance(case, str):
+                test_targets.append(case)
+
+    return errors, test_targets, names
 
 
 def validate_registry(
@@ -212,7 +537,12 @@ def validate_registry(
     if registry is None:
         return errors, []
 
-    allowed_top_level = {"schema_version", "feature_enum", "features"}
+    allowed_top_level = {
+        "schema_version",
+        "feature_enum",
+        "features",
+        "capabilities",
+    }
     unknown_top_level = sorted(set(registry) - allowed_top_level)
     if unknown_top_level:
         errors.append(
@@ -222,6 +552,11 @@ def validate_registry(
         errors.append(f"registry schema_version must be {SCHEMA_VERSION!r}")
     if registry.get("feature_enum") != FEATURE_ENUM:
         errors.append(f"registry feature_enum must be {FEATURE_ENUM!r}")
+
+    capability_errors, capability_targets, capability_names = _validate_capabilities(
+        registry.get("capabilities"), backend_root=backend_root
+    )
+    errors.extend(capability_errors)
 
     entries = registry.get("features")
     if not isinstance(entries, dict):
@@ -245,7 +580,7 @@ def validate_registry(
         )
         errors.append(f"{label}: {', '.join(unknown)}")
 
-    test_targets: list[str] = []
+    test_targets: list[str] = list(capability_targets)
     for feature in sorted(actual & expected):
         entry = entries[feature]
         if not isinstance(entry, dict):
@@ -264,10 +599,11 @@ def validate_registry(
         if exempt:
             allowed_keys = required_keys = EXEMPT_KEYS
         elif grounded:
-            allowed_keys = required_keys = GROUNDED_KEYS
+            allowed_keys = GROUNDED_KEYS
+            required_keys = GROUNDED_REQUIRED_KEYS
         else:
             allowed_keys = BEHAVIORAL_KEYS | {"reviewed_semantic_exemption"}
-            required_keys = BEHAVIORAL_KEYS
+            required_keys = BEHAVIORAL_REQUIRED_KEYS
         unknown_keys = sorted(set(entry) - allowed_keys)
         missing_keys = sorted(required_keys - set(entry))
         if unknown_keys:
@@ -280,6 +616,35 @@ def validate_registry(
             if not isinstance(reason, str) or not reason.strip():
                 errors.append(f"{feature}: infrastructure_exemption needs a reason")
             continue
+
+        required_capabilities = entry.get("required_capabilities", [])
+        if not isinstance(required_capabilities, list) or any(
+            not isinstance(name, str) or not name.strip()
+            for name in required_capabilities
+        ):
+            errors.append(f"{feature}: required_capabilities must be a list of names")
+            required_capability_names: set[str] = set()
+        else:
+            required_capability_names = set(required_capabilities)
+            if len(required_capability_names) != len(required_capabilities):
+                errors.append(
+                    f"{feature}: required_capabilities must not contain duplicates"
+                )
+            unknown_capabilities = sorted(required_capability_names - capability_names)
+            if unknown_capabilities:
+                errors.append(
+                    f"{feature}: unknown required capabilities: "
+                    + ", ".join(unknown_capabilities)
+                )
+        if feature in CAPABILITY_REQUIRED_FEATURES:
+            missing_capabilities = sorted(
+                set(REQUIRED_CAPABILITIES) - required_capability_names
+            )
+            if missing_capabilities:
+                errors.append(
+                    f"{feature}: required capabilities missing: "
+                    + ", ".join(missing_capabilities)
+                )
 
         if coverage not in ALLOWED_COVERAGE:
             errors.append(
@@ -294,9 +659,7 @@ def validate_registry(
             if not isinstance(cases, list) or not cases:
                 errors.append(f"{feature}: test_cases must be a non-empty list")
                 continue
-            if len(cases) != len(
-                set(case for case in cases if isinstance(case, str))
-            ):
+            if len(cases) != len(set(case for case in cases if isinstance(case, str))):
                 errors.append(f"{feature}: test_cases must not contain duplicates")
             for case in cases:
                 errors.extend(_validate_test_case(case, backend_root, feature))
@@ -306,7 +669,10 @@ def validate_registry(
 
         semantic_exemption = entry.get("reviewed_semantic_exemption")
         if risk == "critical":
-            if not isinstance(semantic_exemption, str) or not semantic_exemption.strip():
+            if (
+                not isinstance(semantic_exemption, str)
+                or not semantic_exemption.strip()
+            ):
                 errors.append(
                     f"{feature}: critical features require grounded_truth or a "
                     "reviewed_semantic_exemption"

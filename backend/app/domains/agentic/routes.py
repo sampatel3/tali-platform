@@ -33,18 +33,28 @@ from ...deps import get_current_user, require_org_owner
 from ...domains.assessments_runtime.pipeline_service import (
     is_post_handover_workable_stage,
 )
+from ...domains.assessments_runtime.pipeline_event_service import (
+    latest_role_application_activity,
+)
 from ...domains.assessments_runtime.job_authorization import (
     JobPermission,
     has_job_permission_for_role,
     require_job_permission,
 )
-from ...domains.assessments_runtime.role_support import is_resolved, role_family_response, roles_with_families
+from ...domains.assessments_runtime.role_support import role_family_response, roles_with_families
 from ...services.decision_presentation_service import (
     build_decision_explanation,
     candidate_summary_for,
 )
+from ...services.decision_resolution_effect_service import (
+    DecisionResolutionEffect,
+    requested_action,
+    resolution_effects_for_decisions,
+)
 from ...services import decision_membership
 from ...services.decision_reevaluation_service import (
+    RelatedApplicationResolvedError,
+    RelatedDecisionNotActionableError,
     RelatedEvaluationUnavailableError,
     count_outdated_pending_decisions,
     re_evaluate_related_decision,
@@ -57,6 +67,9 @@ from ...services.decision_role_context import (
     load_related_evaluation_map,
     related_decision_staleness,
     resolve_decision_presentation,
+)
+from ...services.related_role_application_runtime import (
+    role_application_is_resolved,
 )
 from ...services.cv_score_orchestrator import supersede_pending_decisions_for_app
 from ...services.role_concurrency import (
@@ -83,14 +96,15 @@ from ...models.agent_needs_input import AgentNeedsInput
 from ...models.agent_run import AgentRun
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
-from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.organization import Organization
 from ...models.role import ROLE_KIND_SISTER, Role
 from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.user import User
+from ...services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 from ...platform.database import get_db
 from ...platform.request_context import get_request_id
-from ...schemas.role import RoleFamilyResponse
 from ._activity_feed import (
     AgentActivityPayload,
     build_activity_feed,
@@ -99,6 +113,21 @@ from ._activity_feed import (
 from .decision_queue_query import (
     apply_agent_decision_status_filter,
     load_agent_decision_rows,
+)
+from .decision_schemas import (
+    AgentDecisionPayload,
+    AgentRunPayload,
+    AgentStatusActivity,
+    AgentStatusCurrentRun,
+    AgentStatusPausedBy,
+    AgentStatusPayload,
+    AgentStatusPendingBreakdown,
+    ApproveBody,
+    DecisionAcceptedResult,
+    DiscardBody,
+    OverrideBody,
+    RoleVersionCommand,
+    RunNowBody,
 )
 from ...services.reasoning_text import humanize_reasoning
 
@@ -152,219 +181,6 @@ DECISION_TYPE_CATEGORIES: dict[str, list[str]] = {
 
 
 # ---------------------------------------------------------------------------
-# Schemas
-# ---------------------------------------------------------------------------
-
-
-class AgentDecisionPayload(BaseModel):
-    id: int
-    role_id: int
-    application_id: int
-    agent_run_id: Optional[int]
-    decision_type: str
-    recommendation: str
-    status: str
-    reasoning: str
-    # The causal reason for the action and the compact candidate synthesis are
-    # deliberately separate.  ``reasoning`` is retained for API compatibility;
-    # new recruiter surfaces should render these two fields instead.
-    decision_explanation: dict[str, Any]
-    candidate_summary: Optional[str] = None
-    evidence: Optional[dict[str, Any]] = None
-    confidence: Optional[float] = None
-    model_version: str
-    prompt_version: str
-    created_at: datetime
-    resolved_at: Optional[datetime] = None
-    resolved_by_user_id: Optional[int] = None
-    resolution_note: Optional[str] = None
-    override_action: Optional[str] = None
-    candidate_name: Optional[str] = None
-    candidate_email: Optional[str] = None
-    role_name: Optional[str] = None
-    role_family: Optional[RoleFamilyResponse] = None
-    # Workable date, legacy candidate copy, then local candidate-freshness date.
-    applied_at: Optional[datetime] = None
-    # The candidate's headline Tali score, 0–100. Resolved by preferring the
-    # score the agent stamped on this decision's evidence (frozen at decision
-    # time, present even when the application's score cache is still "pending"),
-    # then the application's cached score; within each, Tali composite then
-    # role-fit (== Tali pre-assessment). The Hub renders it as a score ring on
-    # the card. Null for pre-screen rejects — surfaced before any scoring runs,
-    # so there's no score to show.
-    taali_score: Optional[float] = None
-    # Minimal score-summary carrying the provenance ({score_provenance:
-    # {engine_version, scored_at, model}}) so the decision feed / cards can
-    # render the "scored {date} · v{version}" line under the score — the same
-    # shape the candidate surfaces read.
-    score_summary: Optional[dict] = None
-    # A capped list of the candidate's top requirement grades ({label, score
-    # 0-100, status}) from cv_match_details.requirements_assessment, so the Hub
-    # card renders the same requirement bars as the candidate report without a
-    # second fetch. None for pre-screen rejects (no scoring yet).
-    requirements: Optional[list[dict[str, Any]]] = None
-    # Workable shortcode (= role.workable_job_id) so the home-page modal
-    # can fetch this role's Workable stages for the Advance / Skip & advance
-    # stage <select> without a second round-trip.
-    workable_job_id: Optional[str] = None
-    # The candidate's LIVE Workable stage + whether it is post-handover
-    # (phone/technical/final interview, offer, hired). Approve surfaces use it
-    # to warn before a reject is approved for a candidate a human recruiter
-    # already advanced in Workable — advice, never a block. Read from the
-    # application at serialization time (not frozen on the decision) so a
-    # stage move after the card was queued still warns correctly.
-    candidate_workable_stage: Optional[str] = None
-    candidate_post_handover: bool = False
-    # A2 + C5: trust signals computed on every read so recruiters see
-    # input freshness, confidence, age and cost without opening the
-    # expand-out. ``is_stale`` is the boolean gate the Hub uses to
-    # disable Approve and prompt Re-evaluate; ``staleness_reasons``
-    # carries the machine codes (criteria_changed, cv_replaced, etc.);
-    # ``staleness_summary`` is the one-line human label.
-    is_stale: bool = False
-    staleness_reasons: list[str] = []
-    staleness_summary: Optional[str] = None
-    # C5: derived, presentational. ``age_seconds`` = now - created_at;
-    # ``confidence_band`` maps confidence into high/medium/low for the
-    # purple-tone chip; ``cost_usd_cents`` rolls up token_spend so the
-    # always-visible footer can show "$0.04" without a JSON dig.
-    age_seconds: int = 0
-    confidence_band: Optional[str] = None
-    cost_usd_cents: int = 0
-    # A score job (CvScoreJob pending/running) is currently re-computing this
-    # candidate's score — e.g. the recruiter pressed Re-evaluate on an
-    # old-engine score, or an agent-chat bulk re-score touched them. The queue
-    # greys the row + card and disables actions until the fresh score lands,
-    # so nothing is approved on a score that's being replaced mid-flight.
-    rescore_in_flight: bool = False
-
-
-class AgentRunPayload(BaseModel):
-    id: int
-    role_id: int
-    trigger: str
-    status: str
-    started_at: datetime
-    finished_at: Optional[datetime]
-    input_tokens: int
-    output_tokens: int
-    total_cost_micro_usd: int
-    decisions_emitted: int
-    tools_called: Optional[list[dict[str, Any]]]
-    error: Optional[str]
-    model_version: Optional[str]
-    prompt_version: Optional[str]
-
-
-class ApproveBody(BaseModel):
-    note: Optional[str] = Field(default=None, max_length=2000)
-    # Recruiter's Workable stage pick for advance verdicts (sent from the
-    # home-page modal's <select>). Optional — when absent, only Tali's
-    # internal pipeline_stage updates.
-    workable_target_stage: Optional[str] = Field(default=None, max_length=200)
-
-
-class DecisionAcceptedResult(BaseModel):
-    """Public receipt for a decision durably accepted for execution."""
-
-    decision_id: int
-    accepted: Literal[True] = True
-
-
-class OverrideBody(BaseModel):
-    override_action: Optional[str] = Field(default=None, max_length=64)
-    note: Optional[str] = Field(default=None, max_length=2000)
-    workable_target_stage: Optional[str] = Field(default=None, max_length=200)
-
-
-class DiscardBody(BaseModel):
-    role_id: int
-    expected_version: int = Field(ge=1)
-
-
-class RunNowBody(BaseModel):
-    application_id: Optional[int] = None
-
-
-class RoleVersionCommand(BaseModel):
-    expected_version: int = Field(ge=1)
-
-
-class AgentStatusActivity(BaseModel):
-    event_type: str
-    reason: Optional[str] = None
-    actor_type: str
-    application_id: Optional[int] = None
-    candidate_name: Optional[str] = None
-    created_at: datetime
-
-
-class AgentStatusCurrentRun(BaseModel):
-    id: int
-    started_at: datetime
-    status: str
-    decisions_emitted: int
-    tools_called: Optional[list[dict[str, Any]]] = None
-
-
-class AgentStatusPausedBy(BaseModel):
-    user_id: Optional[int] = None
-    name: Optional[str] = None
-    is_current_user: bool
-    changed_at: Optional[datetime] = None
-    attribution: Literal["verified", "inferred", "unavailable"]
-    source: Literal[
-        "role_change_event",
-        "legacy_unique_member",
-        "legacy_history",
-        "workspace_control",
-    ]
-
-
-class AgentStatusPendingBreakdown(BaseModel):
-    total: int
-    decisions: int
-    questions: int
-
-
-class AgentStatusPayload(BaseModel):
-    role_id: int
-    enabled: bool
-    # Viewer-specific capability from the same hiring-team policy enforced by
-    # every role agent mutation. Clients use it only to render controls as
-    # read-only; the mutation endpoints remain the authority.
-    can_control_agent: bool = False
-    # Effective state follows workspace > role precedence. The legacy
-    # paused_at/reason/by fields remain the effective display contract so old
-    # clients stop immediately on a workspace hold; the explicit role_* fields
-    # preserve the local desired state underneath that overlay.
-    paused: bool = False
-    pause_scope: Optional[Literal["workspace", "role"]] = None
-    paused_at: Optional[datetime] = None
-    paused_reason: Optional[str] = None
-    paused_by: Optional[AgentStatusPausedBy] = None
-    role_paused_at: Optional[datetime] = None
-    role_paused_reason: Optional[str] = None
-    role_paused_by: Optional[AgentStatusPausedBy] = None
-    workspace_paused: bool = False
-    workspace_paused_at: Optional[datetime] = None
-    workspace_paused_reason: Optional[str] = None
-    workspace_paused_by: Optional[AgentStatusPausedBy] = None
-    workspace_control_version: int = 1
-    last_run_at: Optional[datetime] = None
-    bootstrap_status: Optional[str] = None
-    bootstrap_error: Optional[str] = None
-    bootstrap_started_at: Optional[datetime] = None
-    bootstrap_completed_at: Optional[datetime] = None
-    pending_decisions: int
-    pending_breakdown: AgentStatusPendingBreakdown
-    monthly_budget_cents: Optional[int] = None
-    monthly_spent_cents: int
-    current_run: Optional[AgentStatusCurrentRun] = None
-    last_activity: Optional[AgentStatusActivity] = None
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -396,6 +212,7 @@ def _decision_to_payload(
     staleness_reasons: Optional[list[str]] = None,
     staleness_summary: Optional[str] = None,
     rescore_in_flight: bool = False,
+    resolution_effect: Optional[DecisionResolutionEffect] = None,
 ) -> AgentDecisionPayload:
     # C5: derive presentational fields here so the API answers "is this
     # safe to approve, how old is it, how expensive was it" without
@@ -428,6 +245,7 @@ def _decision_to_payload(
         id=int(decision.id),
         role_id=int(decision.role_id),
         application_id=int(decision.application_id),
+        candidate_id=int(decision.candidate_id),
         agent_run_id=int(decision.agent_run_id) if decision.agent_run_id else None,
         decision_type=str(decision.decision_type),
         recommendation=str(decision.recommendation),
@@ -450,6 +268,14 @@ def _decision_to_payload(
         resolved_by_user_id=decision.resolved_by_user_id,
         resolution_note=decision.resolution_note,
         override_action=decision.override_action,
+        resolution_effect=(
+            resolution_effect.as_dict()
+            if resolution_effect is not None
+            else {
+                "status": "unknown",
+                "action": requested_action(decision),
+            }
+        ),
         candidate_name=getattr(candidate, "full_name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
         role_name=getattr(role, "name", None) if role else None,
@@ -542,7 +368,11 @@ def list_agent_decisions(
         .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
         .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
         .outerjoin(Role, Role.id == AgentDecision.role_id)
-        .filter(AgentDecision.organization_id == current_user.organization_id)
+    )
+    query = decision_membership.apply_live_logical_decision_scope(
+        db,
+        query,
+        organization_id=int(current_user.organization_id),
     )
     if role_id is not None:
         query = query.filter(AgentDecision.role_id == int(role_id))
@@ -600,6 +430,11 @@ def list_agent_decisions(
         applications_by_id=apps_by_id,
     )
     related_assessments = load_related_assessment_map(
+        db,
+        decisions=[decision for decision, _, _ in rows],
+        applications_by_id=apps_by_id,
+    )
+    resolution_effects = resolution_effects_for_decisions(
         db,
         decisions=[decision for decision, _, _ in rows],
         applications_by_id=apps_by_id,
@@ -668,6 +503,7 @@ def list_agent_decisions(
                 staleness_reasons=reasons,
                 staleness_summary=summary,
                 rescore_in_flight=int(decision.application_id) in rescoring_app_ids,
+                resolution_effect=resolution_effects.get(int(decision.id)),
             )
         )
     return payloads
@@ -900,12 +736,20 @@ def override(
     related_evaluation = load_related_evaluation(
         db, decision=decision, application=application
     )
+    resolution_effect = resolution_effects_for_decisions(
+        db,
+        decisions=[decision],
+        applications_by_id=(
+            {int(application.id): application} if application is not None else {}
+        ),
+    ).get(int(decision.id))
     return _decision_to_payload(
         decision,
         candidate,
         role,
         application=application,
         related_evaluation=related_evaluation,
+        resolution_effect=resolution_effect,
     )
 
 
@@ -975,7 +819,11 @@ def re_evaluate(
         .filter(CandidateApplication.id == decision.application_id)
         .first()
     )
-    if application is not None and is_resolved(application):
+    if application is not None and role_application_is_resolved(
+        db,
+        role_id=int(decision.role_id),
+        application=application,
+    ):
         raise HTTPException(
             status_code=409,
             detail={
@@ -1015,6 +863,28 @@ def re_evaluate(
             detail={
                 "code": "related_role_evaluation_missing",
                 "message": "This role's evaluation is unavailable and cannot be refreshed.",
+            },
+        )
+    except RelatedApplicationResolvedError:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "application_resolved",
+                "message": (
+                    "This candidate has left this role's active flow. The "
+                    "decision is a frozen audit record and cannot be refreshed."
+                ),
+            },
+        )
+    except RelatedDecisionNotActionableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "decision_not_actionable",
+                "message": (
+                    f"This decision is now {exc.status} and can no longer be "
+                    "re-evaluated. Refresh the queue."
+                ),
             },
         )
     if related_result is not None:
@@ -1519,23 +1389,25 @@ def agent_status(
     # "pending" rolls up both decisions awaiting recruiter approve/override
     # and open orchestrator questions awaiting an answer. The Review queue
     # UI surfaces both kinds in one place — counts must follow.
-    pending_decisions_count = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.organization_id == current_user.organization_id,
+    pending_decisions_count = decision_membership.apply_live_logical_decision_scope(
+        db,
+        db.query(AgentDecision).filter(
             AgentDecision.role_id == role_id,
             AgentDecision.status == "pending",
             or_(
                 AgentDecision.snoozed_until.is_(None),
                 AgentDecision.snoozed_until <= now,
             ),
-        )
-        .count()
-    )
+        ),
+        organization_id=int(current_user.organization_id),
+    ).count()
     open_needs_input_count = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(current_user.organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == current_user.organization_id,
             AgentNeedsInput.role_id == role_id,
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),
@@ -1566,30 +1438,20 @@ def agent_status(
         else None
     )
 
-    activity_row = (
-        db.query(CandidateApplicationEvent, Candidate)
-        .join(
-            CandidateApplication,
-            CandidateApplication.id == CandidateApplicationEvent.application_id,
-        )
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplicationEvent.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplicationEvent.actor_type.in_(("agent", "recruiter")),
-        )
-        .order_by(desc(CandidateApplicationEvent.created_at))
-        .limit(1)
-        .first()
+    activity = latest_role_application_activity(
+        db,
+        organization_id=int(current_user.organization_id),
+        role_id=int(role_id),
     )
     last_activity = None
-    if activity_row is not None:
-        event, candidate = activity_row
+    if activity is not None:
+        event = activity.event
+        candidate = activity.candidate
         last_activity = AgentStatusActivity(
             event_type=str(event.event_type),
             reason=event.reason,
             actor_type=str(event.actor_type),
-            application_id=int(event.application_id),
+            application_id=int(activity.application_id),
             candidate_name=getattr(candidate, "full_name", None) if candidate else None,
             created_at=event.created_at,
         )

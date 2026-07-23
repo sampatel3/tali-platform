@@ -14,8 +14,6 @@ from ..models.decision_feedback import (
     FEEDBACK_DIRECTIONS,
     FEEDBACK_SCOPES,
 )
-from ..models.candidate import Candidate
-from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..models.user import User
 
@@ -126,7 +124,9 @@ def teach_decision(
     """
     from .decision_commands import (
         DecisionCommandError,
+        _candidate_scope,
         _scoped_decision,
+        _scoped_decision_subject,
         _translate_http_error,
     )
 
@@ -139,6 +139,16 @@ def teach_decision(
                 "or previously taught decisions can be sent back."
             ),
         )
+    candidate_scope = _candidate_scope(
+        db,
+        role,
+        organization_id=int(decision.organization_id),
+    )
+    _scoped_decision_subject(
+        db,
+        scope=candidate_scope,
+        decision=decision,
+    )
     payload = normalize_teach_payload(
         failure_mode=failure_mode,
         correction_text=correction_text,
@@ -190,7 +200,12 @@ def get_teachable_decision(
 ) -> dict[str, Any]:
     """Return a compact, live snapshot for a teach confirmation preview."""
 
-    from .decision_commands import DecisionCommandError, _scoped_decision
+    from .decision_commands import (
+        DecisionCommandError,
+        _candidate_scope,
+        _scoped_decision,
+        _scoped_decision_subject,
+    )
 
     decision = _scoped_decision(db, role, user, decision_id)
     if str(decision.status) not in {"pending", "reverted_for_feedback"}:
@@ -201,16 +216,17 @@ def get_teachable_decision(
                 "or previously taught decisions can be sent back."
             ),
         )
-    candidate_name = (
-        db.query(Candidate.full_name)
-        .join(CandidateApplication, CandidateApplication.candidate_id == Candidate.id)
-        .filter(
-            CandidateApplication.id == int(decision.application_id),
-            CandidateApplication.organization_id == int(role.organization_id),
-            CandidateApplication.role_id == int(role.id),
-        )
-        .scalar()
+    candidate_scope = _candidate_scope(
+        db,
+        role,
+        organization_id=int(decision.organization_id),
     )
+    _application, candidate, _evaluation = _scoped_decision_subject(
+        db,
+        scope=candidate_scope,
+        decision=decision,
+    )
+    candidate_name = getattr(candidate, "full_name", None)
     return {
         "decision_id": int(decision.id),
         "application_id": int(decision.application_id),

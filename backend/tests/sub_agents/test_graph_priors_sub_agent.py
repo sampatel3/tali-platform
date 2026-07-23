@@ -12,6 +12,7 @@ import pytest
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.services.metered_async_anthropic_client import GraphProviderAdmissionError
 from app.sub_agents.base import SubAgentRequest, SubAgentResult
 from app.sub_agents.graph_priors import GRAPH_PRIORS_SUB_AGENT, clear_cycle_cache
@@ -365,7 +366,7 @@ def test_graph_priors_rejects_application_owned_by_another_standard_role(db):
     neighbourhood.assert_not_called()
 
 
-def test_graph_priors_allows_sister_role_to_use_owner_application(db):
+def test_graph_priors_allows_only_explicit_related_role_membership(db):
     org, owner_role, _, app = make_full_application(db)
     sister_role = Role(
         organization_id=int(org.id),
@@ -375,6 +376,22 @@ def test_graph_priors_allows_sister_role_to_use_owner_application(db):
         ats_owner_role_id=int(owner_role.id),
     )
     db.add(sister_role)
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=int(org.id),
+            role_id=int(sister_role.id),
+            candidate_id=int(app.candidate_id),
+            source_application_id=int(app.id),
+            ats_application_id=int(app.id),
+            status="done",
+            pipeline_stage="review",
+            application_outcome="open",
+            membership_source="initial_snapshot",
+            spec_fingerprint="graph-prior-related",
+        )
+    )
+    app.deleted_at = datetime.now(timezone.utc)
     db.flush()
     req = SubAgentRequest(
         organization_id=int(org.id),

@@ -30,6 +30,9 @@ from ..actions.types import Actor
 from ..models.agent_needs_input import AgentNeedsInput
 from ..models.role import Role
 from ..models.user import User
+from ..services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 
 
 MAX_LIST_LIMIT = 50
@@ -117,9 +120,12 @@ def list_open_recruiter_inputs(
         )
 
     rows = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(role.organization_id),
+        )
         .filter(
-            AgentNeedsInput.organization_id == int(role.organization_id),
             AgentNeedsInput.role_id == int(role.id),
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),
@@ -229,10 +235,13 @@ def _get_open_role_request(
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail="needs_input_id must be an integer") from exc
     row = (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(role.organization_id),
+        )
         .filter(
             AgentNeedsInput.id == request_id,
-            AgentNeedsInput.organization_id == int(role.organization_id),
             AgentNeedsInput.role_id == int(role.id),
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),

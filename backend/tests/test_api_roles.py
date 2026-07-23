@@ -17,6 +17,9 @@ from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.task import Task
 from app.models.user import User
+from app.services.logical_role_application_authority import (
+    authorize_logical_role_application,
+)
 from tests.conftest import auth_headers, create_task_via_api
 
 
@@ -788,6 +791,355 @@ def test_reject_delete_role_with_existing_application(client):
     )
     assert delete_resp.status_code == 400
     assert "applications" in delete_resp.json()["detail"].lower()
+
+
+def test_related_role_application_report_uses_role_local_truth(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    owner = Role(
+        organization_id=int(user.organization_id),
+        name="ATS Owner Report Role",
+        source="workable",
+        workable_job_id="REPORT-OWNER",
+        job_spec_text="Owner report specification",
+    )
+    db.add(owner)
+    db.flush()
+    related = Role(
+        organization_id=int(user.organization_id),
+        name="Independent Report Role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        related_source_role_id=int(owner.id),
+        ats_owner_role_id=int(owner.id),
+        job_spec_text="Independent related report specification",
+    )
+    candidate = Candidate(
+        organization_id=int(user.organization_id),
+        email="related-report@example.com",
+        full_name="Related Report Candidate",
+        cv_text="Candidate evidence shared as transport input.",
+    )
+    db.add_all([related, candidate])
+    db.flush()
+    application = CandidateApplication(
+        organization_id=int(user.organization_id),
+        candidate_id=int(candidate.id),
+        role_id=int(owner.id),
+        pipeline_stage="applied",
+        application_outcome="open",
+        cv_text=candidate.cv_text,
+        cv_match_score=96,
+        pre_screen_score_100=96,
+        cv_match_details={
+            "summary": "OWNER ROLE JUDGMENT MUST NOT APPEAR.",
+            "matching_skills": ["Owner-only signal"],
+        },
+    )
+    db.add(application)
+    db.flush()
+    db.add_all(
+        [
+            Assessment(
+                organization_id=int(user.organization_id),
+                candidate_id=int(candidate.id),
+                role_id=int(owner.id),
+                application_id=int(application.id),
+                token="owner-report-assessment",
+                status=AssessmentStatus.COMPLETED,
+                score=99,
+                completed_at=datetime(2026, 7, 20, tzinfo=timezone.utc),
+            ),
+            ApplicationInterview(
+                organization_id=int(user.organization_id),
+                application_id=int(application.id),
+                stage="screening",
+                source="manual",
+                provider="manual",
+                status="completed",
+                summary="OWNER INTERVIEW HISTORY MUST NOT APPEAR.",
+                transcript_text="OWNER TRANSCRIPT MUST NOT APPEAR.",
+                meeting_date=datetime(2026, 7, 19, tzinfo=timezone.utc),
+            ),
+        ]
+    )
+    related_assessment = Assessment(
+        organization_id=int(user.organization_id),
+        candidate_id=int(candidate.id),
+        role_id=int(related.id),
+        application_id=int(application.id),
+        token="related-report-assessment",
+        status=AssessmentStatus.COMPLETED,
+        score=8,
+        completed_at=datetime(2026, 7, 21, tzinfo=timezone.utc),
+    )
+    db.add(related_assessment)
+    membership = SisterRoleEvaluation(
+        organization_id=int(user.organization_id),
+        role_id=int(related.id),
+        candidate_id=int(candidate.id),
+        source_application_id=int(application.id),
+        ats_application_id=int(application.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="initial_snapshot",
+        spec_fingerprint="related-report-spec",
+        role_fit_score=17,
+        summary="Related-role evidence is deliberately distinct.",
+        details={
+            "summary": "Related-role evidence is deliberately distinct.",
+            "matching_skills": ["Related role signal"],
+        },
+    )
+    other_related = Role(
+        organization_id=int(user.organization_id),
+        name="Second Independent Report Role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        related_source_role_id=int(owner.id),
+        ats_owner_role_id=int(owner.id),
+        job_spec_text="Second independent related report specification",
+    )
+    db.add_all([membership, other_related])
+    db.flush()
+    other_membership = SisterRoleEvaluation(
+        organization_id=int(user.organization_id),
+        role_id=int(other_related.id),
+        candidate_id=int(candidate.id),
+        source_application_id=int(application.id),
+        ats_application_id=int(application.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="initial_snapshot",
+        spec_fingerprint="second-related-report-spec",
+        role_fit_score=73,
+        summary="Second related-role evidence.",
+        details={"summary": "Second related-role evidence."},
+    )
+    db.add(other_membership)
+    db.commit()
+
+    first_context = authorize_logical_role_application(
+        db,
+        role=related,
+        application_id=int(application.id),
+    )
+    second_context = authorize_logical_role_application(
+        db,
+        role=other_related,
+        application_id=int(application.id),
+    )
+    assert applications_routes._application_report_cache_key(
+        first_context
+    ) != applications_routes._application_report_cache_key(second_context)
+    first_report_application = applications_routes._role_local_report_application(
+        db,
+        first_context,
+    )
+    first_assessment_key = applications_routes._application_report_cache_key(
+        first_context,
+        report_application=first_report_application,
+    )
+    related_assessment.score = 9
+    db.commit()
+    changed_assessment_key = applications_routes._application_report_cache_key(
+        first_context,
+        report_application=applications_routes._role_local_report_application(
+            db,
+            first_context,
+        ),
+    )
+    assert changed_assessment_key != first_assessment_key
+
+    captured: dict[str, object] = {}
+    original_builder = applications_routes.build_client_application_report_payload
+
+    def capture_role_local_payload(projected, **kwargs):
+        captured.update(
+            {
+                "role_id": int(projected.role_id),
+                "score": projected.cv_match_score,
+                "details": projected.cv_match_details,
+                "assessment_role_ids": [
+                    int(assessment.role_id)
+                    for assessment in projected.assessments
+                ],
+                "interview_summaries": [
+                    interview.summary for interview in projected.interviews
+                ],
+            }
+        )
+        return original_builder(projected, **kwargs)
+
+    with patch.object(
+        applications_routes,
+        "build_client_application_report_payload",
+        side_effect=capture_role_local_payload,
+    ):
+        response = client.get(
+            f"/api/v1/applications/{application.id}/report.pdf",
+            params={"view_role_id": int(related.id)},
+            headers=headers,
+        )
+    assert response.status_code == 200, response.text
+    assert (
+        'filename="Independent Report Role-Related Report Candidate.pdf"'
+        in response.headers["content-disposition"]
+    )
+    text = "\n".join(
+        page.extract_text() or ""
+        for page in PdfReader(io.BytesIO(response.content)).pages
+    )
+    assert captured == {
+        "role_id": int(related.id),
+        "score": 17,
+        "details": {
+            "summary": "Related-role evidence is deliberately distinct.",
+            "matching_skills": ["Related role signal"],
+        },
+        "assessment_role_ids": [int(related.id)],
+        "interview_summaries": [],
+    }
+    assert "Independent Report Role" in text
+    assert "OWNER ROLE JUDGMENT MUST NOT APPEAR" not in text
+    assert "OWNER INTERVIEW HISTORY MUST NOT APPEAR" not in text
+    assert "OWNER TRANSCRIPT MUST NOT APPEAR" not in text
+
+
+def test_reject_delete_related_role_with_owned_membership(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    owner = Role(
+        organization_id=user.organization_id,
+        name="ATS transport role",
+        source="manual",
+    )
+    related = Role(
+        organization_id=user.organization_id,
+        name="Independent related role",
+        source="manual",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role=owner,
+    )
+    candidate = Candidate(
+        organization_id=user.organization_id,
+        email="related-delete-guard@example.com",
+        full_name="Related Delete Guard",
+    )
+    db.add_all([owner, related, candidate])
+    db.flush()
+    transport_application = CandidateApplication(
+        organization_id=user.organization_id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    db.add(transport_application)
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=user.organization_id,
+            role_id=related.id,
+            candidate_id=candidate.id,
+            source_application_id=transport_application.id,
+            ats_application_id=transport_application.id,
+            status="done",
+            pipeline_stage="applied",
+            pipeline_stage_source="initial_snapshot",
+            application_outcome="open",
+            application_outcome_source="initial_snapshot",
+            spec_fingerprint="delete-guard-spec",
+            membership_source="initial_snapshot",
+        )
+    )
+    db.commit()
+
+    delete_resp = client.delete(
+        f"/api/v1/roles/{related.id}",
+        params={"expected_version": _role_version(client, headers, related.id)},
+        headers=headers,
+    )
+
+    assert delete_resp.status_code == 400
+    assert "applications" in delete_resp.json()["detail"].lower()
+
+
+def test_delete_transport_owner_preserves_independent_related_role(client, db):
+    headers, email = auth_headers(client)
+    user = db.query(User).filter(User.email == email).one()
+    owner = Role(
+        organization_id=user.organization_id,
+        name="Disposable ATS transport",
+        source="manual",
+    )
+    related = Role(
+        organization_id=user.organization_id,
+        name="Independent retained role",
+        source="manual",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role=owner,
+        related_source_role=owner,
+    )
+    candidate = Candidate(
+        organization_id=user.organization_id,
+        email="retained-related-member@example.com",
+        full_name="Retained Related Member",
+    )
+    db.add_all([owner, related, candidate])
+    db.flush()
+    related_application = CandidateApplication(
+        organization_id=user.organization_id,
+        candidate_id=candidate.id,
+        role_id=related.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    db.add(related_application)
+    db.flush()
+    membership = SisterRoleEvaluation(
+        organization_id=user.organization_id,
+        role_id=related.id,
+        candidate_id=candidate.id,
+        source_application_id=related_application.id,
+        status="done",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        application_outcome_source="recruiter",
+        spec_fingerprint="retained-related-role",
+        membership_source="direct",
+    )
+    db.add(membership)
+    db.commit()
+    owner_id = int(owner.id)
+    related_id = int(related.id)
+    application_id = int(related_application.id)
+    membership_id = int(membership.id)
+
+    delete_resp = client.delete(
+        f"/api/v1/roles/{owner_id}",
+        params={"expected_version": int(owner.version or 1)},
+        headers=headers,
+    )
+
+    assert delete_resp.status_code == 204, delete_resp.text
+    db.expire_all()
+    assert db.get(Role, owner_id) is None
+    retained = db.get(Role, related_id)
+    assert retained is not None
+    assert retained.ats_owner_role_id is None
+    assert retained.related_source_role_id is None
+    assert db.get(CandidateApplication, application_id) is not None
+    assert db.get(SisterRoleEvaluation, membership_id) is not None
 
 
 def test_reject_unlink_role_task_when_assessment_exists(client):

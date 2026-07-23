@@ -162,7 +162,7 @@ describe('Agent Chat operation cards', () => {
     expect(screen.getByText('Decision 7 was accepted for processing.')).toBeInTheDocument();
   });
 
-  it('warns with every linked role before an Agent Chat reject approval', () => {
+  it('warns that a related-role Agent Chat reject stays in that role', () => {
     const prompts = [];
     render(
       <ImpactCard
@@ -171,6 +171,7 @@ describe('Agent Chat operation cards', () => {
           operation: 'approve_decision',
           decision: {
             decision_id: 8,
+            role_id: 47,
             candidate_name: 'Katherine Johnson',
             decision_type: 'reject',
             role_family: {
@@ -187,7 +188,7 @@ describe('Agent Chat operation cards', () => {
       />,
     );
 
-    const consequence = 'Rejects the shared ATS application across all linked roles: Data Platform Lead #31 (original), AI Engineer #47 (related), and Platform Engineer #52 (related).';
+    const consequence = 'Rejects this candidate only for AI Engineer #47 (related). The linked ATS application and other roles are unchanged.';
     expect(screen.getByRole('alert')).toHaveTextContent(consequence);
     fireEvent.click(screen.getByRole('button', { name: 'Review in composer' }));
     expect(prompts).toEqual([
@@ -204,6 +205,7 @@ describe('Agent Chat operation cards', () => {
           operation: 'override_decision',
           decision: {
             decision_id: 9,
+            role_id: 31,
             candidate_name: 'Dorothy Vaughan',
             decision_type: 'send_assessment',
             role_family: {
@@ -217,7 +219,7 @@ describe('Agent Chat operation cards', () => {
       />,
     );
 
-    const consequence = 'Rejects the shared ATS application across all linked roles: Data Platform Lead #31 (original) and AI Engineer #47 (related).';
+    const consequence = 'Rejects this candidate for Data Platform Lead #31 (original) and writes the rejection to its ATS application. Related roles keep their own candidate status.';
     expect(screen.getByRole('alert')).toHaveTextContent(consequence);
     fireEvent.click(screen.getByRole('button', { name: 'Review in composer' }));
     expect(prompts).toEqual([
@@ -225,7 +227,7 @@ describe('Agent Chat operation cards', () => {
     ]);
   });
 
-  it('uses the shared activity receipt language for completed actions', () => {
+  it('uses independent-pool receipt language for completed actions', () => {
     const { container } = render(
       <ImpactCard
         card={{
@@ -243,7 +245,8 @@ describe('Agent Chat operation cards', () => {
     expect(screen.getByRole('article')).toHaveAttribute('data-severity', 'success');
     expect(container.querySelector('[class*="ac-"]')).not.toBeInTheDocument();
     expect(screen.getByText('Senior Data Engineer #42')).toBeInTheDocument();
-    expect(screen.getByText(/shared with Data Engineer #31/)).toBeInTheDocument();
+    expect(screen.getByText(/independent candidate pool/)).toBeInTheDocument();
+    expect(screen.queryByText(/shared with/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Senior Data Engineer #42' }))
       .toHaveAttribute('href', '/jobs/42');
   });
@@ -263,6 +266,8 @@ describe('Agent Chat operation cards', () => {
     );
 
     expect(screen.getByTestId('related-role-draft')).toHaveTextContent('starts from the complete AI Engineer #31 specification');
+    expect(screen.getByTestId('related-role-draft')).toHaveTextContent('one-time candidate snapshot');
+    expect(screen.getByTestId('related-role-draft')).not.toHaveTextContent('shared roster');
     expect(screen.getByRole('link', { name: /Continue in job-creation chat/i }))
       .toHaveAttribute('href', '/requisitions?brief=44');
   });
@@ -535,7 +540,7 @@ describe('related-role chat cards', () => {
   it.each([
     ['workable', 'Workable'],
     ['bullhorn', 'Bullhorn'],
-  ])('names %s as the owning candidate-pool provider', (provider, label) => {
+  ])('names %s as an ATS evidence and write-back link', (provider, label) => {
     render(
       <ImpactCard
         card={{
@@ -552,7 +557,7 @@ describe('related-role chat cards', () => {
     );
 
     expect(screen.getAllByText(/AI Engineer #31/)).toHaveLength(2);
-    expect(screen.getByText(new RegExp(`coupled to AI Engineer #31, the original ${label} job`, 'i')))
+    expect(screen.getByText(new RegExp(`link to AI Engineer #31 is only for ${label} evidence, permitted write-backs, and restrictions`, 'i')))
       .toBeInTheDocument();
   });
 

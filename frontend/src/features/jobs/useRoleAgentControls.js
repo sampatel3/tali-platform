@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 
 import * as apiClient from '../../shared/api';
 import { getAgentPauseCopy } from '../../shared/agentPauseCopy';
@@ -14,6 +14,10 @@ import { roleExpectedVersion } from './roleConcurrency';
 // a rapid opposite click or an older poll from issuing a second command with
 // the same viewed role version.
 export const useRoleAgentControls = ({
+  beginRoleOperation,
+  captureRoleScope,
+  commitRoleScope,
+  finishRoleOperation,
   roleId,
   role,
   agentStatus,
@@ -25,31 +29,43 @@ export const useRoleAgentControls = ({
   handleRoleVersionConflict,
   showToast,
 }) => {
-  const busyRef = useRef(false);
-  const [controlAction, setControlAction] = useState(null);
+  const [controlState, setControlState] = useState({ roleId: null, action: null });
+  const controlAction = controlState.roleId === roleId ? controlState.action : null;
 
   const pauseAgent = useCallback(async () => {
-    if (!canControlAgent || !Number.isFinite(roleId) || busyRef.current) return;
-    busyRef.current = true;
-    setControlAction('pause');
+    const actionScope = captureRoleScope?.(roleId);
+    if (!canControlAgent || !actionScope || !beginRoleOperation?.(actionScope, 'agent-control')) return;
+    setControlState({ roleId, action: 'pause' });
     try {
       const response = await mutateAgentStatus({
         optimistic: (current) => optimisticallyPauseRoleAgent(current),
         request: () => apiClient.agent.pause(roleId, roleExpectedVersion(role)),
       });
-      if (response?.data) {
-        setRole((current) => (current ? { ...current, ...response.data } : response.data));
-      }
+      commitRoleScope?.(actionScope, () => {
+        if (response?.data) {
+          setRole((current) => (current ? { ...current, ...response.data } : response.data));
+        }
+      });
     } catch (error) {
-      if (!handleRoleVersionConflict(error)) {
-        showToast(getErrorMessage(error, 'Failed to pause agent.'), 'error');
-      }
+      commitRoleScope?.(actionScope, () => {
+        if (!handleRoleVersionConflict(error)) {
+          showToast(getErrorMessage(error, 'Failed to pause agent.'), 'error');
+        }
+      });
     } finally {
-      busyRef.current = false;
-      setControlAction(null);
+      finishRoleOperation?.(actionScope, 'agent-control');
+      setControlState((current) => (
+        current.roleId === roleId && current.action === 'pause'
+          ? { roleId: null, action: null }
+          : current
+      ));
     }
   }, [
+    beginRoleOperation,
     canControlAgent,
+    captureRoleScope,
+    commitRoleScope,
+    finishRoleOperation,
     handleRoleVersionConflict,
     mutateAgentStatus,
     role,
@@ -59,43 +75,57 @@ export const useRoleAgentControls = ({
   ]);
 
   const resumeAgent = useCallback(async () => {
-    if (!canControlAgent || !Number.isFinite(roleId) || busyRef.current) return;
+    const actionScope = captureRoleScope?.(roleId);
+    if (!canControlAgent || !actionScope || !beginRoleOperation?.(actionScope, 'agent-control')) return;
     const statusBeforeResume = agentStatus;
-    busyRef.current = true;
-    setControlAction('resume');
+    setControlState({ roleId, action: 'resume' });
     try {
       const response = await mutateAgentStatus({
         optimistic: (current) => optimisticallyResumeRoleAgent(current),
         request: () => apiClient.agent.resume(roleId, roleExpectedVersion(role)),
       });
-      if (response?.data) {
-        setRole((current) => (current ? { ...current, ...response.data } : response.data));
-      }
+      commitRoleScope?.(actionScope, () => {
+        if (response?.data) {
+          setRole((current) => (current ? { ...current, ...response.data } : response.data));
+        }
+      });
       if (response?.data?.resumed === false && response?.data?.paused === true) {
         // A runtime/budget guard can truthfully accept Resume as a no-op.
         // Restore the viewed hold even if the reconciliation read failed.
-        if (statusBeforeResume && setAgentStatus) {
-          setAgentStatus(() => ({
-            ...statusBeforeResume,
-            paused: true,
-            paused_reason: response.data.reason || statusBeforeResume.paused_reason,
-          }));
-        }
-        const pauseCopy = getAgentPauseCopy(response.data.reason);
-        showToast(`${pauseCopy.label}. Resolve the hold, then try Resume again.`, 'info');
+        commitRoleScope?.(actionScope, () => {
+          if (statusBeforeResume && setAgentStatus) {
+            setAgentStatus(() => ({
+              ...statusBeforeResume,
+              paused: true,
+              paused_reason: response.data.reason || statusBeforeResume.paused_reason,
+            }));
+          }
+          const pauseCopy = getAgentPauseCopy(response.data.reason);
+          showToast(`${pauseCopy.label}. Resolve the hold, then try Resume again.`, 'info');
+        });
       }
     } catch (error) {
-      void loadRoleWorkspace();
-      if (!handleRoleVersionConflict(error)) {
-        showToast(getErrorMessage(error, 'Failed to resume agent.'), 'error');
-      }
+      commitRoleScope?.(actionScope, () => {
+        void loadRoleWorkspace();
+        if (!handleRoleVersionConflict(error)) {
+          showToast(getErrorMessage(error, 'Failed to resume agent.'), 'error');
+        }
+      });
     } finally {
-      busyRef.current = false;
-      setControlAction(null);
+      finishRoleOperation?.(actionScope, 'agent-control');
+      setControlState((current) => (
+        current.roleId === roleId && current.action === 'resume'
+          ? { roleId: null, action: null }
+          : current
+      ));
     }
   }, [
     agentStatus,
+    beginRoleOperation,
     canControlAgent,
+    captureRoleScope,
+    commitRoleScope,
+    finishRoleOperation,
     handleRoleVersionConflict,
     loadRoleWorkspace,
     mutateAgentStatus,

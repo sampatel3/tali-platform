@@ -1,19 +1,22 @@
-"""P2 core analytics: native pipeline funnel + time-to-fill.
+"""P2 core analytics: role-local pipeline funnel + time-to-fill.
 
-Read-only aggregates over the ATS's *own* data (the fixed Tali funnel stages and
-the ATS-synced hired outcome) — distinct from the Workable-stage conversion in
-``analytics_routes`` which mirrors the external pipeline. Pure functions so the
-maths is unit-testable without HTTP.
+Ordinary roles use their application state; related roles use explicit local
+membership state over shared evidence. Pure functions keep the aggregate maths
+unit-testable without HTTP.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ...candidate_search.logical_application_scope import (
+    LogicalApplicationSelection,
+    resolve_logical_application_selection,
+)
 from ...models.candidate_application import CandidateApplication
+from ...models.role import Role
 
 # The canonical Tali funnel stages, in order. Mirrors
 # ``pipeline_service.PIPELINE_STAGES`` (the fixed legacy pipeline) with each
@@ -67,37 +70,57 @@ def _ordered_stages(db: Session, org_id: int) -> List[Dict[str, Any]]:
     ]
 
 
+def logical_analytics_selection(
+    db: Session, org_id: int, role_id: Optional[int]
+) -> LogicalApplicationSelection:
+    """Resolve one role or every active role to canonical logical memberships."""
+
+    role_ids = [int(role_id)] if role_id is not None else [
+        int(row[0])
+        for row in db.query(Role.id)
+        .filter(
+            Role.organization_id == int(org_id),
+            Role.deleted_at.is_(None),
+        )
+        .all()
+    ]
+    return resolve_logical_application_selection(
+        db,
+        organization_id=int(org_id),
+        role_ids=role_ids,
+    )
+
+
 def pipeline_funnel(
     db: Session, org_id: int, role_id: Optional[int] = None
 ) -> Dict[str, Any]:
     """Current headcount per configured stage (funnel order), plus outcome mix.
 
-    A snapshot — "where the live pipeline sits now" — not a flow over time. Only
-    open (non-deleted) applications are counted per stage; ``outcomes`` reports
-    the terminal split (hired / rejected / open) across the whole cohort.
+    A snapshot — "where the live pipeline sits now" — not a flow over time. Live
+    logical memberships are counted per stage; ``outcomes`` reports the terminal
+    split (hired / rejected / open) across the whole cohort.
     """
     if not org_id:
         return {"stages": [], "outcomes": {}, "total": 0}
 
-    base = db.query(CandidateApplication).filter(
-        CandidateApplication.organization_id == org_id,
-        CandidateApplication.deleted_at.is_(None),
+    selection = logical_analytics_selection(db, org_id, role_id)
+    if not selection.valid_role_ids:
+        return {"stages": [], "outcomes": {}, "total": 0}
+    base = selection.apply_membership(
+        db.query(CandidateApplication).filter(
+            CandidateApplication.organization_id == int(org_id)
+        )
     )
-    if role_id is not None:
-        base = base.filter(CandidateApplication.role_id == role_id)
-
-    # One grouped scan for stage counts.
-    stage_counts: Dict[str, int] = dict(
-        base.with_entities(
-            CandidateApplication.pipeline_stage, func.count(CandidateApplication.id)
-        ).group_by(CandidateApplication.pipeline_stage).all()
-    )
-    # One grouped scan for outcome counts.
-    outcome_counts: Dict[str, int] = dict(
-        base.with_entities(
-            CandidateApplication.application_outcome, func.count(CandidateApplication.id)
-        ).group_by(CandidateApplication.application_outcome).all()
-    )
+    stage_expr = selection.pipeline_stage_expression()
+    outcome_expr = selection.application_outcome_expression()
+    state_rows = base.with_entities(stage_expr, outcome_expr).all()
+    stage_counts: Dict[str, int] = {}
+    outcome_counts: Dict[str, int] = {}
+    for stage, outcome in state_rows:
+        stage_key = str(stage or "applied")
+        outcome_key = str(outcome or "open")
+        stage_counts[stage_key] = stage_counts.get(stage_key, 0) + 1
+        outcome_counts[outcome_key] = outcome_counts.get(outcome_key, 0) + 1
 
     ordered = _ordered_stages(db, org_id)
     known = {s["slug"] for s in ordered}
@@ -126,8 +149,8 @@ def time_to_fill(
 
     Uses the canonical hired signal — ``application_outcome == 'hired'`` with
     ``application_outcome_updated_at`` as the fill timestamp (the moment the
-    outcome flipped to hired) — against the application's ``created_at``. Returns
-    a duration summary plus a per-role breakdown so a slow-to-fill role stands out.
+    outcome flipped to hired) — against that logical membership's ``created_at``.
+    Returns a duration summary plus a per-role breakdown so a slow role stands out.
 
     Coverage note: the Workable sync and the native pipeline stamp the ``hired``
     outcome, so this is accurate for Workable and standalone orgs. The Bullhorn
@@ -142,21 +165,26 @@ def time_to_fill(
     if not org_id:
         return {"overall": _duration_summary([]), "by_role": []}
 
-    q = (
-        db.query(
-            CandidateApplication.application_outcome_updated_at,
-            CandidateApplication.created_at,
-            CandidateApplication.role_id,
+    selection = logical_analytics_selection(db, org_id, role_id)
+    if not selection.valid_role_ids:
+        return {"overall": _duration_summary([]), "by_role": []}
+    outcome_expr = selection.application_outcome_expression()
+    hired_at_expr = selection.application_outcome_updated_at_expression()
+    created_at_expr = selection.created_at_expression()
+    logical_role_expr = selection.logical_role_id_expression()
+    q = selection.apply_membership(
+        db.query(CandidateApplication).filter(
+            CandidateApplication.organization_id == int(org_id)
         )
-        .filter(
-            CandidateApplication.organization_id == org_id,
-            CandidateApplication.application_outcome == "hired",
-            CandidateApplication.application_outcome_updated_at.isnot(None),
-            CandidateApplication.created_at.isnot(None),
-        )
+    ).with_entities(
+        hired_at_expr,
+        created_at_expr,
+        logical_role_expr,
+    ).filter(
+        outcome_expr == "hired",
+        hired_at_expr.isnot(None),
+        created_at_expr.isnot(None),
     )
-    if role_id is not None:
-        q = q.filter(CandidateApplication.role_id == role_id)
 
     overall_days: List[float] = []
     per_role: Dict[int, List[float]] = {}
@@ -165,7 +193,7 @@ def time_to_fill(
         if days is None or days < 0:
             continue
         overall_days.append(days)
-        per_role.setdefault(r_id, []).append(days)
+        per_role.setdefault(int(r_id), []).append(days)
 
     by_role = [
         {"role_id": r_id, **_duration_summary(vals)}

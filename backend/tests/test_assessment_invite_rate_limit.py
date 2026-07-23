@@ -342,6 +342,35 @@ def test_bulk_send_success_persists_email_id_and_sent_status(db, _resend_key):
     assert refreshed.invite_email_claimed_at is None
 
 
+def test_deleted_candidate_cancels_claimed_invite_before_provider_call(
+    db, _resend_key
+):
+    assessment = _seed_assessment(db)
+    assessment.candidate.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    with patch.object(EmailService, "send_assessment_invite") as send:
+        out = email_tasks.send_assessment_email.apply(
+            kwargs=_task_kwargs(int(assessment.id)),
+            retries=0,
+        ).get()
+
+    assert out == {
+        "success": False,
+        "failed": True,
+        "reason": "candidate_unavailable",
+    }
+    send.assert_not_called()
+    db.expire_all()
+    refreshed = db.get(Assessment, int(assessment.id))
+    assert refreshed.invite_email_status == "dispatch_failed"
+    assert refreshed.invite_email_claimed_at is None
+    assert (
+        refreshed.invite_email_last_error
+        == "candidate_unavailable_before_delivery"
+    )
+
+
 def test_provider_success_without_message_id_stays_recoverable(db, _resend_key):
     a = _seed_assessment(db)
     with patch.object(

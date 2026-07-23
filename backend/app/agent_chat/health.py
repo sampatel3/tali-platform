@@ -36,13 +36,14 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..models.agent_decision import AgentDecision
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..models.role_criterion import RoleCriterion
 from . import impact as _impact
 from . import rescore as _rescore
-from .assessments import _entry_for, _req_id
+from .assessments import _entry_for, _req_id, _role_assessment_rows
 
 
 # --- tuning knobs (kept conservative so we never invent problems) -----------
@@ -293,14 +294,12 @@ def _requirement_findings(db: Session, role: Role) -> list[dict[str, Any]]:
         return []
 
     details_list = [
-        d
-        for (d,) in db.query(CandidateApplication.cv_match_details)
-        .filter(
-            CandidateApplication.role_id == int(role.id),
-            CandidateApplication.application_outcome == "open",
-            CandidateApplication.deleted_at.is_(None),
+        application.cv_match_details
+        for application, _candidate_name in _role_assessment_rows(
+            db,
+            role,
+            open_only=True,
         )
-        .all()
     ]
     if len(details_list) < _MIN_POOL:
         return []
@@ -457,14 +456,29 @@ def _data_quality_findings(db: Session, role: Role) -> list[dict[str, Any]]:
             )
         )
 
-    pending = (
-        db.query(func.count(AgentDecision.id))
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+    )
+    pending_query = (
+        db.query(AgentDecision)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == AgentDecision.application_id,
+        )
         .filter(
+            AgentDecision.organization_id == int(role.organization_id),
             AgentDecision.role_id == int(role.id),
             AgentDecision.status == "pending",
         )
+    )
+    pending = int(
+        role_scope.scope_visible_roster(pending_query)
+        .with_entities(func.count(AgentDecision.id))
         .scalar()
-    ) or 0
+        or 0
+    )
     if int(pending) >= _BACKLOG_MIN:
         n = int(pending)
         findings.append(

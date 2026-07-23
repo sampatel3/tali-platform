@@ -18,6 +18,7 @@ class CandidateCvInputSnapshot:
     organization_id: int
     candidate_id: int
     effective_fingerprints: dict[int, str | None]
+    scoring_text_fingerprints: dict[int, str | None]
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,19 @@ def _effective_cv_fingerprint(
         else str(uploaded_at or "")
     )
     return _fingerprint(f"{text}\n{timestamp}")
+
+
+def _effective_cv_text(
+    application: CandidateApplication,
+    *,
+    candidate_cv_text: object,
+) -> str:
+    """Return the exact CV string consumed by related-role scoring."""
+
+    return (
+        str(getattr(application, "cv_text", None) or "").strip()
+        or str(candidate_cv_text or "").strip()
+    )
 
 
 def capture_candidate_cv_input_snapshot(
@@ -100,6 +114,15 @@ def capture_candidate_cv_input_snapshot(
                 application,
                 candidate_cv_text=candidate_cv_text,
                 candidate_cv_uploaded_at=candidate_cv_uploaded_at,
+            )
+            for application in applications
+        },
+        scoring_text_fingerprints={
+            int(application.id): _fingerprint(
+                _effective_cv_text(
+                    application,
+                    candidate_cv_text=candidate_cv_text,
+                )
             )
             for application in applications
         },
@@ -180,16 +203,26 @@ def invalidate_changed_candidate_cv_inputs(
         for application_id in (queue_related_application_ids or set())
     }
     for application in changed:
-        related_evaluation_ids.extend(
-            reset_related_evaluations_for_application(
-                db,
-                application,
-                reason=reason,
-                queue_for_rescore=(
-                    int(application.id) in authorised_application_ids
-                ),
+        scoring_text_changed = (
+            _fingerprint(
+                _effective_cv_text(
+                    application,
+                    candidate_cv_text=candidate_cv_text,
+                )
             )
+            != before.scoring_text_fingerprints.get(int(application.id))
         )
+        if scoring_text_changed:
+            related_evaluation_ids.extend(
+                reset_related_evaluations_for_application(
+                    db,
+                    application,
+                    reason=reason,
+                    queue_for_rescore=(
+                        int(application.id) in authorised_application_ids
+                    ),
+                )
+            )
         if mark_application_scores_stale(
             db,
             int(application.id),

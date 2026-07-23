@@ -42,6 +42,8 @@ from ...models.organization import Organization
 from ...models.role import ROLE_KIND_SISTER, Role
 from ...models.user import User
 from ...platform.database import get_db
+from ...services.decision_membership import LiveLogicalDecisionScope, resolve_live_logical_decision_scope
+from ...services.needs_input_membership import apply_live_logical_needs_input_scope
 from ...services.sister_role_service import related_role_pipeline_counts_bulk
 from ..assessments_runtime.pipeline_service import role_pipeline_counts_bulk
 
@@ -52,52 +54,45 @@ router = APIRouter(tags=["agentic-hub"])
 # ---------------------------------------------------------------------------
 
 
-def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> OrgKpiPayload:
+def _compute_kpis(
+    db: Session,
+    *,
+    organization_id: int,
+    range_days: int = 7,
+    decision_scope: LiveLogicalDecisionScope | None = None,
+) -> OrgKpiPayload:
     now = now_utc()
     today_start = start_of_day_utc()
     range_start = now - timedelta(days=range_days)
-    # Pending decisions (snooze-aware) + pending orchestrator questions.
-    # The Review queue surfaces both kinds together, so the unioned
-    # ``pending`` is what the tab badge shows; the per-kind splits drive
-    # tile labels ("N decisions today / M questions waiting") without
-    # conflating them. Schema requires both — older versions of this
-    # function only emitted ``pending`` and the endpoint 500'd on
-    # pydantic validation.
-    # 'Awaiting you' = ALL pending decisions org-wide (snooze-aware) — one honest
-    # number that reconciles with the funnel and the Pending list. (An earlier
-    # attempt scoped this to active roles only; it disagreed with the funnel and
-    # confused the count, so it's reverted. Paused-role candidates still carry a
-    # verdict and count here — they're recommendations waiting on you regardless
-    # of pause.)
-    pending_decisions_q = db.query(AgentDecision).filter(
-        AgentDecision.organization_id == organization_id,
-        pending_filter(now),
+    decision_scope = decision_scope or resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(organization_id),
+    )
+    # "Awaiting you" combines every snooze-aware live decision with open
+    # role-level questions; paused-role decisions remain actionable.
+    pending_decisions_q = decision_scope.query(db, AgentDecision).filter(
+        pending_filter(now)
     )
     pending_decisions = pending_decisions_q.count()
-    # Same snooze-aware pending slice, split by decision_type. Sums to
-    # ``pending_decisions`` so the Hub "Pending by type" strip reconciles
-    # with the queue count.
+    # The type split uses the identical slice so it reconciles with the total.
     pending_by_type = {
         str(dt): int(c)
-        for dt, c in (
-            db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
-            .filter(
-                AgentDecision.organization_id == organization_id,
-                pending_filter(now),
-            )
-            .group_by(AgentDecision.decision_type)
-            .all()
+        for dt, c in decision_scope.query(
+            db,
+            AgentDecision.decision_type,
+            func.count(AgentDecision.id),
         )
+        .filter(pending_filter(now))
+        .group_by(AgentDecision.decision_type)
+        .all()
     }
-    pending_questions = (
-        db.query(AgentNeedsInput)
-        .filter(
-            AgentNeedsInput.organization_id == organization_id,
-            AgentNeedsInput.resolved_at.is_(None),
-            AgentNeedsInput.dismissed_at.is_(None),
-        )
-        .count()
+    questions_q = apply_live_logical_needs_input_scope(
+        db, db.query(AgentNeedsInput), organization_id=int(organization_id)
     )
+    pending_questions = questions_q.filter(
+        AgentNeedsInput.resolved_at.is_(None),
+        AgentNeedsInput.dismissed_at.is_(None),
+    ).count()
     pending = int(pending_decisions) + int(pending_questions)
     oldest_pending_row = pending_decisions_q.order_by(AgentDecision.created_at.asc()).first()
     oldest_pending_age = None
@@ -111,22 +106,14 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
         oldest_pending_age = max(0, int((now - created).total_seconds()))
 
     # Decisions today (created_at >= start of day).
-    today = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.organization_id == organization_id,
-            AgentDecision.created_at >= today_start,
-        )
-        .count()
-    )
+    today = decision_scope.query(db, AgentDecision).filter(
+        AgentDecision.created_at >= today_start
+    ).count()
 
-    # Auto-applied today: resolved without a human disposition (system-driven).
-    # Today every action is recruiter-driven so this is 0 — kept so the KPI
-    # strip can show "n auto-applied" once autonomy lands.
+    # Resolved without a human disposition (reserved for future autonomy).
     auto_applied_today = (
-        db.query(AgentDecision)
+        decision_scope.query(db, AgentDecision)
         .filter(
-            AgentDecision.organization_id == organization_id,
             AgentDecision.resolved_at >= today_start,
             AgentDecision.human_disposition.is_(None),
             AgentDecision.status.in_(("approved", "overridden")),
@@ -134,20 +121,15 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
         .count()
     )
 
-    # Override + teach rate over the rolling window. Denominator is decisions
-    # *resolved by a human* in the window — pure auto-applied actions don't
-    # count toward "did the human disagree."
-    resolved_q = (
-        db.query(
-            func.count(AgentDecision.id),
-            func.sum(case((AgentDecision.human_disposition == "overridden", 1), else_=0)),
-            func.sum(case((AgentDecision.human_disposition == "taught", 1), else_=0)),
-        )
-        .filter(
-            AgentDecision.organization_id == organization_id,
+    # Denominator is only decisions resolved by a human in this window.
+    resolved_q = decision_scope.query(
+        db,
+        func.count(AgentDecision.id),
+        func.sum(case((AgentDecision.human_disposition == "overridden", 1), else_=0)),
+        func.sum(case((AgentDecision.human_disposition == "taught", 1), else_=0)),
+    ).filter(
             AgentDecision.resolved_at >= range_start,
             AgentDecision.human_disposition.in_(("approved", "overridden", "taught")),
-        )
     )
     total_resolved, total_overridden, total_taught = resolved_q.one() or (0, 0, 0)
     total_resolved = int(total_resolved or 0)
@@ -242,10 +224,18 @@ def org_status(
     30-second cadence: counts + sums only.
     """
     org_id = current_user.organization_id
-    base = _compute_kpis(db, organization_id=org_id, range_days=7)
+    decision_scope = resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(org_id),
+    )
+    base = _compute_kpis(
+        db,
+        organization_id=org_id,
+        range_days=7,
+        decision_scope=decision_scope,
+    )
     last_decision = (
-        db.query(AgentDecision.created_at)
-        .filter(AgentDecision.organization_id == org_id)
+        decision_scope.query(db, AgentDecision.created_at)
         .order_by(desc(AgentDecision.created_at))
         .limit(1)
         .scalar()
@@ -299,6 +289,10 @@ def roles_breakdown(
     now = now_utc()
     today_start = start_of_day_utc()
     week_start = now - timedelta(days=7)
+    decision_scope = resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(current_user.organization_id),
+    )
     roles = (
         db.query(Role)
         .filter(
@@ -318,7 +312,13 @@ def roles_breakdown(
     )
     stage_counts_by_role.update(related_role_pipeline_counts_bulk(
         db,
-        [int(role.id) for role in roles if role.role_kind == ROLE_KIND_SISTER],
+        [
+            int(role.id)
+            for role in roles
+            if role.role_kind == ROLE_KIND_SISTER
+            or role.ats_owner_role_id is not None
+        ],
+        organization_id=int(current_user.organization_id),
     ))
     # Per-role pending decisions grouped by type — feeds the funnel's
     # "awaiting your decision" chips when the home funnel is scoped to a role.
@@ -327,61 +327,62 @@ def roles_breakdown(
         organization_id=current_user.organization_id,
         role_ids=[int(r.id) for r in roles],
         now=now,
+        decision_scope=decision_scope,
     )
 
-    # Pre-compute per-role aggregates in three single queries to avoid
-    # N+1 across the role list.
+    # Batched per-role decision aggregates avoid N+1 reads.
     pending_by_role = dict(
-        db.query(AgentDecision.role_id, func.count(AgentDecision.id))
-        .filter(
-            AgentDecision.organization_id == current_user.organization_id,
-            pending_filter(now),
-        )
+        decision_scope.query(db, AgentDecision.role_id, func.count(AgentDecision.id))
+        .filter(pending_filter(now))
         .group_by(AgentDecision.role_id)
         .all()
     )
     today_by_role = dict(
-        db.query(AgentDecision.role_id, func.count(AgentDecision.id))
-        .filter(
-            AgentDecision.organization_id == current_user.organization_id,
-            AgentDecision.created_at >= today_start,
-        )
+        decision_scope.query(db, AgentDecision.role_id, func.count(AgentDecision.id))
+        .filter(AgentDecision.created_at >= today_start)
         .group_by(AgentDecision.role_id)
         .all()
     )
     week_by_role = dict(
-        db.query(AgentDecision.role_id, func.count(AgentDecision.id))
-        .filter(
-            AgentDecision.organization_id == current_user.organization_id,
-            AgentDecision.created_at >= week_start,
-        )
+        decision_scope.query(db, AgentDecision.role_id, func.count(AgentDecision.id))
+        .filter(AgentDecision.created_at >= week_start)
         .group_by(AgentDecision.role_id)
         .all()
     )
     total_by_role = dict(
-        db.query(AgentDecision.role_id, func.count(AgentDecision.id))
-        .filter(AgentDecision.organization_id == current_user.organization_id)
+        decision_scope.query(db, AgentDecision.role_id, func.count(AgentDecision.id))
         .group_by(AgentDecision.role_id)
         .all()
     )
-    # Canonical per-role MTD spend (cents), excludes null-role — same definition
-    # the org rollup sums, so org == Σ cards by construction.
+    # Same canonical per-role MTD spend definition used by the org rollup.
     spend_cents_by_role = budget_guard.spend_by_role_map(
         db, organization_id=current_user.organization_id
     )
 
     # Override / teach rates per role over the last 7d.
     disposition_rows = (
-        db.query(
+        decision_scope.query(
+            db,
             AgentDecision.role_id,
             func.count(AgentDecision.id),
-            func.sum(case((AgentDecision.human_disposition == "overridden", 1), else_=0)),
-            func.sum(case((AgentDecision.human_disposition == "taught", 1), else_=0)),
+            func.sum(
+                case(
+                    (AgentDecision.human_disposition == "overridden", 1),
+                    else_=0,
+                )
+            ),
+            func.sum(
+                case(
+                    (AgentDecision.human_disposition == "taught", 1),
+                    else_=0,
+                )
+            ),
         )
         .filter(
-            AgentDecision.organization_id == current_user.organization_id,
             AgentDecision.resolved_at >= week_start,
-            AgentDecision.human_disposition.in_(("approved", "overridden", "taught")),
+            AgentDecision.human_disposition.in_(
+                ("approved", "overridden", "taught")
+            ),
         )
         .group_by(AgentDecision.role_id)
         .all()

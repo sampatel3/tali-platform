@@ -11,7 +11,14 @@ from __future__ import annotations
 import io
 from datetime import datetime, timedelta, timezone
 
+from app.deps import get_current_user
+from app.main import app as fastapi_app
+from app.models.candidate_application import CandidateApplication
+from app.models.job_hiring_team import JobHiringTeam
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.submittal_pack import SubmittalPack
+from app.models.user import User
 from tests.conftest import auth_headers, TestingSessionLocal
 
 
@@ -120,6 +127,139 @@ def test_snapshot_contains_no_stripped_internals(client):
         "tech_interview_pack",
     ):
         assert banned not in entry, f"leaked internal field: {banned}"
+
+
+def test_related_role_pack_uses_membership_and_role_local_score(client, db):
+    headers, email = auth_headers(client)
+    owner_payload = _make_role(client, headers, role_name="ATS owner role")
+    app_payload = _add_application(
+        client,
+        headers,
+        owner_payload["id"],
+        "related-pack@example.com",
+        "Related Pack Candidate",
+    )
+
+    user = db.query(User).filter(User.email == email).one()
+    owner = db.get(Role, int(owner_payload["id"]))
+    application = db.get(CandidateApplication, int(app_payload["id"]))
+    application.cv_match_score = 96
+    application.pre_screen_score_100 = 96
+    application.cv_match_details = {
+        "summary": "Owner-role judgment must not be shared for the related role.",
+        "matching_skills": ["Owner-only skill"],
+    }
+    related = Role(
+        organization_id=int(user.organization_id),
+        name="Independent related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        related_source_role_id=int(owner.id),
+        ats_owner_role_id=int(owner.id),
+        job_spec_text="Independent related-role specification",
+    )
+    db.add(related)
+    db.flush()
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=int(user.organization_id),
+            role_id=int(related.id),
+            candidate_id=int(application.candidate_id),
+            source_application_id=int(application.id),
+            ats_application_id=int(application.id),
+            status="done",
+            pipeline_stage="review",
+            application_outcome="open",
+            membership_source="initial_snapshot",
+            spec_fingerprint="related-pack-spec",
+            role_fit_score=17,
+            summary="Related-role evidence summary.",
+            details={
+                "summary": "Related-role evidence summary.",
+                "matching_skills": ["Related role evidence"],
+            },
+        )
+    )
+    db.commit()
+
+    create = client.post(
+        f"/api/v1/roles/{related.id}/submittal-packs",
+        json={"application_ids": [int(application.id)]},
+        headers=headers,
+    )
+    assert create.status_code == 200, create.text
+    view = client.get(create.json()["url_path"])
+    assert view.status_code == 200, view.text
+    [entry] = view.json()["candidates"]
+    assert entry["role_id"] == int(related.id)
+    assert entry["logical_membership_id"] == f"{related.id}:{application.id}"
+    assert entry["score_100"] == 17
+    assert entry["score_100"] != 96
+
+
+def test_submittal_pack_management_enforces_job_team_permissions(client, db):
+    headers, email = auth_headers(client)
+    role_payload = _make_role(client, headers, role_name="Restricted client share")
+    application = _add_application(
+        client,
+        headers,
+        role_payload["id"],
+        "restricted-share@example.com",
+    )
+    created = client.post(
+        f"/api/v1/roles/{role_payload['id']}/submittal-packs",
+        json={"application_ids": [application["id"]]},
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+
+    owner = db.query(User).filter(User.email == email).one()
+    interviewer = User(
+        email="submittal-interviewer@example.com",
+        hashed_password="not-used",
+        full_name="Submittal Interviewer",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=int(owner.organization_id),
+        role="member",
+    )
+    db.add(interviewer)
+    db.flush()
+    db.add(
+        JobHiringTeam(
+            organization_id=int(owner.organization_id),
+            role_id=int(role_payload["id"]),
+            user_id=int(interviewer.id),
+            team_role="interviewer",
+        )
+    )
+    db.commit()
+
+    previous = dict(fastapi_app.dependency_overrides)
+    fastapi_app.dependency_overrides[get_current_user] = lambda: interviewer
+    try:
+        visible = client.get(
+            f"/api/v1/roles/{role_payload['id']}/submittal-packs",
+            headers=headers,
+        )
+        assert visible.status_code == 200, visible.text
+
+        forbidden_create = client.post(
+            f"/api/v1/roles/{role_payload['id']}/submittal-packs",
+            json={"application_ids": [application["id"]]},
+            headers=headers,
+        )
+        assert forbidden_create.status_code == 403, forbidden_create.text
+
+        forbidden_revoke = client.delete(
+            f"/api/v1/submittal-packs/{created.json()['id']}",
+            headers=headers,
+        )
+        assert forbidden_revoke.status_code == 403, forbidden_revoke.text
+    finally:
+        fastapi_app.dependency_overrides.clear()
+        fastapi_app.dependency_overrides.update(previous)
 
 
 def test_mint_rejects_more_than_twenty(client):
@@ -288,12 +428,15 @@ def test_packs_are_org_scoped(client):
     assert create.status_code == 200
     pack_id = create.json()["id"]
 
-    # Org B cannot list (role 404) or revoke (pack 404).
+    # Org B cannot list (central role authorization 403) or revoke (the
+    # organization-scoped pack lookup remains non-enumerable at 404).
     list_b = client.get(
         f"/api/v1/roles/{role_a['id']}/submittal-packs",
         headers=headers_b,
     )
-    assert list_b.status_code == 404
+    # The centralized job authorization boundary deliberately returns the same
+    # 403 for unknown, cross-org, and unauthorized role ids.
+    assert list_b.status_code == 403
 
     revoke_b = client.delete(
         f"/api/v1/submittal-packs/{pack_id}",

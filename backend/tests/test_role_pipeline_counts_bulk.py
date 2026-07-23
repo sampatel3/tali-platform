@@ -35,12 +35,18 @@ def _seed_app(
     cv_match_score=None,
     pre_screen_score_100=None,
     pre_screen_run_at=None,
+    candidate_deleted=False,
 ):
     for i in range(n):
         cand = Candidate(
             organization_id=organization_id,
             email=f"{stage}-{outcome}-{role_id}-{cv_match_score}-{pre_screen_score_100}-{i}@x.test",
             full_name=f"{stage} {i}",
+            deleted_at=(
+                datetime(2026, 7, 10, tzinfo=timezone.utc)
+                if candidate_deleted
+                else None
+            ),
         )
         db.add(cand)
         db.flush()
@@ -101,6 +107,25 @@ def test_bulk_matches_per_role_and_counts_advanced_and_rejected(db):
         # genuine pre-screen run — awaiting re-score, so still "Applied".
         _seed_app(sess, organization_id=org_id, role_id=role_a, stage="applied",
                   pre_screen_score_100=55.0, n=1)
+        # Candidate erasure is absolute even while its ordinary application
+        # remains live. Neither the single-role nor batched Hub funnel may
+        # count these rows.
+        _seed_app(
+            sess,
+            organization_id=org_id,
+            role_id=role_a,
+            stage="advanced",
+            n=2,
+            candidate_deleted=True,
+        )
+        _seed_app(
+            sess,
+            organization_id=org_id,
+            role_id=role_a,
+            stage="review",
+            outcome="rejected",
+            candidate_deleted=True,
+        )
         sess.commit()
 
         bulk = role_pipeline_counts_bulk(

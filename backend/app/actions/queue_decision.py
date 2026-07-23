@@ -17,11 +17,19 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from ..domains.assessments_runtime.role_support import get_application, is_resolved
 from ..models.agent_decision import AGENT_DECISION_TYPES, AgentDecision
 from ..models.candidate_application_event import CandidateApplicationEvent
+from ..models.role import Role
 from ..services.decision_input_fingerprint import (
     capture_input_fingerprint as _capture_input_fingerprint,
+)
+from ..services.agent_decision_admission import (
+    latest_active_decision,
+    lock_decision_application,
+)
+from ..services.logical_role_application_authority import (
+    LogicalRoleApplicationAuthorizationError,
+    authorize_logical_role_application,
 )
 from .types import ACTOR_AGENT, Actor
 
@@ -105,25 +113,20 @@ def _compute_dedup_key(
             except (TypeError, ValueError):
                 return ""
 
-        cross_role = int(role_id) != int(app.role_id)
+        from ..services.related_role_application_runtime import (
+            related_role_evaluation_for_application,
+        )
+
+        related_evaluation = related_role_evaluation_for_application(
+            db,
+            role_id=int(role_id),
+            application=app,
+        )
+        cross_role = related_evaluation is not None
         role_score = getattr(app, "cv_match_score", None)
         pre_screen_dimension = _bucket(getattr(app, "pre_screen_score_100", None))
         if cross_role:
-            from ..models.sister_role_evaluation import SisterRoleEvaluation
-
-            evaluation = (
-                db.query(SisterRoleEvaluation)
-                .filter(
-                    SisterRoleEvaluation.role_id == int(role_id),
-                    SisterRoleEvaluation.source_application_id == int(app.id),
-                )
-                .one_or_none()
-            )
-            role_score = (
-                getattr(evaluation, "role_fit_score", None)
-                if evaluation is not None
-                else None
-            )
+            role_score = getattr(related_evaluation, "role_fit_score", None)
             frozen = evidence if isinstance(evidence, dict) else {}
             role_score = next(
                 (
@@ -148,7 +151,7 @@ def _compute_dedup_key(
             )
             evaluation_cv_fp = (
                 frozen.get("evaluation_cv_fingerprint")
-                or getattr(evaluation, "cv_fingerprint", None)
+                or getattr(related_evaluation, "cv_fingerprint", None)
             )
             if evaluation_cv_fp:
                 cv_fp = str(evaluation_cv_fp)
@@ -262,30 +265,46 @@ def _human_suppressed(
             from ..models.candidate_application import CandidateApplication
 
             application = db.get(CandidateApplication, int(application_id))
-            if (
-                application is not None
-                and int(role_id) != int(application.role_id)
-            ):
-                from ..models.role import Role
+            role = db.get(Role, int(role_id))
+            if application is not None and role is not None:
                 from ..services.decision_role_context import (
+                    is_cross_role_decision,
                     load_related_evaluation,
                     related_decision_staleness,
                 )
+                from ..services.logical_role_batch_operations import (
+                    is_related_role,
+                )
 
-                role = db.get(Role, int(role_id))
-                evaluation = load_related_evaluation(
-                    db,
-                    decision=suppressing,
-                    application=application,
-                )
-                report = related_decision_staleness(
-                    db,
+                # Physical application ownership is not the logical-role
+                # boundary. Use the shared decision classifier plus the
+                # rolling-compatible role identity rule: a direct application
+                # may physically belong to the related role, and mixed-version
+                # rows may carry only ``ats_owner_role_id``.
+                if is_related_role(role) or is_cross_role_decision(
                     suppressing,
-                    evaluation,
-                    application=application,
-                    role=role,
-                )
-                return suppressing if not report.is_stale else None
+                    application,
+                ):
+                    evaluation = load_related_evaluation(
+                        db,
+                        decision=suppressing,
+                        application=application,
+                    )
+                    if evaluation is None:
+                        # A removed membership cannot be reclassified as an
+                        # ordinary application merely because its physical row
+                        # points at this related role. Queue admission rejects
+                        # it; preserve the recruiter's "no" if this helper is
+                        # reached while membership state is unavailable.
+                        return suppressing
+                    report = related_decision_staleness(
+                        db,
+                        suppressing,
+                        evaluation,
+                        application=application,
+                        role=role,
+                    )
+                    return suppressing if not report.is_stale else None
 
             from ..services.decision_staleness import is_human_suppression_live
 
@@ -348,24 +367,95 @@ def run(
     if actor.agent_run_id is None:
         raise HTTPException(status_code=422, detail="agent actor missing agent_run_id")
 
-    # Validate the application belongs to the org and is genuinely visible in
-    # this role. Related roles intentionally reuse the owner's one ATS
-    # application, so equality with ``app.role_id`` is not the right invariant.
-    app = get_application(application_id, organization_id, db)
-    cross_role = int(app.role_id) != int(role_id)
-    if cross_role:
-        from ..services.related_role_application_runtime import related_role_for_application
+    # Resolve the logical role before applying application-row lifecycle
+    # rules. An ordinary role's membership is its live CandidateApplication,
+    # while a related role's membership is its live SisterRoleEvaluation;
+    # deleting that role's source/evidence row must not make a still-active
+    # related candidate visible-but-unactionable.
+    acting_role = (
+        db.query(Role)
+        .filter(
+            Role.id == int(role_id),
+            Role.organization_id == int(organization_id),
+            Role.deleted_at.is_(None),
+        )
+        .one_or_none()
+    )
+    if acting_role is None:
+        raise HTTPException(status_code=422, detail="role is unavailable")
+    try:
+        logical_context = authorize_logical_role_application(
+            db,
+            role=acting_role,
+            application_id=int(application_id),
+        )
+    except LogicalRoleApplicationAuthorizationError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Application not found",
+        ) from exc
+    app = logical_context.source_application
+    cross_role = logical_context.is_related
 
-        related = related_role_for_application(
+    from ..services.related_role_application_runtime import (
+        related_role_evaluation_for_application,
+        role_application_is_resolved,
+    )
+
+    # Related-role queue admission must serialize with role-local stage and
+    # outcome transitions. Those transitions lock Application -> membership
+    # and discard any pending decisions when the role becomes terminal. If the
+    # queue path merely reads the membership, it can observe ``open``, lose the
+    # race to a terminal transition, and then insert a new pending decision
+    # after that transition's discard query has already run. Establish the
+    # platform lock order first, then hold both role-local state rows through
+    # the decision insert. The two possible outcomes are now deterministic:
+    # queue-first is discarded by the later transition; transition-first is
+    # observed here and refused.
+    locked_role = None
+    related_evaluation = None
+    if cross_role:
+        from ..services.role_execution_guard import lock_live_role
+
+        locked_role = lock_live_role(
             db,
             role_id=int(role_id),
-            application=app,
+            organization_id=int(organization_id),
         )
-        if related is None:
+        if locked_role is None:
+            raise HTTPException(status_code=422, detail="role is unavailable")
+
+        from ..models.candidate_application import CandidateApplication
+
+        locked_app_query = db.query(CandidateApplication).filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(organization_id),
+        )
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            locked_app_query = locked_app_query.with_for_update()
+        locked_app = locked_app_query.populate_existing().one_or_none()
+        if locked_app is None:
+            raise HTTPException(status_code=422, detail="application is unavailable")
+        app = locked_app
+
+        from ..services.related_role_action_service import (
+            lock_related_role_membership,
+        )
+
+        locked_membership = lock_related_role_membership(
+            db,
+            application=app,
+            acting_role_id=int(role_id),
+        )
+        if locked_membership is None:
             raise HTTPException(
                 status_code=422,
-                detail=f"application {application_id} does not belong to role {role_id}",
+                detail=(
+                    f"application {application_id} does not belong to role "
+                    f"{role_id}"
+                ),
             )
+        _membership_role, related_evaluation = locked_membership
 
     # Serialize score-backed owner-role decisions with recruiter RoleIntent
     # edits. Queue-first means the later edit sees and discards this pending
@@ -378,7 +468,6 @@ def run(
         standard_owner_score_guard_applies,
     )
 
-    locked_role = None
     if not cross_role and decision_type in SCORE_BACKED_STANDARD_DECISION_TYPES:
         # Keep the platform-wide Organization -> Role order. Fresh cards may
         # immediately auto-execute in this same transaction, and that action
@@ -433,6 +522,24 @@ def run(
                 ),
             )
 
+    # Every decision type shares the same logical role/candidate queue slot.
+    # Lock the supplied application as the current producer's serialization
+    # point; the database candidate-keyed partial unique index also closes races
+    # between owner and direct physical applications for the same subject.
+    locked_subject = lock_decision_application(
+        db,
+        organization_id=int(organization_id),
+        application_id=int(application_id),
+    )
+    if locked_subject is None:
+        raise HTTPException(status_code=422, detail="application is unavailable")
+    app = locked_subject
+    # Close the read/lock race for ordinary roles. Related roles deliberately
+    # remain actionable while their explicit membership is live even if this
+    # evidence row is soft-deleted; their membership lock above is authoritative.
+    if not cross_role and app.deleted_at is not None:
+        raise HTTPException(status_code=422, detail="application is unavailable")
+
     from ..services.decision_policy_generation import (
         validate_queue_policy_generation,
     )
@@ -454,16 +561,8 @@ def run(
     # source the bulk pass uses — and only fall back to the audit-oriented
     # policy basis if that is empty too.
     if not (reasoning or "").strip() and cross_role:
-        from ..models.sister_role_evaluation import SisterRoleEvaluation
-
-        evaluation = (
-            db.query(SisterRoleEvaluation)
-            .filter(
-                SisterRoleEvaluation.organization_id == int(organization_id),
-                SisterRoleEvaluation.role_id == int(role_id),
-                SisterRoleEvaluation.source_application_id == int(application_id),
-            )
-            .one_or_none()
+        evaluation = related_evaluation or related_role_evaluation_for_application(
+            db, role_id=int(role_id), application=app
         )
         reasoning = (
             str(getattr(evaluation, "summary", None) or "").strip()
@@ -483,19 +582,37 @@ def run(
     # modify, or re-evaluate decisions for them. This refuses cleanly
     # rather than silently no-opping so the orchestrator sees the
     # mistake in its error path and stops looping.
-    if is_resolved(app):
+    if role_application_is_resolved(
+        db,
+        role_id=int(role_id),
+        application=app,
+    ):
         import logging
+        evaluation = (
+            related_evaluation
+            or related_role_evaluation_for_application(
+                db, role_id=int(role_id), application=app
+            )
+            if cross_role
+            else None
+        )
+        local_stage = getattr(evaluation, "pipeline_stage", app.pipeline_stage)
+        local_outcome = getattr(
+            evaluation,
+            "application_outcome",
+            app.application_outcome,
+        )
         logging.getLogger("taali.actions.queue_decision").info(
             "resolved_app_skipped action=queue_decision application_id=%s "
             "pipeline_stage=%s application_outcome=%s decision_type=%s",
-            application_id, app.pipeline_stage, app.application_outcome, decision_type,
+            application_id, local_stage, local_outcome, decision_type,
         )
         raise HTTPException(
             status_code=422,
             detail=(
                 f"application {application_id} is resolved "
-                f"(pipeline_stage={app.pipeline_stage!r}, "
-                f"application_outcome={app.application_outcome!r}); "
+                f"(pipeline_stage={local_stage!r}, "
+                f"application_outcome={local_outcome!r}); "
                 "refusing to queue decision"
             ),
         )
@@ -509,19 +626,15 @@ def run(
     # person twice in the queue (e.g. "advance" + "send_assessment" both
     # waiting). Existing pending wins; return it so the caller treats this
     # as a dedup, not a new emit.
-    # Count 'processing' as well as 'pending': an approved decision whose
-    # Workable writeback is in flight (or stuck after a failed dispatch) must
-    # still block a duplicate, else a stranded 'processing' row lets the next
-    # cycle mint a second decision for the same candidate.
-    existing_pending = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.role_id == int(role_id),
-            AgentDecision.application_id == application_id,
-            AgentDecision.status.in_(("pending", "processing")),
-        )
-        .order_by(AgentDecision.created_at.desc())
-        .first()
+    # Count every live queue state. A taught ``reverted_for_feedback`` card is
+    # still actionable, while ``processing`` represents an approved action
+    # whose provider writeback is in flight (or stuck after a failed dispatch).
+    # Either must block a duplicate recommendation for this candidate.
+    existing_pending = latest_active_decision(
+        db,
+        organization_id=int(organization_id),
+        role_id=int(role_id),
+        application_id=int(application_id),
     )
     if existing_pending is not None:
         existing_pending._just_created = False  # type: ignore[attr-defined]
@@ -617,6 +730,7 @@ def run(
         organization_id=organization_id,
         role_id=role_id,
         application_id=application_id,
+        candidate_id=int(app.candidate_id),
         agent_run_id=actor.agent_run_id,
         decision_type=decision_type,
         recommendation=recommendation or decision_type,
@@ -645,11 +759,21 @@ def run(
         nested.commit()
     except IntegrityError:
         nested.rollback()
-        existing = (
-            db.query(AgentDecision)
-            .filter(AgentDecision.idempotency_key == idempotency_key)
-            .first()
+        # The database invariant may have been won by a different decision
+        # type/idempotency key, so recover by the canonical logical subject
+        # before falling back to a same-request replay.
+        existing = latest_active_decision(
+            db,
+            organization_id=int(organization_id),
+            role_id=int(role_id),
+            application_id=int(application_id),
         )
+        if existing is None:
+            existing = (
+                db.query(AgentDecision)
+                .filter(AgentDecision.idempotency_key == idempotency_key)
+                .first()
+            )
         if existing is not None:
             # Surface the dedup-existing branch on the returned object so
             # callers can decide whether to count it against the per-cycle
@@ -684,6 +808,8 @@ def run(
         CandidateApplicationEvent(
             application_id=application_id,
             organization_id=organization_id,
+            role_id=int(role_id),
+            agent_decision_id=int(decision.id),
             event_type="agent_decision_queued",
             actor_type="agent",
             actor_id=actor.agent_run_id,

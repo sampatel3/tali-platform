@@ -19,11 +19,9 @@ from sqlalchemy.orm import Session
 from ..models.role import JOB_STATUS_DRAFT, JOB_STATUS_OPEN, ROLE_KIND_SISTER, Role
 from ..services.agent_policy_settings import (
     GRANULAR_AUTOMATION_FIELDS,
-    RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
     activation_policy_values,
     effective_agent_policy,
     role_automation_enabled,
-    role_shares_ats_application,
 )
 from ..services.role_change_audit import (
     ROLE_CHANGE_ACTION_AGENT_ENABLED,
@@ -634,20 +632,6 @@ def adjust_agent_settings(
     ``auto_reject`` separately governs deterministic full CV/role-fit rejects.
     Assessment-stage and LLM-authored rejects remain human-confirmed.
     """
-    if role_shares_ats_application(role, db=db) and (
-        auto_reject is True or auto_reject_pre_screen is True
-    ):
-        return {
-            "type": "agent_settings",
-            "ok": False,
-            "reason": "related_role_reject_requires_confirmation",
-            "message": RELATED_ROLE_REJECT_AUTOMATION_MESSAGE,
-            "changed": [],
-            "resumed": False,
-            "resume_error": None,
-            "agent": _state(role),
-        }
-
     if (
         auto_skip_assessment is False
         and not any(bool(task.is_active) for task in (role.tasks or []))

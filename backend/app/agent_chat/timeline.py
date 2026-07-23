@@ -35,6 +35,13 @@ from ..models.agent_needs_input import AgentNeedsInput
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from ..services.decision_membership import (
+    LiveLogicalDecisionScope,
+    resolve_live_logical_decision_scope,
+)
+from ..services.needs_input_membership import (
+    apply_live_logical_needs_input_scope,
+)
 from .recruiter_inputs import recruiter_input_contract
 
 
@@ -137,7 +144,11 @@ def _messages(db: Session, conversation: AgentConversation) -> list[AgentConvers
 def _needs_inputs(db: Session, role: Role, *, since: datetime) -> list[AgentNeedsInput]:
     # Open ones (always) + recently-resolved (within the window).
     return (
-        db.query(AgentNeedsInput)
+        apply_live_logical_needs_input_scope(
+            db,
+            db.query(AgentNeedsInput),
+            organization_id=int(role.organization_id),
+        )
         .filter(
             AgentNeedsInput.role_id == int(role.id),
             (
@@ -151,11 +162,16 @@ def _needs_inputs(db: Session, role: Role, *, since: datetime) -> list[AgentNeed
 
 
 def _decisions(
-    db: Session, role: Role, *, since: datetime
+    db: Session,
+    role: Role,
+    *,
+    since: datetime,
+    decision_scope: LiveLogicalDecisionScope,
 ) -> list[tuple[AgentDecision, str | None, float | None]]:
     now = datetime.now(timezone.utc)
     rows = (
-        db.query(
+        decision_scope.query(
+            db,
             AgentDecision,
             Candidate.full_name,
             CandidateApplication.pre_screen_score_100,
@@ -192,6 +208,10 @@ def _decisions(
 def build_timeline(db: Session, *, conversation: AgentConversation, role: Role) -> list[dict[str, Any]]:
     """Merged, chronological timeline for the conversation."""
     since = datetime.now(timezone.utc) - timedelta(days=_RESOLVED_WINDOW_DAYS)
+    decision_scope = resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(role.organization_id),
+    )
 
     items: list[dict[str, Any]] = []
     items.extend(serialize_message(m) for m in _messages(db, conversation))
@@ -201,7 +221,12 @@ def build_timeline(db: Session, *, conversation: AgentConversation, role: Role) 
     )
     items.extend(
         serialize_decision(d, candidate_name=name, score=score)
-        for d, name, score in _decisions(db, role, since=since)
+        for d, name, score in _decisions(
+            db,
+            role,
+            since=since,
+            decision_scope=decision_scope,
+        )
     )
 
     # Sort by created_at; items without a timestamp (shouldn't happen) sink

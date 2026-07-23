@@ -122,9 +122,12 @@ export function useReportInFlight({
     numericApplicationId, reportRoleId, rolesApi, setEvaluating, loadAgentDecision, loadStandingReport,
   ]);
 
-  // Lazy CV text — one-shot per application id, triggered by opening the CV tab.
+  // Lazy CV text — one-shot per logical report scope. Related roles can share
+  // a physical application id, while the report intentionally clears its
+  // application payload on a role switch.
   const cvTextFetchedRef = useRef(false);
-  useEffect(() => { cvTextFetchedRef.current = false; }, [numericApplicationId]);
+  const cvTextScope = `${numericApplicationId}|${reportRoleId || ''}`;
+  useEffect(() => { cvTextFetchedRef.current = false; }, [cvTextScope]);
   useEffect(() => {
     if (activeTab !== 'cv' || isShareRoute || cvTextFetchedRef.current) return undefined;
     if (!rolesApi?.getApplication || !Number.isFinite(numericApplicationId)) return undefined;

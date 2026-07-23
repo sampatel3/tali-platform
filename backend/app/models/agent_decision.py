@@ -1,4 +1,19 @@
-from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    event,
+    select,
+    text,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -42,6 +57,11 @@ AGENT_DECISION_STATUSES = (
     "discarded",
     "expired",
 )
+AGENT_DECISION_ACTIVE_STATUSES = (
+    "pending",
+    "processing",
+    "reverted_for_feedback",
+)
 # ``human_disposition`` records *what kind* of human action resolved the
 # decision, regardless of the lifecycle state. ``approved``/``overridden``
 # mirror ``status``; ``taught`` is set when the resolver path was the teach
@@ -59,12 +79,30 @@ class AgentDecision(Base):
         UniqueConstraint("idempotency_key", name="uq_agent_decisions_idempotency_key"),
         Index("ix_agent_decisions_application_status", "application_id", "status"),
         Index("ix_agent_decisions_role_status", "role_id", "status"),
+        # A decision belongs to one logical role/candidate subject. The same
+        # candidate may have an independent card in another role, while owner
+        # and direct physical applications can never create duplicate cards in
+        # the same role. Migration 188 builds the PostgreSQL equivalent.
+        Index(
+            "uq_agent_decisions_active_org_role_candidate",
+            "organization_id",
+            "role_id",
+            "candidate_id",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('pending', 'processing', 'reverted_for_feedback')"
+            ),
+            postgresql_where=text(
+                "status IN ('pending', 'processing', 'reverted_for_feedback')"
+            ),
+        ),
     )
 
     id = Column(BigInteger, primary_key=True, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)
     role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=False)
     application_id = Column(Integer, ForeignKey("candidate_applications.id"), index=True, nullable=False)
+    candidate_id = Column(Integer, ForeignKey("candidates.id"), index=True, nullable=False)
     agent_run_id = Column(BigInteger, ForeignKey("agent_runs.id"), nullable=True, index=True)
 
     decision_type = Column(String, nullable=False)
@@ -84,6 +122,10 @@ class AgentDecision(Base):
     resolved_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     resolution_note = Column(Text, nullable=True)
     override_action = Column(String, nullable=True)
+    # Durable resolution intent/result metadata.  In particular, the selected
+    # ATS destination is written before deferred dispatch so historical queries
+    # do not depend on an ephemeral Celery payload.
+    resolution_metadata = Column(JSON, nullable=False, default=dict, server_default="{}")
 
     # Hub-era fields (migration 063):
     #   feedback_id: links to the latest decision_feedback row when the human
@@ -145,3 +187,44 @@ class AgentDecision(Base):
     agent_run = relationship("AgentRun", back_populates="decisions")
     role = relationship("Role")
     application = relationship("CandidateApplication")
+
+
+@event.listens_for(AgentDecision, "before_insert")
+@event.listens_for(AgentDecision, "before_update")
+def _resolve_candidate_identity(_mapper, connection, target) -> None:
+    """Mirror migration 188's DB invariant for ORM-created test schemas."""
+
+    application_id = getattr(target, "application_id", None)
+    if application_id is None:
+        return
+    from .candidate_application import CandidateApplication
+
+    application_identity = connection.execute(
+        select(
+            CandidateApplication.candidate_id,
+            CandidateApplication.organization_id,
+        ).where(CandidateApplication.id == int(application_id))
+    ).one_or_none()
+    if application_identity is None:
+        raise ValueError("AgentDecision.application_id does not exist")
+    resolved_candidate_id, application_organization_id = application_identity
+    if target.candidate_id is None:
+        target.candidate_id = int(resolved_candidate_id)
+    elif int(target.candidate_id) != int(resolved_candidate_id):
+        raise ValueError(
+            "candidate_id does not own AgentDecision.application_id"
+        )
+    if int(target.organization_id) != int(application_organization_id):
+        raise ValueError(
+            "organization_id does not own AgentDecision.application_id"
+        )
+
+    from .role import Role
+
+    role_organization_id = connection.scalar(
+        select(Role.organization_id).where(Role.id == int(target.role_id))
+    )
+    if role_organization_id is None:
+        raise ValueError("AgentDecision.role_id does not exist")
+    if int(target.organization_id) != int(role_organization_id):
+        raise ValueError("organization_id does not own AgentDecision.role_id")

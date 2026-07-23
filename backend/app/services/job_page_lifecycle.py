@@ -195,14 +195,12 @@ def role_paid_ats_work_block_reason(
     if job_status is not None and job_status != JOB_STATUS_OPEN:
         return INTAKE_JOB_NOT_OPEN
 
-    lifecycle_role = role
     if role_kind == "sister":
-        lifecycle_role = getattr(role, "ats_owner_role", None)
-        if lifecycle_role is None and db is not None and role.ats_owner_role_id:
-            lifecycle_role = db.get(Role, int(role.ats_owner_role_id))
-        if lifecycle_role is None:
-            return INTAKE_ROLE_MISSING
-    ats = ats_job_lifecycle(lifecycle_role)
+        # A related role is a full product role. Its ATS owner is only an
+        # external-write link; owner lifecycle cannot revoke this role's own
+        # scoring/agent authority.
+        return None
+    ats = ats_job_lifecycle(role)
     if ats.external_job_id and ats.external_job_live is False:
         return INTAKE_ATS_JOB_NOT_LIVE
 

@@ -65,6 +65,20 @@ NEEDS_INPUT_KINDS = (
     "other",
 )
 
+# These kinds may carry a structured CandidateApplication subject in
+# ``subject_id``.  A NULL subject keeps the legacy role-wide/general semantic;
+# a populated subject is candidate-scoped and must pass the shared live logical
+# membership boundary before any recruiter-facing read or action.
+CANDIDATE_APPLICATION_SUBJECT_KINDS = (
+    "candidate_tie_break",
+    "other",
+    # Historical per-candidate HITL cards. New rows are prohibited because
+    # these values are intentionally absent from NEEDS_INPUT_KINDS, but rolling
+    # data must still honor candidate/application lifecycle authority.
+    "send_assessment_approval",
+    "resend_assessment_invite_approval",
+)
+
 
 class AgentNeedsInput(Base):
     __tablename__ = "agent_needs_input"
@@ -78,11 +92,10 @@ class AgentNeedsInput(Base):
     # See NEEDS_INPUT_KINDS. Free-form string (no enum) so adding a kind
     # doesn't require a migration; the application layer validates.
     kind = Column(String(64), nullable=False)
-    # Optional per-subject discriminator. For ``send_assessment_approval``
-    # and other per-candidate kinds this is the application_id so the
-    # ``ask_recruiter`` idempotency key keeps one row per candidate,
-    # not one row per (role, kind). NULL keeps the legacy role-wide
-    # semantics for kinds like ``monthly_budget_missing``.
+    # Optional per-subject discriminator. Historical
+    # ``send_assessment_approval`` rows and current per-candidate kinds store
+    # the application_id here. NULL keeps the role-wide semantics used by
+    # questions such as ``monthly_budget_missing``.
     subject_id = Column(BigInteger, nullable=True)
     prompt = Column(Text, nullable=False)
     # Mutually exclusive: ``options`` is a list of {value, label} for

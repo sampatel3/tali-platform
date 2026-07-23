@@ -141,6 +141,73 @@ def test_tenant_isolation_via_tests(client):
     assert all(t["name"] != task_name for t in tests_b)
 
 
+def test_public_assessment_detail_hides_soft_deleted_candidate(client, db):
+    from datetime import datetime, timezone
+
+    from app.models.assessment import Assessment, AssessmentStatus
+    from app.models.candidate import Candidate
+    from app.models.role import Role
+    from app.models.user import User
+
+    headers, email = auth_headers(
+        client,
+        organization_name="OrgPublicAssessmentLifecycle",
+    )
+    organization_id = int(
+        db.query(User).filter(User.email == email).one().organization_id
+    )
+    role = Role(
+        organization_id=organization_id,
+        name="Private Assessment Role",
+        source="manual",
+    )
+    candidate = Candidate(
+        organization_id=organization_id,
+        email="public-assessment-private@example.test",
+        full_name="Public Assessment Private",
+    )
+    db.add_all([role, candidate])
+    db.flush()
+    assessment = Assessment(
+        organization_id=organization_id,
+        role_id=int(role.id),
+        candidate_id=int(candidate.id),
+        token="public-assessment-private-token",
+        status=AssessmentStatus.COMPLETED,
+        completed_at=datetime.now(timezone.utc),
+        taali_score=91,
+        final_score=88,
+        assessment_score=84,
+        is_voided=False,
+    )
+    db.add(assessment)
+    db.commit()
+
+    secret = _mint_key(
+        client,
+        headers,
+        scopes=["assessments:read"],
+    )["secret"]
+    key_headers = _key_headers(secret)
+    visible = client.get(
+        f"/public/v1/assessments/{int(assessment.id)}",
+        headers=key_headers,
+    )
+    assert visible.status_code == 200, visible.text
+    assert visible.json()["candidate_id"] == int(candidate.id)
+    assert visible.json()["taali_score"] == 91
+
+    candidate.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    hidden = client.get(
+        f"/public/v1/assessments/{int(assessment.id)}",
+        headers=key_headers,
+    )
+    assert hidden.status_code == 404, hidden.text
+    assert hidden.json()["detail"] == "Assessment not found"
+
+
 def test_api_key_list_is_org_scoped(client):
     headers_a, _ = auth_headers(client, organization_name="OrgA-keys")
     key_a = _mint_key(client, headers_a, name="a-only")
@@ -183,13 +250,14 @@ def test_role_applications_expose_workable_stage_and_metrics(client, db):
     db.add(role)
     db.flush()
 
-    # (email, pipeline_stage, workable_stage, application_outcome)
+    # (email, pipeline_stage, workable_stage, application_outcome,
+    # requirements_fit_score_100)
     specs = [
-        ("a@ex.com", "applied", "Applied", "open"),
-        ("b@ex.com", "advanced", "Technical Interview", "open"),
-        ("c@ex.com", "applied", "Applied", "rejected"),
+        ("a@ex.com", "applied", "Applied", "open", 72),
+        ("b@ex.com", "advanced", "Technical Interview", "open", None),
+        ("c@ex.com", "applied", "Applied", "rejected", None),
     ]
-    for em, pstage, wstage, outcome in specs:
+    for em, pstage, wstage, outcome, requirements_score in specs:
         cand = Candidate(organization_id=org_id, email=em, full_name=em.split("@")[0])
         db.add(cand)
         db.flush()
@@ -201,6 +269,14 @@ def test_role_applications_expose_workable_stage_and_metrics(client, db):
                 pipeline_stage=pstage,
                 application_outcome=outcome,
                 workable_stage=wstage,
+                requirements_fit_score_100=requirements_score,
+                # Ordinary roles continue to expose the materialized column,
+                # not a similarly named component from the details blob.
+                cv_match_details=(
+                    {"requirements_match_score_100": 12}
+                    if requirements_score is not None
+                    else None
+                ),
             )
         )
     db.commit()
@@ -216,6 +292,19 @@ def test_role_applications_expose_workable_stage_and_metrics(client, db):
     assert len(body["applications"]) == 3
     assert {a["workable_stage"] for a in body["applications"]} == {"Applied", "Technical Interview"}
     assert all("pipeline_stage" in a and "workable_stage" in a for a in body["applications"])
+    ordinary = next(
+        application
+        for application in body["applications"]
+        if application["candidate"]["email"] == "a@ex.com"
+    )
+    assert ordinary["requirements_fit_score_100"] == 72
+
+    ordinary_detail = client.get(
+        f"/public/v1/applications/{ordinary['id']}",
+        headers=kh,
+    )
+    assert ordinary_detail.status_code == 200, ordinary_detail.text
+    assert ordinary_detail.json()["requirements_fit_score_100"] == 72
 
     # Filter by Workable stage.
     filtered = client.get(
@@ -231,6 +320,242 @@ def test_role_applications_expose_workable_stage_and_metrics(client, db):
     assert metrics["by_application_outcome"]["rejected"] == 1
     assert metrics["by_application_outcome"]["open"] == 2
     assert isinstance(metrics["taali_funnel"], dict)
+
+
+def test_related_role_public_applications_use_independent_pool_and_ats_link(
+    client, db
+):
+    """The API-key list obeys the same related-role truth as agent tools."""
+
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+    from app.models.role import Role
+    from app.models.sister_role_evaluation import SisterRoleEvaluation
+    from app.models.user import User
+
+    headers, email = auth_headers(client, organization_name="OrgPublicRelated")
+    org_id = db.query(User).filter(User.email == email).one().organization_id
+    owner = Role(organization_id=org_id, name="ATS owner", source="manual")
+    related = Role(
+        organization_id=org_id,
+        name="Independent related role",
+        source="sister",
+        # Rolling compatibility oracle: the canonical boundary also recognizes
+        # the explicit ATS-owner link when an older row still has role_kind=standard.
+        role_kind="standard",
+        ats_owner_role=owner,
+    )
+    db.add_all([owner, related])
+    db.flush()
+
+    candidate = Candidate(
+        organization_id=org_id,
+        email="member@public-related.test",
+        full_name="Related Member",
+    )
+    owner_only = Candidate(
+        organization_id=org_id,
+        email="owner-only@public-related.test",
+        full_name="Owner Only",
+    )
+    db.add_all([candidate, owner_only])
+    db.flush()
+    transport = CandidateApplication(
+        organization_id=org_id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        source="workable",
+        status="applied",
+        pipeline_stage="review",
+        application_outcome="open",
+        workable_candidate_id="wk-public-related-member",
+        workable_stage="Technical Interview",
+        external_stage_raw="Technical Interview",
+        taali_score_cache_100=7,
+    )
+    local = CandidateApplication(
+        organization_id=org_id,
+        candidate_id=candidate.id,
+        role_id=related.id,
+        source="manual",
+        status="applied",
+        # Deliberately contradictory storage state: the public result must use
+        # the related role's evaluation and its explicit ATS transport.
+        pipeline_stage="applied",
+        application_outcome="rejected",
+        workable_stage="Final Interview",
+        external_stage_raw="Final Interview",
+        taali_score_cache_100=3,
+        requirements_fit_score_100=13,
+        cv_match_details={"requirements_match_score_100": 12},
+    )
+    owner_only_application = CandidateApplication(
+        organization_id=org_id,
+        candidate_id=owner_only.id,
+        role_id=owner.id,
+        source="workable",
+        status="applied",
+        pipeline_stage="advanced",
+        application_outcome="open",
+        workable_candidate_id="wk-public-related-owner-only",
+        workable_stage="Technical Interview",
+        external_stage_raw="Technical Interview",
+        taali_score_cache_100=100,
+    )
+    db.add_all([transport, local, owner_only_application])
+    db.flush()
+    evaluation = SisterRoleEvaluation(
+        organization_id=org_id,
+        role_id=related.id,
+        candidate_id=candidate.id,
+        source_application_id=local.id,
+        ats_application_id=transport.id,
+        status="done",
+        pipeline_stage="advanced",
+        application_outcome="open",
+        membership_source="direct_application",
+        spec_fingerprint="public-related-oracle",
+        role_fit_score=93,
+        details={
+            "fixture": "public-related-oracle",
+            "requirements_match_score_100": 81,
+            # A prior public-only key must not override canonical
+            # related-role evaluation truth.
+            "requirements_fit_score": 9,
+        },
+    )
+    db.add(evaluation)
+    db.commit()
+
+    secret = _mint_key(client, headers, scopes=["applications:read"])["secret"]
+    key_headers = _key_headers(secret)
+    response = client.get(
+        f"/public/v1/roles/{related.id}/applications",
+        headers=key_headers,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    [application] = body["applications"]
+    assert application["id"] == local.id
+    assert application["candidate"]["full_name"] == "Related Member"
+    assert application["role_id"] == related.id
+    assert application["role_name"] == related.name
+    assert application["pipeline_stage"] == "advanced"
+    assert application["application_outcome"] == "open"
+    assert application["taali_score_100"] == 93
+    assert application["requirements_fit_score_100"] == 81
+    assert application["workable_stage"] == "Technical Interview"
+
+    linked_filter = client.get(
+        f"/public/v1/roles/{related.id}/applications",
+        params={"workable_stage": "Technical Interview"},
+        headers=key_headers,
+    )
+    assert linked_filter.status_code == 200, linked_filter.text
+    assert linked_filter.json()["total"] == 1
+
+    stale_local_filter = client.get(
+        f"/public/v1/roles/{related.id}/applications",
+        params={"workable_stage": "Final Interview"},
+        headers=key_headers,
+    )
+    assert stale_local_filter.status_code == 200, stale_local_filter.text
+    assert stale_local_filter.json() == {"applications": [], "total": 0}
+
+    # The frozen Workable filter is exact, not a provider-neutral substring.
+    partial_filter = client.get(
+        f"/public/v1/roles/{related.id}/applications",
+        params={"workable_stage": "Technical"},
+        headers=key_headers,
+    )
+    assert partial_filter.status_code == 200, partial_filter.text
+    assert partial_filter.json() == {"applications": [], "total": 0}
+
+    metrics = client.get(
+        f"/public/v1/roles/{related.id}/metrics",
+        headers=key_headers,
+    )
+    assert metrics.status_code == 200, metrics.text
+    metrics_body = metrics.json()
+    assert metrics_body["total_applications"] == 1
+    assert metrics_body["by_application_outcome"] == {"open": 1}
+    assert metrics_body["by_workable_stage"] == {"Technical Interview": 1}
+    assert metrics_body["taali_funnel"]["advanced"] == 1
+
+    detail = client.get(
+        f"/public/v1/applications/{local.id}",
+        params={"view_role_id": related.id},
+        headers=key_headers,
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json() == application
+
+    wrong_role_detail = client.get(
+        f"/public/v1/applications/{local.id}",
+        params={"view_role_id": owner.id},
+        headers=key_headers,
+    )
+    assert wrong_role_detail.status_code == 404
+
+    share_secret = _mint_key(
+        client,
+        headers,
+        scopes=["share-links:write"],
+    )["secret"]
+    shared = client.post(
+        f"/public/v1/applications/{local.id}/share-links",
+        json={
+            "mode": "client",
+            "expiry": "7d",
+            "view_role_id": related.id,
+        },
+        headers=_key_headers(share_secret),
+    )
+    assert shared.status_code == 200, shared.text
+    assert shared.json()["view_role_id"] == related.id
+
+    shared_view = client.get(f"/share/{shared.json()['token']}")
+    assert shared_view.status_code == 200, shared_view.text
+    shared_body = shared_view.json()
+    assert shared_body["view_role_id"] == related.id
+    assert shared_body["application"]["role_id"] == related.id
+    assert shared_body["application"]["pipeline_stage"] == "advanced"
+    assert shared_body["application"]["application_outcome"] == "open"
+    assert shared_body["application"]["taali_score"] == 93
+    assert "source_role_score" not in shared_body["application"]
+
+    wrong_role_share = client.post(
+        f"/public/v1/applications/{local.id}/share-links",
+        json={
+            "mode": "client",
+            "expiry": "7d",
+            "view_role_id": owner.id,
+        },
+        headers=_key_headers(share_secret),
+    )
+    assert wrong_role_share.status_code == 404
+
+    # Rolling compatibility matches the canonical related-role projection:
+    # older evaluations without the requirements component fall back to their
+    # own role-fit score, never either physical application's score.
+    evaluation.details = {"fixture": "legacy-public-related-oracle"}
+    db.commit()
+    fallback_list = client.get(
+        f"/public/v1/roles/{related.id}/applications",
+        headers=key_headers,
+    )
+    assert fallback_list.status_code == 200, fallback_list.text
+    assert fallback_list.json()["applications"][0]["requirements_fit_score_100"] == 93
+
+    fallback_detail = client.get(
+        f"/public/v1/applications/{local.id}",
+        params={"view_role_id": related.id},
+        headers=key_headers,
+    )
+    assert fallback_detail.status_code == 200, fallback_detail.text
+    assert fallback_detail.json()["requirements_fit_score_100"] == 93
 
 
 def test_role_metrics_scope_and_org(client):

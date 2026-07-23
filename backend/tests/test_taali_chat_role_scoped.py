@@ -1,10 +1,10 @@
 """Tests for role-scoped Taali Chat.
 
-Covers:
+Covered here:
 - Creating a conversation with role_id persists role_id
-- role_id from a different org's role is silently ignored (defense in depth)
+- an explicitly invalid/cross-org role fails closed instead of becoming global
 - _build_system_blocks emits the role-context block when role_id is set
-- The role-context block includes the role name + pending decision count
+- The role-context block includes identity but no mutable candidate facts
 - New chat tools (list_recent_agent_decisions, list_recent_agent_runs,
   explain_agent_decision) return correct payloads
 - Tools are org-scoped (no cross-org leakage)
@@ -13,8 +13,9 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock
+import json
+from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sqlalchemy import event
@@ -28,6 +29,8 @@ from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.user import User
 from app.taali_chat.service import _arguments_with_role_scope, _ensure_conversation
 from app.taali_chat.system_prompt import build_system_blocks as _build_system_blocks
+from app.taali_chat.tool_execution import execute_tool_round
+from app.taali_chat.tool_registry import dispatch_tool
 
 
 # Shared SQLite BigInteger PK workaround.
@@ -96,24 +99,22 @@ def test_ensure_conversation_persists_role_id_when_set(db):
     assert convo.role_id == role.id
 
 
-def test_ensure_conversation_ignores_cross_org_role_id(db):
-    """Defense in depth: a recruiter passing a role_id that belongs to
-    another org should not result in a conversation scoped to that role."""
+def test_ensure_conversation_rejects_cross_org_role_id(db):
+    """An explicit role request must never fall back to a global chat."""
     org_a = _make_org(db, name="Org A")
     org_b = _make_org(db, name="Org B")
     user_a = _make_user(db, org_a)
     role_b = _make_role(db, org_b, name="Stranger Role")
 
-    convo = _ensure_conversation(
-        db,
-        user=user_a,
-        conversation_id=None,
-        first_message="Hi",
-        role_id=int(role_b.id),
-    )
-    db.commit()
-    db.refresh(convo)
-    assert convo.role_id is None
+    with pytest.raises(ValueError, match=f"role {int(role_b.id)} not found"):
+        _ensure_conversation(
+            db,
+            user=user_a,
+            conversation_id=None,
+            first_message="Hi",
+            role_id=int(role_b.id),
+        )
+    assert db.query(TaaliChatConversation).count() == 0
 
 
 def test_ensure_conversation_unscoped_when_role_id_is_none(db):
@@ -150,10 +151,134 @@ def test_role_scoped_chat_defaults_every_optional_role_tool(tool_name):
     )["role_id"] == 42
 
 
-def test_role_scoped_chat_preserves_an_explicit_cross_role_request():
+def test_role_scoped_chat_overrides_an_explicit_cross_role_request():
     assert _arguments_with_role_scope(
         "search_applications", {"role_id": 99}, conversation_role_id=42
-    )["role_id"] == 99
+    )["role_id"] == 42
+
+
+def test_role_scoped_tool_round_never_passes_model_role_to_dispatch(db):
+    org = _make_org(db)
+    user = _make_user(db, org)
+    bound_role = _make_role(db, org, name="Bound")
+    other_role = _make_role(db, org, name="Other")
+    conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=bound_role.id,
+        title="Bound role chat",
+    )
+    db.add(conversation)
+    db.flush()
+
+    with patch(
+        "app.taali_chat.tool_execution.dispatch_tool",
+        return_value={"items": [], "total": 0, "total_is_exact": True},
+    ) as dispatched:
+        result = execute_tool_round(
+            db=db,
+            user=user,
+            conversation=conversation,
+            assistant_blocks=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu-spoof",
+                    "name": "search_role_candidates",
+                    "input": {"role_id": int(other_role.id)},
+                }
+            ],
+            messages=[],
+        )
+
+    assert result.error_count == 0
+    assert dispatched.call_args.args[1]["role_id"] == int(bound_role.id)
+
+
+def test_shared_read_dispatch_rejects_cross_role_spoof_before_handler(db):
+    org = _make_org(db)
+    user = _make_user(db, org)
+    bound_role = _make_role(db, org, name="Bound")
+    other_role = _make_role(db, org, name="Other")
+    conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=bound_role.id,
+        title="Bound role chat",
+    )
+    db.add(conversation)
+    db.flush()
+
+    with patch("app.mcp.shared_reads._resolve_handler") as resolve_handler:
+        with pytest.raises(ValueError, match="bound to the active role"):
+            dispatch_tool(
+                "search_role_candidates",
+                {"role_id": int(other_role.id)},
+                db=db,
+                user=user,
+                conversation=conversation,
+            )
+
+    resolve_handler.assert_not_called()
+
+
+def test_cross_role_spoof_returns_only_bound_role_candidates(db):
+    org = _make_org(db)
+    user = _make_user(db, org)
+    bound_role = _make_role(db, org, name="Bound")
+    other_role = _make_role(db, org, name="Other")
+    bound_application = _make_application(db, org=org, role=bound_role)
+    other_application = _make_application(db, org=org, role=other_role)
+    conversation = TaaliChatConversation(
+        organization_id=org.id,
+        user_id=user.id,
+        role_id=bound_role.id,
+        title="Bound role chat",
+    )
+    db.add(conversation)
+    db.flush()
+
+    result = execute_tool_round(
+        db=db,
+        user=user,
+        conversation=conversation,
+        assistant_blocks=[
+            {
+                "type": "tool_use",
+                "id": "toolu-spoof",
+                "name": "search_role_candidates",
+                "input": {"role_id": int(other_role.id)},
+            }
+        ],
+        messages=[],
+    )
+
+    assert result.error_count == 0
+    payload = json.loads(result.live_results[0]["content"])
+    returned_ids = {int(item["application_id"]) for item in payload["items"]}
+    assert returned_ids == {int(bound_application.id)}
+    assert int(other_application.id) not in returned_ids
+
+
+def test_unscoped_shared_read_preserves_explicit_global_chat_role(db):
+    org = _make_org(db)
+    user = _make_user(db, org)
+    role = _make_role(db, org)
+    handler = MagicMock(
+        return_value={"items": [], "total": 0, "total_is_exact": True}
+    )
+
+    with patch("app.mcp.shared_reads._resolve_handler", return_value=handler):
+        result = dispatch_tool(
+            "search_role_candidates",
+            {"role_id": int(role.id)},
+            db=db,
+            user=user,
+            conversation=None,
+        )
+
+    assert result["total"] == 0
+    handler.assert_called_once()
+    assert handler.call_args.kwargs["role_id"] == int(role.id)
 
 
 def test_unscoped_chat_does_not_add_role_id():
@@ -199,7 +324,7 @@ def test_build_system_blocks_appends_role_context_when_role_id_set(db):
     assert "default to this role" in role_context.lower()
 
 
-def test_role_context_surfaces_pending_decision_count(db):
+def test_role_context_never_embeds_mutable_candidate_or_decision_facts(db):
     org = _make_org(db)
     user = _make_user(db, org)
     role = _make_role(db, org)
@@ -224,9 +349,33 @@ def test_role_context_surfaces_pending_decision_count(db):
     db.add(app)
     db.flush()
 
-    for status, key in [("pending", "p1"), ("pending", "p2"), ("approved", "a1")]:
+    second_candidate = Candidate(
+        organization_id=org.id,
+        email="c2@x.test",
+        full_name="C2",
+    )
+    db.add(second_candidate)
+    db.flush()
+    second_app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=second_candidate.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+    )
+    db.add(second_app)
+    db.flush()
+
+    for status, key, application_id in [
+        ("pending", "p1", app.id),
+        ("pending", "p2", second_app.id),
+        ("approved", "a1", app.id),
+    ]:
         d = AgentDecision(
-            organization_id=org.id, role_id=role.id, application_id=app.id,
+            organization_id=org.id, role_id=role.id, application_id=application_id,
             decision_type="advance_to_interview", recommendation="advance",
             status=status, reasoning="r", model_version="m", prompt_version="p",
             idempotency_key=key,
@@ -236,7 +385,10 @@ def test_role_context_surfaces_pending_decision_count(db):
 
     blocks = _build_system_blocks(db, conversation=convo)
     role_context = blocks[1]["text"]
-    assert "2 pending agent decision" in role_context
+    assert f"role_id={role.id}" in role_context
+    assert "identity only" in role_context.lower()
+    assert "2 pending" not in role_context
+    assert "last agent cycle" not in role_context.lower()
 
 
 def test_role_context_skipped_when_role_soft_deleted(db):
@@ -318,8 +470,9 @@ def test_list_recent_agent_decisions_returns_decisions_for_org(db):
     db.commit()
 
     out = handlers.list_recent_agent_decisions(db, user)
-    assert len(out) == 2
-    types = {d["decision_type"] for d in out}
+    assert out["total"] == 2
+    assert out["total_is_exact"] is True
+    types = {d["decision_type"] for d in out["items"]}
     assert types == {"advance_to_interview", "reject"}
 
 
@@ -338,9 +491,116 @@ def test_list_recent_agent_decisions_filters_by_role_id_and_status(db):
     pending_role_a = handlers.list_recent_agent_decisions(
         db, user, role_id=role_a.id, status="pending"
     )
-    assert len(pending_role_a) == 1
-    assert pending_role_a[0]["role_id"] == role_a.id
-    assert pending_role_a[0]["status"] == "pending"
+    assert pending_role_a["total"] == 1
+    assert pending_role_a["items"][0]["role_id"] == role_a.id
+    assert pending_role_a["items"][0]["status"] == "pending"
+
+
+def test_decision_history_follows_candidate_when_related_source_changes(db):
+    """The current membership id can retrieve a decision written on old evidence."""
+
+    from datetime import timedelta
+
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+    from app.models.role import ROLE_KIND_SISTER
+    from app.models.sister_role_evaluation import SisterRoleEvaluation
+
+    org = _make_org(db, name="Decision Candidate Identity")
+    user = _make_user(db, org)
+    owner = _make_role(db, org, name="ATS owner")
+    related = Role(
+        organization_id=org.id,
+        name="Independent related role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=owner.id,
+    )
+    candidate = Candidate(
+        organization_id=org.id,
+        email="decision-source-change@example.test",
+        full_name="Decision Source Change",
+    )
+    db.add_all([related, candidate])
+    db.flush()
+    owner_application = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=owner.id,
+        source="manual",
+        status="applied",
+        pipeline_stage="review",
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+    )
+    direct_application = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=related.id,
+        source="manual",
+        status="applied",
+        pipeline_stage="applied",
+        pipeline_stage_source="system",
+        application_outcome="open",
+    )
+    db.add_all([owner_application, direct_application])
+    db.flush()
+    now = datetime.now(timezone.utc)
+    db.add_all(
+        [
+            SisterRoleEvaluation(
+                organization_id=org.id,
+                role_id=related.id,
+                candidate_id=candidate.id,
+                source_application_id=owner_application.id,
+                ats_application_id=owner_application.id,
+                status="done",
+                pipeline_stage="review",
+                application_outcome="open",
+                membership_source="legacy_compat_shadow",
+                spec_fingerprint="decision-old-source",
+                deleted_at=now - timedelta(minutes=1),
+            ),
+            SisterRoleEvaluation(
+                organization_id=org.id,
+                role_id=related.id,
+                candidate_id=candidate.id,
+                source_application_id=direct_application.id,
+                ats_application_id=owner_application.id,
+                status="done",
+                pipeline_stage="advanced",
+                application_outcome="open",
+                membership_source="direct",
+                spec_fingerprint="decision-current-source",
+                role_fit_score=91.0,
+            ),
+        ]
+    )
+    decision = _make_decision(
+        db,
+        org=org,
+        role=related,
+        application_id=owner_application.id,
+        status="approved",
+        key="decision-prior-source",
+    )
+    db.flush()
+
+    result = handlers.list_recent_agent_decisions(
+        db,
+        user,
+        role_id=related.id,
+        application_id=direct_application.id,
+    )
+
+    assert result["total"] == 1
+    [item] = result["items"]
+    assert item["id"] == decision.id
+    assert item["candidate_id"] == candidate.id
+    assert item["application_id"] == direct_application.id
+    assert item["evidence_application_id"] == owner_application.id
+    assert item["in_current_role_pool"] is True
+    assert item["current_state"]["pipeline_stage"] == "advanced"
 
 
 def test_list_recent_agent_decisions_is_org_scoped(db):
@@ -354,7 +614,20 @@ def test_list_recent_agent_decisions_is_org_scoped(db):
     db.commit()
 
     out = handlers.list_recent_agent_decisions(db, user_a)
-    assert out == []
+    assert out["items"] == []
+    assert out["total"] == 0
+
+
+def test_list_recent_agent_decisions_rejects_cross_org_role_as_invalid_scope(db):
+    """A foreign role is not a grounded zero for this organization."""
+
+    org_a = _make_org(db, name="Decision scope A")
+    org_b = _make_org(db, name="Decision scope B")
+    user_a = _make_user(db, org_a)
+    role_b = _make_role(db, org_b)
+
+    with pytest.raises(ValueError, match=f"role {int(role_b.id)} not found"):
+        handlers.list_recent_agent_decisions(db, user_a, role_id=int(role_b.id))
 
 
 def test_list_recent_agent_decisions_validates_status_enum(db):

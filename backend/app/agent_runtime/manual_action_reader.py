@@ -104,14 +104,17 @@ def read_recent_manual_actions(
     db: Session,
     *,
     application_id: int,
+    role_id: int,
     lookback_hours: int,
     now: datetime | None = None,
 ) -> list[ManualAction]:
-    """Pull recruiter events on the application within the lookback window.
+    """Pull role-owned recruiter events within the lookback window.
 
     Returns a list ordered most-recent-first. ``actor_type`` strictly
     equals ``'recruiter'`` — the agent's own queueing/cancellations are
-    not manual actions.
+    not manual actions. First-class event provenance is required: ambiguous
+    legacy NULL-role rows cannot safely suppress an autonomous decision for
+    any logical role.
     """
     if lookback_hours <= 0:
         return []
@@ -121,6 +124,7 @@ def read_recent_manual_actions(
         db.query(CandidateApplicationEvent)
         .filter(
             CandidateApplicationEvent.application_id == application_id,
+            CandidateApplicationEvent.role_id == int(role_id),
             CandidateApplicationEvent.actor_type == "recruiter",
             CandidateApplicationEvent.created_at >= cutoff,
         )
