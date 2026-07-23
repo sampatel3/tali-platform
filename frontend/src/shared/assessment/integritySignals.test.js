@@ -31,26 +31,29 @@ describe('assessment integrity signals', () => {
     expect(summary.groups).toEqual([
       { label: 'clipboard use', count: 1 },
       { label: 'blocked export attempts', count: 1 },
-      { label: 'when the tab loses focus', count: 3 },
+      { label: 'when the tab loses focus or you leave fullscreen', count: 3 },
     ]);
   });
 
-  it('surfaces tab-focus losses with their timestamps', () => {
+  it('counts only real tab-focus losses, not fullscreen exits', () => {
     const summary = summarizeIntegritySignals(timeline);
-    expect(summary.tabFocusCount).toBe(3);
+    // The timeline holds two visibility_hidden and one fullscreen_exit. Leaving
+    // fullscreen is not losing tab focus, so a reviewer must not be shown three.
+    expect(summary.tabFocusCount).toBe(2);
     expect(summary.tabFocusTimestamps).toEqual([
       '2026-07-23T10:07:00Z',
-      '2026-07-23T10:09:00Z',
       '2026-07-23T10:11:00Z',
     ]);
+    // ...but it still counts inside its disclosed group.
+    expect(summary.total).toBe(5);
   });
 
   it('derives the tab-switch count when proctoring left the stored one at zero', () => {
     const summary = summarizeIntegritySignals(timeline);
     // The exact production case: MVP_DISABLE_PROCTORING means the submit
     // payload sends 0, so the card read 0 while the timeline held three events.
-    expect(resolveTabSwitchCount({ tab_switch_count: 0 }, summary)).toBe(3);
-    expect(resolveTabSwitchCount({}, summary)).toBe(3);
+    expect(resolveTabSwitchCount({ tab_switch_count: 0 }, summary)).toBe(2);
+    expect(resolveTabSwitchCount({}, summary)).toBe(2);
     // A real proctored count still wins — it counts switches, not just hides.
     expect(resolveTabSwitchCount({ tab_switch_count: 9 }, summary)).toBe(9);
   });

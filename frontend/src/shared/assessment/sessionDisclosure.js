@@ -57,7 +57,9 @@ export const WORKSPACE_SIGNAL_GROUPS = Object.freeze([
     ]),
   }),
   Object.freeze({
-    label: 'when the tab loses focus',
+    // Leaving fullscreen is not the same as the tab losing focus, and the label
+    // has to cover both events it groups or it under-describes one of them.
+    label: 'when the tab loses focus or you leave fullscreen',
     events: Object.freeze(['visibility_hidden', 'fullscreen_exit']),
   }),
 ]);

@@ -13,7 +13,10 @@
 
 import { WORKSPACE_SIGNAL_EVENTS, WORKSPACE_SIGNAL_GROUPS } from './sessionDisclosure';
 
-const TAB_FOCUS_EVENTS = Object.freeze(['visibility_hidden', 'fullscreen_exit']);
+// Only `visibility_hidden` means the tab lost focus. `fullscreen_exit` is a
+// different thing and is counted in its group, not here — counting it as a tab
+// switch would overstate the number a reviewer acts on.
+const TAB_FOCUS_EVENTS = Object.freeze(['visibility_hidden']);
 
 const eventTypeOf = (event) => String(
   event?.event_type || event?.type || event?.event || '',
