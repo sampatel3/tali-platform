@@ -194,18 +194,114 @@ def existing_idempotent_event(
     role_id: int,
     idempotency_key: str | None,
 ) -> CandidateApplicationEvent | None:
+    """Return a same-role replay, including immutable pre-provenance rows.
+
+    The legacy uniqueness key is application-scoped, but a shared application
+    can represent independent logical roles. Resolve NULL-role rows from their
+    historical evidence before treating them as an idempotent match.
+    """
+
     token = str(idempotency_key or "").strip()
     if not token:
         return None
-    return (
+    event = (
         db.query(CandidateApplicationEvent)
         .filter(
             CandidateApplicationEvent.application_id == application_id,
-            CandidateApplicationEvent.role_id == int(role_id),
             CandidateApplicationEvent.idempotency_key == token,
+            or_(
+                CandidateApplicationEvent.role_id == int(role_id),
+                CandidateApplicationEvent.role_id.is_(None),
+            ),
         )
         .first()
     )
+    if event is None or event.role_id is not None:
+        return event
+
+    application = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == int(application_id),
+            CandidateApplication.organization_id == int(event.organization_id),
+        )
+        .one_or_none()
+    )
+    if application is None:
+        return None
+
+    memberships = (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.organization_id == int(event.organization_id),
+            SisterRoleEvaluation.candidate_id == int(application.candidate_id),
+            or_(
+                SisterRoleEvaluation.source_application_id == int(application_id),
+                SisterRoleEvaluation.ats_application_id == int(application_id),
+            ),
+        )
+        .all()
+    )
+    decision_id = event_metadata_id(event, "agent_decision_id", "decision_id")
+    decisions_by_id: dict[int, Any] = {}
+    decision_applications: dict[int, CandidateApplication] = {}
+    if decision_id is not None:
+        from ...models.agent_decision import AgentDecision
+
+        decision = (
+            db.query(AgentDecision)
+            .filter(
+                AgentDecision.id == int(decision_id),
+                AgentDecision.organization_id == int(event.organization_id),
+            )
+            .one_or_none()
+        )
+        if decision is not None:
+            decisions_by_id[int(decision.id)] = decision
+            decision_application = (
+                db.query(CandidateApplication)
+                .filter(
+                    CandidateApplication.id == int(decision.application_id),
+                    CandidateApplication.organization_id == int(event.organization_id),
+                )
+                .one_or_none()
+            )
+            if decision_application is not None:
+                decision_applications[int(decision_application.id)] = (
+                    decision_application
+                )
+
+    role_hints = {
+        int(application.role_id),
+        int(role_id),
+        *(int(membership.role_id) for membership in memberships),
+    }
+    event_role_hint = event_metadata_id(event, "acting_role_id", "role_id")
+    if event_role_hint is not None:
+        role_hints.add(event_role_hint)
+    decision = (
+        decisions_by_id.get(int(decision_id)) if decision_id is not None else None
+    )
+    if decision is not None:
+        role_hints.add(int(decision.role_id))
+    valid_role_ids = {
+        int(valid_role_id)
+        for (valid_role_id,) in db.query(Role.id)
+        .filter(
+            Role.organization_id == int(event.organization_id),
+            Role.id.in_(sorted(role_hints)),
+        )
+        .all()
+    }
+    resolved_role_id = resolve_historical_event_role_id(
+        event,
+        application=application,
+        memberships=memberships,
+        decisions_by_id=decisions_by_id,
+        decision_applications=decision_applications,
+        valid_role_ids=valid_role_ids,
+    )
+    return event if resolved_role_id == int(role_id) else None
 
 
 def _resolved_event_target(

@@ -87,6 +87,8 @@
         "tests/postgres/test_candidate_capability_migrations.py::test_migration_185_retries_after_committed_additive_phase",
         "tests/postgres/test_candidate_capability_migrations.py::test_migration_185_promotes_pre_snapshot_legacy_shadow",
         "tests/postgres/test_candidate_capability_migrations.py::test_migration_185_keeps_post_snapshot_legacy_shadow_archived",
+        "tests/postgres/test_candidate_capability_migrations.py::test_migration_186_allows_only_archived_membership_assessment_holds",
+        "tests/test_related_role_runtime.py::test_provider_confirmation_fails_closed_when_related_membership_was_deleted",
         "tests/postgres/test_candidate_capability_migrations.py::test_populated_role_membership_and_action_migrations_are_rolling_safe",
         "tests/platform/test_production_search_canary_contract.py::test_candidate_search_bootstrap_rebuilds_disposable_schema_before_stamping",
         "tests/platform/test_production_search_canary_contract.py::test_membership_migration_releases_additive_ddl_before_data_repair",
@@ -180,6 +182,9 @@
         "tests/test_mcp_candidate_capabilities.py::test_request_history_subjects_are_preserved_without_preordaining_answer_values",
         "tests/test_mcp_candidate_capabilities.py::test_legacy_event_role_requires_membership_at_the_time_of_the_action",
         "tests/test_mcp_candidate_capabilities.py::test_certificates_bind_terminal_zero_names_and_exact_counts",
+        "tests/test_pipeline_event_idempotency.py::test_legacy_owner_event_replay_returns_existing_instead_of_colliding",
+        "tests/test_pipeline_event_idempotency.py::test_legacy_related_event_is_idempotent_only_for_its_grounded_role",
+        "tests/test_pipeline_event_idempotency.py::test_related_action_replay_cannot_reapply_a_legacy_event",
         "tests/agent_runtime_policy/test_manual_action_reader.py::test_manual_actions_are_isolated_by_logical_role_on_shared_application",
         "tests/postgres/test_candidate_capability_runtime_matrix.py::test_removed_related_membership_leaves_pool_but_keeps_role_history_on_every_surface"
       ]

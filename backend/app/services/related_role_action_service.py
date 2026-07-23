@@ -8,9 +8,11 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from ..domains.assessments_runtime.pipeline_event_service import (
+    existing_idempotent_event,
+)
 from ..domains.assessments_runtime.pipeline_service import append_application_event
 from ..models.candidate_application import CandidateApplication
-from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import SisterRoleEvaluation
 from .pre_screen_decision_emitter import discard_pending_decisions_for_app
@@ -243,17 +245,14 @@ def _existing_idempotent_action(
     role_id: int,
     idempotency_key: str | None,
 ) -> bool:
-    key = str(idempotency_key or "").strip()
-    if not key:
-        return False
-    return bool(
-        db.query(CandidateApplicationEvent.id)
-        .filter(
-            CandidateApplicationEvent.application_id == int(application_id),
-            CandidateApplicationEvent.role_id == int(role_id),
-            CandidateApplicationEvent.idempotency_key == key,
+    return (
+        existing_idempotent_event(
+            db,
+            application_id=int(application_id),
+            role_id=int(role_id),
+            idempotency_key=idempotency_key,
         )
-        .first()
+        is not None
     )
 
 

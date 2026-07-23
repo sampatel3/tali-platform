@@ -920,6 +920,186 @@ def test_migration_185_keeps_post_snapshot_legacy_shadow_archived(
             cleanup.commit()
 
 
+def test_migration_186_allows_only_archived_membership_assessment_holds(
+    postgres_search_engine,
+    monkeypatch,
+):
+    schema = f"candidate_action_hold_{uuid.uuid4().hex}"
+    migration_185 = _load_migration(
+        "185_related_role_membership.py",
+        f"related_role_membership_{uuid.uuid4().hex}",
+    )
+    migration_186 = _load_migration(
+        "186_candidate_action_provenance.py",
+        f"candidate_action_provenance_{uuid.uuid4().hex}",
+    )
+
+    with postgres_search_engine.connect() as connection:
+        connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+        connection.exec_driver_sql(f'SET search_path TO "{schema}"')
+        _create_pre_185_schema(connection)
+        _seed_populated_legacy_state(connection)
+        connection.commit()
+        migration_context = MigrationContext.configure(connection)
+        operations = Operations(migration_context)
+        monkeypatch.setattr(migration_185, "op", operations)
+        monkeypatch.setattr(migration_186, "op", operations)
+
+        with migration_context.begin_transaction():
+            migration_185.upgrade()
+        with migration_context.begin_transaction():
+            migration_186.upgrade()
+
+        # Candidate 100's assessment is linked to the ATS-owner application,
+        # while its independent related-role membership is stored separately.
+        # A late receipt can arrive after that membership is removed; the
+        # receipt must remain appendable without restoring role-local state.
+        connection.exec_driver_sql(
+            """
+            UPDATE sister_role_evaluations
+            SET deleted_at = now(), version = version + 1
+            WHERE role_id = 20 AND candidate_id = 100
+            """
+        )
+        state_before = connection.exec_driver_sql(
+            """
+            SELECT pipeline_stage, application_outcome, version,
+                   deleted_at IS NOT NULL
+            FROM sister_role_evaluations
+            WHERE id = 2001
+            """
+        ).one()
+
+        for event_id, event_type in (
+            (714, "role_pipeline_stage_transition_held"),
+            (715, "assessment_invite_sent"),
+            (716, "assessment_invite_resent"),
+            (717, "assessment_retake_sent"),
+            (718, "assessment_invite_pipeline_transition_held"),
+        ):
+            connection.exec_driver_sql(
+                """
+                INSERT INTO candidate_application_events (
+                    id, application_id, organization_id, role_id, event_type,
+                    actor_type, metadata, target_stage, effect_status,
+                    idempotency_key, created_at
+                ) VALUES (
+                    %(event_id)s, 1000, 1, 20, %(event_type)s,
+                    'system',
+                    '{"assessment_id": 600, "acting_role_id": 20}',
+                    'invited', 'held', %(idempotency_key)s, now()
+                )
+                """,
+                {
+                    "event_id": event_id,
+                    "event_type": event_type,
+                    "idempotency_key": f"archived-membership-hold-{event_id}",
+                },
+            )
+
+        assert connection.exec_driver_sql(
+            """
+            SELECT id, role_id, event_type, effect_status, target_stage
+            FROM candidate_application_events
+            WHERE id IN (714, 715, 716, 717, 718)
+            ORDER BY id
+            """
+        ).all() == [
+            (
+                714,
+                20,
+                "role_pipeline_stage_transition_held",
+                "held",
+                "invited",
+            ),
+            (715, 20, "assessment_invite_sent", "held", "invited"),
+            (716, 20, "assessment_invite_resent", "held", "invited"),
+            (717, 20, "assessment_retake_sent", "held", "invited"),
+            (
+                718,
+                20,
+                "assessment_invite_pipeline_transition_held",
+                "held",
+                "invited",
+            ),
+        ]
+        assert connection.exec_driver_sql(
+            """
+            SELECT pipeline_stage, application_outcome, version,
+                   deleted_at IS NOT NULL
+            FROM sister_role_evaluations
+            WHERE id = 2001
+            """
+        ).one() == state_before
+
+        # Historical authority is audit-only: a caller cannot use it for a
+        # transition, omit matching assessment provenance, or claim success.
+        rejected_events = (
+            (719, "role_pipeline_stage_changed", "held", 600, None),
+            (
+                720,
+                "role_pipeline_stage_transition_held",
+                "held",
+                999999,
+                None,
+            ),
+            (
+                721,
+                "role_pipeline_stage_transition_held",
+                "held",
+                600,
+                "review",
+            ),
+            (
+                722,
+                "role_pipeline_stage_transition_held",
+                "confirmed",
+                600,
+                None,
+            ),
+        )
+        for event_id, event_type, effect_status, assessment_id, to_stage in (
+            rejected_events
+        ):
+            with pytest.raises(sa.exc.IntegrityError):
+                with connection.begin_nested():
+                    connection.exec_driver_sql(
+                        """
+                        INSERT INTO candidate_application_events (
+                            id, application_id, organization_id, role_id,
+                            event_type, actor_type, metadata, to_stage,
+                            target_stage, effect_status, idempotency_key,
+                            created_at
+                        ) VALUES (
+                            %(event_id)s, 1000, 1, 20, %(event_type)s,
+                            'system',
+                            json_build_object(
+                                'assessment_id', %(assessment_id)s,
+                                'acting_role_id', 20
+                            ),
+                            %(to_stage)s, 'invited', %(effect_status)s,
+                            %(idempotency_key)s, now()
+                        )
+                        """,
+                        {
+                            "event_id": event_id,
+                            "event_type": event_type,
+                            "effect_status": effect_status,
+                            "assessment_id": assessment_id,
+                            "to_stage": to_stage,
+                            "idempotency_key": (
+                                f"rejected-archived-membership-{event_id}"
+                            ),
+                        },
+                    )
+
+        connection.rollback()
+        connection.exec_driver_sql("RESET search_path")
+        connection.commit()
+        connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        connection.commit()
+
+
 def test_populated_role_membership_and_action_migrations_are_rolling_safe(
     postgres_search_engine,
     monkeypatch,

@@ -44,7 +44,9 @@ def _create_event_insert_trigger() -> None:
             application_organization_id INTEGER;
             metadata_role_text TEXT;
             metadata_decision_text TEXT;
+            metadata_assessment_text TEXT;
             metadata_role_id INTEGER;
+            requested_assessment_id INTEGER;
             requested_decision_id BIGINT;
             resolved_decision_id BIGINT;
             decision_role_id INTEGER;
@@ -129,6 +131,15 @@ def _create_event_insert_trigger() -> None:
                   AND decision_application.candidate_id = application_candidate_id;
             END IF;
 
+            metadata_assessment_text := COALESCE(
+                NEW.metadata ->> 'assessment_id',
+                ''
+            );
+            IF metadata_assessment_text ~ '^[1-9][0-9]{{0,9}}$'
+               AND metadata_assessment_text::NUMERIC <= 2147483647 THEN
+                requested_assessment_id := metadata_assessment_text::INTEGER;
+            END IF;
+
             -- A first-class FK is an explicit current-writer contract.  Legacy
             -- JSON hints remain best-effort, but an invalid normalized value is
             -- never silently erased.
@@ -162,6 +173,57 @@ def _create_event_insert_trigger() -> None:
                               membership.source_application_id,
                               membership.ats_application_id
                           )
+                    )
+                    OR (
+                        -- An assessment provider receipt may arrive after a
+                        -- related-role membership was removed. Preserve only
+                        -- that non-mutating audit trail: the event must be an
+                        -- explicit held assessment event, carry no lifecycle
+                        -- transition, and match both the historical membership
+                        -- and the first-class Assessment row. This does not
+                        -- restore membership or authorize ordinary role writes.
+                        LOWER(BTRIM(COALESCE(NEW.effect_status, ''))) = 'held'
+                        AND LOWER(BTRIM(NEW.event_type)) IN (
+                            'role_pipeline_stage_transition_held',
+                            'assessment_invite_pipeline_transition_held',
+                            'assessment_invite_sent',
+                            'assessment_invite_resent',
+                            'assessment_retake_sent'
+                        )
+                        AND requested_assessment_id IS NOT NULL
+                        AND requested_decision_id IS NULL
+                        AND NEW.from_stage IS NULL
+                        AND NEW.to_stage IS NULL
+                        AND NEW.from_outcome IS NULL
+                        AND NEW.to_outcome IS NULL
+                        AND EXISTS (
+                            SELECT 1
+                            FROM sister_role_evaluations AS membership
+                            WHERE membership.organization_id =
+                                      NEW.organization_id
+                              AND membership.role_id = role.id
+                              AND membership.candidate_id =
+                                      application_candidate_id
+                              AND membership.deleted_at IS NOT NULL
+                              AND membership.membership_source IS DISTINCT FROM
+                                      'legacy_compat_shadow'
+                              AND NEW.application_id IN (
+                                  membership.source_application_id,
+                                  membership.ats_application_id
+                              )
+                        )
+                        AND EXISTS (
+                            SELECT 1
+                            FROM assessments AS assessment
+                            WHERE assessment.id = requested_assessment_id
+                              AND assessment.organization_id =
+                                      NEW.organization_id
+                              AND assessment.role_id = role.id
+                              AND assessment.candidate_id =
+                                      application_candidate_id
+                              AND assessment.application_id =
+                                      NEW.application_id
+                        )
                     )
                 )
             )
