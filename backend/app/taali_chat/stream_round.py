@@ -46,20 +46,26 @@ def _stream_one_round(
     messages: list[dict[str, Any]],
     system: list[dict[str, Any]],
     metering: dict[str, Any],
+    tool_choice: dict[str, Any] | None = None,
+    forced_tool_name: str | None = None,
+    forced_tool_input: dict[str, Any] | None = None,
     emit_text_deltas: bool = True,
 ) -> Iterator[streaming.Frame]:
     """Stream one Anthropic call. Yields frames; returns (blocks, stop, usage)."""
-    with client.messages.stream(
-        model=model,
-        max_tokens=MAX_TOKENS_PER_TURN,
-        system=system,
-        tools=TAALI_CHAT_TOOLS,
-        messages=messages,
-        timeout=CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
+    request: dict[str, Any] = {
+        "model": model,
+        "max_tokens": MAX_TOKENS_PER_TURN,
+        "system": system,
+        "tools": TAALI_CHAT_TOOLS,
+        "messages": messages,
+        "timeout": CHAT_ROUND_IDLE_TIMEOUT_SECONDS,
         # The metered wrapper writes this paid round in its own committed
         # session, including interrupted streams when the SDK exposes usage.
-        metering=metering,
-    ) as stream:
+        "metering": metering,
+    }
+    if tool_choice is not None:
+        request["tool_choice"] = tool_choice
+    with client.messages.stream(**request) as stream:
         # Per-block accumulator for tool_use input JSON (Anthropic streams
         # arguments as ``input_json`` partial deltas; we have to glue them
         # back into a dict for the AI-SDK ``b`` frame).
@@ -76,9 +82,10 @@ def _stream_one_round(
                 if getattr(block, "type", None) == "tool_use":
                     tool_id = block.id
                     tool_args_buffer[tool_id] = ""
-                    tool_names[tool_id] = block.name
+                    tool_names[tool_id] = forced_tool_name or block.name
                     yield streaming.tool_call_streaming_start(
-                        tool_call_id=tool_id, tool_name=block.name
+                        tool_call_id=tool_id,
+                        tool_name=forced_tool_name or block.name,
                     )
 
             elif etype == "content_block_delta":
@@ -96,20 +103,30 @@ def _stream_one_round(
                     if tool_id is None:
                         continue
                     partial = delta.partial_json or ""
-                    tool_args_buffer[tool_id] = tool_args_buffer.get(tool_id, "") + partial
-                    yield streaming.tool_call_delta(
-                        tool_call_id=tool_id, args_text_delta=partial
+                    tool_args_buffer[tool_id] = (
+                        tool_args_buffer.get(tool_id, "") + partial
                     )
+                    if forced_tool_input is None:
+                        yield streaming.tool_call_delta(
+                            tool_call_id=tool_id, args_text_delta=partial
+                        )
 
             elif etype == "content_block_stop":
                 block_index = getattr(event, "index", None)
                 tool_id = _tool_id_at_index(stream, block_index)
                 if tool_id is not None and tool_id in tool_args_buffer:
-                    raw = tool_args_buffer.get(tool_id, "")
-                    try:
-                        args = json.loads(raw) if raw else {}
-                    except json.JSONDecodeError:
-                        args = {}
+                    if forced_tool_input is not None:
+                        args = dict(forced_tool_input)
+                        yield streaming.tool_call_delta(
+                            tool_call_id=tool_id,
+                            args_text_delta=json.dumps(args, default=str),
+                        )
+                    else:
+                        raw = tool_args_buffer.get(tool_id, "")
+                        try:
+                            args = json.loads(raw) if raw else {}
+                        except json.JSONDecodeError:
+                            args = {}
                     name = tool_names.get(tool_id, "")
                     yield streaming.tool_call(
                         tool_call_id=tool_id, tool_name=name, args=args

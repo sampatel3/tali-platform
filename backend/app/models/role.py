@@ -1,4 +1,17 @@
-from sqlalchemy import Boolean, JSON, Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+    event,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -43,6 +56,11 @@ class Role(Base):
     __table_args__ = (
         UniqueConstraint("organization_id", "workable_job_id", name="uq_roles_org_workable_job"),
         UniqueConstraint("organization_id", "bullhorn_job_order_id", name="uq_roles_org_bullhorn_job_order"),
+        CheckConstraint(
+            "(ats_owner_role_id IS NULL AND related_source_role_id IS NULL) "
+            "OR role_kind = 'sister'",
+            name="ck_roles_related_identity_kind",
+        ),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -281,10 +299,77 @@ class Role(Base):
         remote_side=[id],
         foreign_keys=[related_source_role_id],
     )
+
+
     assessments = relationship("Assessment", back_populates="role")
     criteria = relationship(
         "RoleCriterion",
         back_populates="role",
         cascade="all, delete-orphan",
         order_by="RoleCriterion.ordering",
+    )
+
+
+@event.listens_for(Role, "before_insert")
+@event.listens_for(Role, "before_update")
+def _normalize_related_role_identity(_mapper, _connection, role: Role) -> None:
+    """Keep every related-role marker on one unambiguous role kind.
+
+    Older rows may have an ATS/source link without the historical ``sister``
+    discriminator. Reads remain tolerant during a rolling migration, but every
+    ORM write now converges the row before the database constraint verifies it.
+    """
+
+    if (
+        role.ats_owner_role_id is not None
+        or role.related_source_role_id is not None
+    ):
+        role.role_kind = ROLE_KIND_SISTER
+
+
+@event.listens_for(Role, "after_update")
+def _clear_invalid_related_ats_links(_mapper, connection, role: Role) -> None:
+    """Fail closed when a related role's optional ATS owner changes.
+
+    Migration 185 installs the equivalent database trigger for every writer.
+    This ORM hook keeps schemas created directly from metadata (especially
+    deterministic unit-test databases) under the same transport invariant.
+    """
+
+    if role.id is None:
+        return
+    from sqlalchemy import and_, exists, select, update
+
+    from .candidate_application import CandidateApplication
+    from .sister_role_evaluation import SisterRoleEvaluation
+
+    owner_is_tenant_local = bool(
+        role.ats_owner_role_id is not None
+        and connection.scalar(
+            select(Role.id).where(
+                Role.id == int(role.ats_owner_role_id),
+                Role.organization_id == int(role.organization_id),
+            )
+        )
+    )
+    invalid_conditions = [
+        SisterRoleEvaluation.role_id == int(role.id),
+        SisterRoleEvaluation.ats_application_id.isnot(None),
+    ]
+    if owner_is_tenant_local:
+        valid_transport = exists(
+            select(CandidateApplication.id).where(
+                CandidateApplication.id == SisterRoleEvaluation.ats_application_id,
+                CandidateApplication.organization_id
+                == SisterRoleEvaluation.organization_id,
+                CandidateApplication.candidate_id
+                == SisterRoleEvaluation.candidate_id,
+                CandidateApplication.role_id == int(role.ats_owner_role_id),
+            )
+        )
+        invalid_conditions.append(~valid_transport)
+    connection.execute(
+        update(SisterRoleEvaluation)
+        .where(and_(*invalid_conditions))
+        .values(ats_application_id=None)
     )

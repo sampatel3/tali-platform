@@ -331,18 +331,29 @@ def lock_related_role_assessment_context(
             assessment=_lock_assessment_row(),
         )
 
-    ats_application = application
-    if ats_application_id is not None and ats_application_id != int(application.id):
+    ats_application = None
+    if ats_application_id is not None:
         ats_application = (
             db.query(CandidateApplication)
             .filter(
                 CandidateApplication.id == int(ats_application_id),
                 CandidateApplication.organization_id == int(organization_id),
+                CandidateApplication.candidate_id == int(application.candidate_id),
+                CandidateApplication.role_id == role.ats_owner_role_id,
+                CandidateApplication.deleted_at.is_(None),
             )
             .with_for_update(of=CandidateApplication)
             .populate_existing()
             .one_or_none()
         )
+    elif (
+        role.ats_owner_role_id is not None
+        and int(application.role_id) == int(role.ats_owner_role_id)
+        and getattr(application, "deleted_at", None) is None
+    ):
+        # Mixed-version fallback: a pre-185 membership can use its source only
+        # when that exact row already has the complete typed transport identity.
+        ats_application = application
 
     evaluation = None
     if membership_id is not None:
@@ -689,7 +700,9 @@ def apply_related_role_runtime_projection(
                 AgentDecision.organization_id == int(sister_role.organization_id),
                 AgentDecision.role_id == int(sister_role.id),
                 AgentDecision.application_id == application_id,
-                AgentDecision.status.in_(("pending", "processing")),
+                AgentDecision.status.in_(
+                    ("pending", "processing", "reverted_for_feedback")
+                ),
             )
             .order_by(AgentDecision.created_at.desc(), AgentDecision.id.desc())
             .first()
@@ -816,7 +829,7 @@ def project_related_role_page(
         db,
         application_ids,
         role_id=int(sister_role.id),
-        statuses=("pending", "processing"),
+        statuses=("pending", "processing", "reverted_for_feedback"),
     )
     return [
         project_sister_application(

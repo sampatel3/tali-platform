@@ -49,6 +49,7 @@ class CandidateRow:
     workable_stage: str | None
     bullhorn_status: str | None
     external_stage_normalized: str | None
+    ats_context: dict[str, Any]
     pending_decision_type: str | None  # None ⇒ no pending decision
     # Synced Workable recruiter comments/ratings [{author, created_at, body}],
     # newest first — only populated when load_open_candidates(with_comments=True);
@@ -145,6 +146,13 @@ def load_open_candidates(
     out: list[CandidateRow] = []
     for source_app, name_or_cand in rows:
         app = adapter(source_app) if adapter is not None else source_app
+        ats_context = getattr(app, "ats_context", None)
+        if not isinstance(ats_context, dict):
+            from ..services.ats_context_service import application_ats_context
+
+            ats_context = application_ats_context(app)
+        provider = str(ats_context.get("provider") or "native")
+        raw_stage = ats_context.get("raw_stage")
         if with_comments:
             candidate = name_or_cand
             full_name = candidate.full_name
@@ -162,9 +170,18 @@ def load_open_candidates(
                 else None,
                 recommendation=app.pre_screen_recommendation,
                 pipeline_stage=app.pipeline_stage,
-                workable_stage=app.workable_stage,
-                bullhorn_status=app.bullhorn_status,
-                external_stage_normalized=app.external_stage_normalized,
+                workable_stage=(
+                    str(raw_stage) if provider == "workable" and raw_stage else None
+                ),
+                bullhorn_status=(
+                    str(raw_stage) if provider == "bullhorn" and raw_stage else None
+                ),
+                external_stage_normalized=(
+                    str(ats_context["normalized_stage"])
+                    if ats_context.get("normalized_stage")
+                    else None
+                ),
+                ats_context=ats_context,
                 pending_decision_type=pending_by_app.get(int(app.id)),
                 comments=comments,
             )

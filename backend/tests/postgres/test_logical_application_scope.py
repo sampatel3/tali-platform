@@ -10,6 +10,7 @@ from app.candidate_search.logical_application_scope import (
 )
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
+from app.models.assessment import Assessment, AssessmentStatus
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
@@ -100,6 +101,33 @@ def test_postgres_logical_membership_union_preserves_independent_role_state(
         )
     db.flush()
 
+    # Conflicting owner/related assessment scores prove the logical selection
+    # keys technical and blended scores by the selected role, not by the
+    # physical evidence application.
+    db.add_all(
+        [
+            Assessment(
+                organization_id=int(organization.id),
+                candidate_id=int(shared_candidate.id),
+                role_id=int(owner.id),
+                application_id=int(shared.id),
+                status=AssessmentStatus.COMPLETED,
+                assessment_score=99,
+                is_voided=False,
+            ),
+            Assessment(
+                organization_id=int(organization.id),
+                candidate_id=int(shared_candidate.id),
+                role_id=int(related.id),
+                application_id=int(shared.id),
+                status=AssessmentStatus.COMPLETED,
+                assessment_score=79,
+                is_voided=False,
+            ),
+        ]
+    )
+    db.flush()
+
     selection = resolve_logical_application_selection(
         db,
         organization_id=int(organization.id),
@@ -115,16 +143,21 @@ def test_postgres_logical_membership_union_preserves_independent_role_state(
         selection.logical_role_id_expression(),
         selection.pipeline_stage_expression(),
         selection.score_expression("taali_score_cache_100"),
+        selection.score_expression("assessment_score_cache_100"),
     ).all()
     truth = {
-        (int(role_id), int(application_id)): (str(stage), float(score))
-        for application_id, role_id, stage, score in rows
+        (int(role_id), int(application_id)): (
+            str(stage),
+            float(score),
+            float(assessment_score) if assessment_score is not None else None,
+        )
+        for application_id, role_id, stage, score, assessment_score in rows
     }
 
     assert len(rows) == len(truth) == 5
-    assert truth[(int(owner.id), int(shared.id))] == ("advanced", 95.0)
-    assert truth[(int(related.id), int(shared.id))] == ("review", 41.0)
-    assert truth[(int(related.id), int(soft.id))] == ("applied", 88.0)
-    assert truth[(int(related.id), int(direct.id))] == ("invited", 77.0)
-    assert truth[(int(owner.id), int(owner_only.id))] == ("advanced", 95.0)
+    assert truth[(int(owner.id), int(shared.id))] == ("advanced", 95.0, None)
+    assert truth[(int(related.id), int(shared.id))] == ("review", 60.0, 79.0)
+    assert truth[(int(related.id), int(soft.id))] == ("applied", 88.0, None)
+    assert truth[(int(related.id), int(direct.id))] == ("invited", 77.0, None)
+    assert truth[(int(owner.id), int(owner_only.id))] == ("advanced", 95.0, None)
     assert (int(related.id), int(related_without_membership.id)) not in truth

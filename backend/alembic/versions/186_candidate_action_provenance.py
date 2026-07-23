@@ -1,8 +1,16 @@
-"""Add logical-role and effect provenance to candidate actions.
+"""Expand the immutable candidate-action ledger with logical provenance.
 
 Revision ID: 186_candidate_action_provenance
 Revises: 185_related_role_membership
 Create Date: 2026-07-22
+
+The event ledger has been database-enforced append-only since revision 143.
+Consequently this revision never rewrites historical rows.  New and mixed-
+version inserts are normalized by an insert-only trigger; readers resolve the
+nullable legacy rows from their immutable metadata, linked decision, and
+application at query time.  A later, separately deployable contraction may
+materialize that projection only if the audit-retention policy explicitly
+allows it.
 """
 
 from __future__ import annotations
@@ -17,6 +25,232 @@ branch_labels = None
 depends_on = None
 
 
+_EVENT_TRIGGER = "trg_candidate_events_resolve_provenance"
+_EVENT_FUNCTION = "resolve_candidate_event_provenance"
+
+
+def _create_event_insert_trigger() -> None:
+    """Normalize every post-expand insert without weakening append-only audit."""
+
+    op.execute(
+        f"""
+        CREATE OR REPLACE FUNCTION {_EVENT_FUNCTION}()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        DECLARE
+            application_candidate_id INTEGER;
+            application_role_id INTEGER;
+            application_organization_id INTEGER;
+            metadata_role_text TEXT;
+            metadata_decision_text TEXT;
+            metadata_role_id INTEGER;
+            requested_decision_id BIGINT;
+            resolved_decision_id BIGINT;
+            decision_role_id INTEGER;
+            resolved_role_id INTEGER;
+            role_is_authorized BOOLEAN;
+            normalized_effect_status TEXT;
+        BEGIN
+            SELECT application.candidate_id,
+                   application.role_id,
+                   application.organization_id
+            INTO application_candidate_id,
+                 application_role_id,
+                 application_organization_id
+            FROM candidate_applications AS application
+            WHERE application.id = NEW.application_id;
+
+            IF NOT FOUND THEN
+                RAISE EXCEPTION
+                    'application % does not exist', NEW.application_id
+                    USING ERRCODE = '23503';
+            END IF;
+            IF application_organization_id <> NEW.organization_id THEN
+                RAISE EXCEPTION
+                    'event organization % does not own application %',
+                    NEW.organization_id,
+                    NEW.application_id
+                    USING ERRCODE = '23514';
+            END IF;
+
+            metadata_role_text := COALESCE(
+                NEW.metadata ->> 'acting_role_id',
+                NEW.metadata ->> 'role_id',
+                ''
+            );
+            IF metadata_role_text ~ '^[1-9][0-9]{{0,9}}$'
+               AND metadata_role_text::NUMERIC <= 2147483647 THEN
+                SELECT role.id
+                INTO metadata_role_id
+                FROM roles AS role
+                WHERE role.id = metadata_role_text::INTEGER
+                  AND role.organization_id = NEW.organization_id
+                  AND (
+                      role.id = application_role_id
+                      OR EXISTS (
+                          SELECT 1
+                          FROM sister_role_evaluations AS membership
+                          WHERE membership.organization_id = NEW.organization_id
+                            AND membership.role_id = role.id
+                            AND membership.candidate_id = application_candidate_id
+                            AND membership.deleted_at IS NULL
+                            AND NEW.application_id IN (
+                                membership.source_application_id,
+                                membership.ats_application_id
+                            )
+                      )
+                  );
+            END IF;
+
+            metadata_decision_text := COALESCE(
+                NEW.metadata ->> 'agent_decision_id',
+                NEW.metadata ->> 'decision_id',
+                ''
+            );
+            IF NEW.agent_decision_id IS NOT NULL THEN
+                requested_decision_id := NEW.agent_decision_id;
+            ELSIF metadata_decision_text ~ '^[1-9][0-9]{{0,18}}$'
+                  AND metadata_decision_text::NUMERIC <= 9223372036854775807 THEN
+                requested_decision_id := metadata_decision_text::BIGINT;
+            END IF;
+
+            IF requested_decision_id IS NOT NULL THEN
+                SELECT decision.id,
+                       decision.role_id
+                INTO resolved_decision_id,
+                     decision_role_id
+                FROM agent_decisions AS decision
+                JOIN candidate_applications AS decision_application
+                  ON decision_application.id = decision.application_id
+                WHERE decision.id = requested_decision_id
+                  AND decision.organization_id = NEW.organization_id
+                  AND decision_application.organization_id = NEW.organization_id
+                  AND decision_application.candidate_id = application_candidate_id;
+            END IF;
+
+            -- A first-class FK is an explicit current-writer contract.  Legacy
+            -- JSON hints remain best-effort, but an invalid normalized value is
+            -- never silently erased.
+            IF NEW.agent_decision_id IS NOT NULL
+               AND resolved_decision_id IS NULL THEN
+                RAISE EXCEPTION
+                    'decision % is not valid provenance for application %',
+                    NEW.agent_decision_id,
+                    NEW.application_id
+                    USING ERRCODE = '23514';
+            END IF;
+
+            resolved_role_id := COALESCE(
+                NEW.role_id,
+                metadata_role_id,
+                decision_role_id,
+                application_role_id
+            );
+            SELECT (
+                role.organization_id = NEW.organization_id
+                AND (
+                    role.id = application_role_id
+                    OR EXISTS (
+                        SELECT 1
+                        FROM sister_role_evaluations AS membership
+                        WHERE membership.organization_id = NEW.organization_id
+                          AND membership.role_id = role.id
+                          AND membership.candidate_id = application_candidate_id
+                          AND membership.deleted_at IS NULL
+                          AND NEW.application_id IN (
+                              membership.source_application_id,
+                              membership.ats_application_id
+                          )
+                    )
+                )
+            )
+            INTO role_is_authorized
+            FROM roles AS role
+            WHERE role.id = resolved_role_id;
+            IF NOT COALESCE(role_is_authorized, FALSE) THEN
+                RAISE EXCEPTION
+                    'candidate % is not a live member of event role %',
+                    application_candidate_id,
+                    resolved_role_id
+                    USING ERRCODE = '23514';
+            END IF;
+
+            IF resolved_decision_id IS NOT NULL
+               AND decision_role_id <> resolved_role_id THEN
+                IF NEW.agent_decision_id IS NOT NULL THEN
+                    RAISE EXCEPTION
+                        'decision % belongs to role %, not event role %',
+                        resolved_decision_id,
+                        decision_role_id,
+                        resolved_role_id
+                        USING ERRCODE = '23514';
+                END IF;
+                resolved_decision_id := NULL;
+            END IF;
+
+            normalized_effect_status := LOWER(BTRIM(COALESCE(NEW.effect_status, '')));
+            IF normalized_effect_status = '' THEN
+                normalized_effect_status := CASE
+                    WHEN LOWER(NEW.event_type) LIKE '%failed%'
+                      OR LOWER(NEW.event_type) LIKE '%error%' THEN 'failed'
+                    WHEN LOWER(NEW.event_type) LIKE '%skipped%' THEN 'skipped'
+                    WHEN LOWER(NEW.event_type) IN (
+                        'pipeline_stage_changed',
+                        'application_outcome_changed',
+                        'role_pipeline_stage_changed',
+                        'role_application_outcome_changed',
+                        'workable_moved',
+                        'bullhorn_moved',
+                        'workable_disqualified',
+                        'bullhorn_rejected',
+                        'assessment_invite_sent',
+                        'assessment_invite_resent'
+                    ) THEN 'confirmed'
+                    ELSE NULL
+                END;
+            END IF;
+
+            NEW.role_id := resolved_role_id;
+            NEW.agent_decision_id := resolved_decision_id;
+            -- Requested ATS transport targets often travel in the metadata of
+            -- the preceding Tali pipeline transition.  They are intent, not
+            -- proof that the provider move happened.  Keep each event's target
+            -- tied to the system whose effect it actually confirms.
+            NEW.target_stage := CASE
+                WHEN LOWER(NEW.event_type) IN (
+                    'pipeline_stage_changed',
+                    'role_pipeline_stage_changed'
+                ) THEN NULLIF(BTRIM(NEW.to_stage), '')
+                WHEN LOWER(NEW.event_type) IN (
+                    'application_outcome_changed',
+                    'role_application_outcome_changed'
+                ) THEN NULLIF(BTRIM(NEW.to_outcome), '')
+                ELSE COALESCE(
+                    NULLIF(BTRIM(NEW.target_stage), ''),
+                    NULLIF(BTRIM(NEW.metadata ->> 'target_stage'), ''),
+                    NULLIF(BTRIM(NEW.metadata ->> 'workable_target_stage'), ''),
+                    NULLIF(BTRIM(NEW.metadata ->> 'bullhorn_status'), ''),
+                    NULLIF(BTRIM(NEW.to_stage), ''),
+                    NULLIF(BTRIM(NEW.to_outcome), '')
+                )
+            END;
+            NEW.effect_status := normalized_effect_status;
+            RETURN NEW;
+        END;
+        $$
+        """
+    )
+    op.execute(
+        f"""
+        CREATE TRIGGER {_EVENT_TRIGGER}
+        BEFORE INSERT ON candidate_application_events
+        FOR EACH ROW
+        EXECUTE FUNCTION {_EVENT_FUNCTION}()
+        """
+    )
+
+
 def upgrade() -> None:
     op.add_column(
         "agent_decisions",
@@ -27,6 +261,9 @@ def upgrade() -> None:
             server_default="{}",
         ),
     )
+    # Nullable is deliberate: revision 143 made historical events immutable.
+    # All new inserts are populated by the trigger below; old rows are resolved
+    # from their original evidence by the action-history reader.
     op.add_column(
         "candidate_application_events",
         sa.Column("role_id", sa.Integer(), nullable=True),
@@ -43,198 +280,26 @@ def upgrade() -> None:
         "candidate_application_events",
         sa.Column("effect_status", sa.String(), nullable=True),
     )
-
-    # Every historical event already belongs to a concrete application.  Use
-    # the explicitly recorded acting role when it is a valid role in the same
-    # organization; otherwise retain the application's role.  JSON values are
-    # length- and digit-guarded before casts so malformed legacy metadata cannot
-    # abort the production migration.
     op.execute(
         """
-        UPDATE candidate_application_events AS event
-        SET role_id = COALESCE(
-                (
-                    SELECT role.id
-                    FROM roles AS role
-                    WHERE role.organization_id = event.organization_id
-                      AND role.id = CASE
-                          WHEN COALESCE(event.metadata ->> 'acting_role_id', '')
-                                   ~ '^[1-9][0-9]{0,8}$'
-                          THEN (event.metadata ->> 'acting_role_id')::INTEGER
-                          WHEN COALESCE(event.metadata ->> 'role_id', '')
-                                   ~ '^[1-9][0-9]{0,8}$'
-                          THEN (event.metadata ->> 'role_id')::INTEGER
-                          ELSE NULL
-                      END
-                ),
-                application.role_id
-            ),
-            agent_decision_id = (
-                SELECT decision.id
-                FROM agent_decisions AS decision
-                WHERE decision.organization_id = event.organization_id
-                  AND decision.application_id = event.application_id
-                  AND decision.id = CASE
-                      WHEN COALESCE(event.metadata ->> 'agent_decision_id', '')
-                               ~ '^[1-9][0-9]{0,17}$'
-                      THEN (event.metadata ->> 'agent_decision_id')::BIGINT
-                      WHEN COALESCE(event.metadata ->> 'decision_id', '')
-                               ~ '^[1-9][0-9]{0,17}$'
-                      THEN (event.metadata ->> 'decision_id')::BIGINT
-                      ELSE NULL
-                  END
-            ),
-            target_stage = COALESCE(
-                NULLIF(BTRIM(event.metadata ->> 'target_stage'), ''),
-                NULLIF(BTRIM(event.metadata ->> 'workable_target_stage'), ''),
-                NULLIF(BTRIM(event.to_stage), ''),
-                NULLIF(BTRIM(event.to_outcome), '')
-            ),
-            effect_status = CASE
-                WHEN LOWER(event.event_type) LIKE '%failed%' THEN 'failed'
-                WHEN LOWER(event.event_type) LIKE '%skipped%' THEN 'skipped'
-                WHEN LOWER(event.event_type) IN (
-                    'pipeline_stage_changed',
-                    'application_outcome_changed',
-                    'role_pipeline_stage_changed',
-                    'role_application_outcome_changed',
-                    'workable_moved',
-                    'bullhorn_moved',
-                    'workable_disqualified',
-                    'bullhorn_rejected',
-                    'assessment_invite_sent',
-                    'assessment_invite_resent'
-                ) THEN 'confirmed'
-                ELSE NULL
-            END
-        FROM candidate_applications AS application
-        WHERE application.id = event.application_id
+        ALTER TABLE candidate_application_events
+        ADD CONSTRAINT fk_candidate_application_events_role_id
+        FOREIGN KEY (role_id) REFERENCES roles(id) NOT VALID
         """
     )
-
-    op.alter_column(
-        "candidate_application_events",
-        "role_id",
-        existing_type=sa.Integer(),
-        nullable=False,
-    )
-    op.create_foreign_key(
-        "fk_candidate_application_events_role_id",
-        "candidate_application_events",
-        "roles",
-        ["role_id"],
-        ["id"],
-    )
-    op.create_foreign_key(
-        "fk_candidate_application_events_agent_decision_id",
-        "candidate_application_events",
-        "agent_decisions",
-        ["agent_decision_id"],
-        ["id"],
-    )
-    op.create_index(
-        "ix_candidate_application_events_role_id",
-        "candidate_application_events",
-        ["role_id"],
-    )
-    op.create_index(
-        "ix_candidate_application_events_agent_decision_id",
-        "candidate_application_events",
-        ["agent_decision_id"],
-    )
-    op.create_index(
-        "ix_application_events_org_role_created",
-        "candidate_application_events",
-        ["organization_id", "role_id", "created_at"],
-    )
-    op.drop_constraint(
-        "uq_application_event_idempotency_key",
-        "candidate_application_events",
-        type_="unique",
-    )
-    op.create_unique_constraint(
-        "uq_application_event_role_idempotency_key",
-        "candidate_application_events",
-        ["application_id", "role_id", "idempotency_key"],
-    )
-
-    # Queue admission also serializes the logical application, but retain a
-    # database invariant as the final defence against alternate producers or
-    # worker races. Preserve every historical row and close only redundant
-    # active cards, preferring an already-processing action over a pending one.
     op.execute(
         """
-        WITH ranked AS (
-            SELECT id,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY role_id, application_id
-                       ORDER BY CASE WHEN status = 'processing' THEN 0 ELSE 1 END,
-                                created_at DESC,
-                                id DESC
-                   ) AS active_rank
-            FROM agent_decisions
-            WHERE status IN ('pending', 'processing')
-        )
-        UPDATE agent_decisions AS decision
-        SET status = 'discarded',
-            resolved_at = COALESCE(decision.resolved_at, CURRENT_TIMESTAMP),
-            resolution_note = COALESCE(
-                NULLIF(BTRIM(decision.resolution_note), ''),
-                'Superseded during active-decision uniqueness migration'
-            )
-        FROM ranked
-        WHERE decision.id = ranked.id
-          AND ranked.active_rank > 1
+        ALTER TABLE candidate_application_events
+        ADD CONSTRAINT fk_candidate_application_events_agent_decision_id
+        FOREIGN KEY (agent_decision_id) REFERENCES agent_decisions(id) NOT VALID
         """
     )
-    op.create_index(
-        "uq_agent_decisions_active_role_application",
-        "agent_decisions",
-        ["role_id", "application_id"],
-        unique=True,
-        postgresql_where=sa.text("status IN ('pending', 'processing')"),
-    )
+    _create_event_insert_trigger()
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "uq_agent_decisions_active_role_application",
-        table_name="agent_decisions",
+    raise RuntimeError(
+        "candidate action provenance is append-only and cannot be removed "
+        "without losing logical-role audit truth; roll application code back "
+        "against the forward-compatible schema instead"
     )
-    op.drop_constraint(
-        "uq_application_event_role_idempotency_key",
-        "candidate_application_events",
-        type_="unique",
-    )
-    op.create_unique_constraint(
-        "uq_application_event_idempotency_key",
-        "candidate_application_events",
-        ["application_id", "idempotency_key"],
-    )
-    op.drop_index(
-        "ix_application_events_org_role_created",
-        table_name="candidate_application_events",
-    )
-    op.drop_index(
-        "ix_candidate_application_events_agent_decision_id",
-        table_name="candidate_application_events",
-    )
-    op.drop_index(
-        "ix_candidate_application_events_role_id",
-        table_name="candidate_application_events",
-    )
-    op.drop_constraint(
-        "fk_candidate_application_events_agent_decision_id",
-        "candidate_application_events",
-        type_="foreignkey",
-    )
-    op.drop_constraint(
-        "fk_candidate_application_events_role_id",
-        "candidate_application_events",
-        type_="foreignkey",
-    )
-    op.drop_column("candidate_application_events", "effect_status")
-    op.drop_column("candidate_application_events", "target_stage")
-    op.drop_column("candidate_application_events", "agent_decision_id")
-    op.drop_column("candidate_application_events", "role_id")
-    op.drop_column("agent_decisions", "resolution_metadata")

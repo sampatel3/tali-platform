@@ -128,4 +128,43 @@ describe('useReportInFlight role-scoped polling', () => {
     expect(loadStandingReport).not.toHaveBeenCalled();
     unmount();
   });
+
+  it('reloads CV text when the same application is viewed in another logical role', async () => {
+    vi.useRealTimers();
+    const getApplication = vi.fn()
+      .mockResolvedValueOnce({ data: { cv_text: 'Role A CV' } })
+      .mockResolvedValueOnce({ data: { cv_text: 'Role B CV' } });
+    const setApplication = vi.fn();
+    const shared = {
+      rolesApi: { getApplication },
+      numericApplicationId: 77,
+      isShareRoute: false,
+      activeTab: 'cv',
+      agentDecision: null,
+      evaluating: false,
+      setEvaluating: vi.fn(),
+      setApplication,
+      loadAgentDecision: vi.fn(),
+      loadStandingReport: vi.fn(),
+    };
+    const { rerender, unmount } = renderHook(({ roleId }) => useReportInFlight({
+      ...shared,
+      viewRoleId: roleId,
+      application: { id: 77, role_id: roleId, cv_match_score: 68 },
+    }), { initialProps: { roleId: 31 } });
+
+    await act(async () => { await Promise.resolve(); });
+    expect(getApplication).toHaveBeenNthCalledWith(1, 77, {
+      params: { include_cv_text: true, view_role_id: 31 },
+    });
+
+    rerender({ roleId: 135 });
+    await act(async () => { await Promise.resolve(); });
+
+    expect(getApplication).toHaveBeenNthCalledWith(2, 77, {
+      params: { include_cv_text: true, view_role_id: 135 },
+    });
+    expect(setApplication).toHaveBeenCalledTimes(2);
+    unmount();
+  });
 });

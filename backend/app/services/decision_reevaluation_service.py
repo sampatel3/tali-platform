@@ -249,6 +249,9 @@ def re_evaluate_related_decision(
             .filter(
                 CandidateApplication.id == ats_application_id,
                 CandidateApplication.organization_id == organization_id,
+                CandidateApplication.candidate_id
+                == int(locked_application.candidate_id),
+                CandidateApplication.role_id == locked_role.ats_owner_role_id,
             )
             .with_for_update(of=CandidateApplication)
             .scalar()

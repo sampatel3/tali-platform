@@ -35,9 +35,7 @@ def test_catalog_names_are_unique_and_chat_is_generated_from_catalog():
 def test_chat_handler_resolution_has_exact_catalog_parity():
     from app.taali_chat.tool_registry import _HANDLER_BY_NAME
 
-    assert set(_HANDLER_BY_NAME) == {
-        spec.name for spec in tools_for(TAALI_CHAT)
-    }
+    assert set(_HANDLER_BY_NAME) == {spec.name for spec in tools_for(TAALI_CHAT)}
     assert all(callable(handler) for handler in _HANDLER_BY_NAME.values())
 
 
@@ -51,6 +49,8 @@ def test_public_mcp_is_an_explicit_catalog_subset():
         "get_role_candidate",
         "get_candidate",
         "compare_applications",
+        "compare_role_applications",
+        "find_top_candidates",
         "nl_search_candidates",
         "graph_search_candidates",
         "get_candidate_cv",
@@ -62,15 +62,14 @@ def test_public_mcp_is_an_explicit_catalog_subset():
 
 
 def test_search_contract_supports_real_pipeline_and_pagination():
-    args = get_tool_spec("search_applications").validate(
+    search_spec = get_tool_spec("search_applications")
+    args = search_spec.validate(
         {"pipeline_stage": "sourced", "offset": 25, "limit": 25}
     )
     assert args["pipeline_stage"] == "sourced"
     assert args["offset"] == 25
 
-    args = get_tool_spec("search_applications").validate(
-        {"pipeline_stage": "advanced"}
-    )
+    args = get_tool_spec("search_applications").validate({"pipeline_stage": "advanced"})
     assert args["pipeline_stage"] == "advanced"
 
     args = get_tool_spec("search_applications").validate(
@@ -82,6 +81,14 @@ def test_search_contract_supports_real_pipeline_and_pagination():
         {"query": "worked at Stripe", "role_id": 42, "limit": 10}
     )
     assert graph_args == {"query": "worked at Stripe", "role_id": 42, "limit": 10}
+
+    from app.taali_chat.system_prompt import SYSTEM_PROMPT
+
+    search_description = search_spec.description.lower()
+    assert "returns a row array" in search_description
+    assert "page is shorter than limit" in search_description
+    assert "Global `search_applications` returns a row" in SYSTEM_PROMPT
+    assert "contains fewer rows than `limit`" in SYSTEM_PROMPT
 
 
 @pytest.mark.parametrize(
@@ -218,8 +225,7 @@ def _semantic_contract(value):
         for key, item in value.items():
             if key == "properties" and isinstance(item, dict):
                 result[key] = {
-                    name: _semantic_contract(schema)
-                    for name, schema in item.items()
+                    name: _semantic_contract(schema) for name, schema in item.items()
                 }
             elif key in keys:
                 result[key] = _semantic_contract(item)

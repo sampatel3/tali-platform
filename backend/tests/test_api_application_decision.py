@@ -1,4 +1,4 @@
-"""API tests for the application-level manual decision endpoint.
+"""API tests for the logical-role application manual decision endpoint.
 
 Covers recording/updating a recruiter decision for a candidate with NO
 assessment linked (e.g. rejected at CV stage): PATCH
@@ -6,6 +6,12 @@ assessment linked (e.g. rejected at CV stage): PATCH
 optimistic locking, validation, org scoping, and the GET round-trip.
 """
 
+from datetime import datetime, timezone
+
+from app.models.candidate_application import CandidateApplication
+from app.models.candidate_application_event import CandidateApplicationEvent
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from tests.conftest import auth_headers
 
 
@@ -151,3 +157,194 @@ def test_application_manual_decision_is_org_scoped(client):
         json={"decision": "advance", "rationale": "x", "confidence": "low"},
     )
     assert forbidden.status_code == 404, forbidden.text
+
+
+def test_owner_and_related_manual_decisions_are_independent(client, db):
+    headers, _ = auth_headers(client)
+    app_payload = _create_application(
+        client,
+        headers,
+        candidate_email="independent-decisions@example.com",
+    )
+    application = db.get(CandidateApplication, int(app_payload["id"]))
+    owner = db.get(Role, int(application.role_id))
+    related = Role(
+        organization_id=int(application.organization_id),
+        name="Independent decision role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        related_source_role_id=int(owner.id),
+        ats_owner_role_id=int(owner.id),
+        job_spec_text="Independent logical role decision specification",
+    )
+    db.add(related)
+    db.flush()
+    membership = SisterRoleEvaluation(
+        organization_id=int(application.organization_id),
+        role_id=int(related.id),
+        candidate_id=int(application.candidate_id),
+        source_application_id=int(application.id),
+        ats_application_id=int(application.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="initial_snapshot",
+        spec_fingerprint="independent-manual-decision",
+        role_fit_score=84,
+    )
+    db.add(membership)
+    db.commit()
+
+    owner_update = client.patch(
+        f"/api/v1/applications/{application.id}/manual-decision",
+        headers=headers,
+        json={
+            "status": "submitted",
+            "decision": "advance",
+            "rationale": "Owner-role evidence supports advancing.",
+            "confidence": "high",
+        },
+    )
+    related_update = client.patch(
+        f"/api/v1/applications/{application.id}/manual-decision",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+        json={
+            "status": "submitted",
+            "decision": "reject",
+            "rationale": "Related-role requirements are not met.",
+            "confidence": "high",
+        },
+    )
+    assert owner_update.status_code == 200, owner_update.text
+    assert related_update.status_code == 200, related_update.text
+
+    owner_detail = client.get(
+        f"/api/v1/applications/{application.id}",
+        headers=headers,
+    )
+    related_detail = client.get(
+        f"/api/v1/applications/{application.id}",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert owner_detail.status_code == 200, owner_detail.text
+    assert related_detail.status_code == 200, related_detail.text
+    assert owner_detail.json()["manual_decision"]["decision"] == "advance"
+    assert related_detail.json()["manual_decision"]["decision"] == "reject"
+
+    db.expire_all()
+    application = db.get(CandidateApplication, int(application.id))
+    membership = db.get(SisterRoleEvaluation, int(membership.id))
+    assert application.manual_decision["decision"] == "advance"
+    assert membership.manual_decision["decision"] == "reject"
+    event_role_ids = {
+        int(role_id)
+        for (role_id,) in db.query(CandidateApplicationEvent.role_id)
+        .filter(
+            CandidateApplicationEvent.application_id == int(application.id),
+            CandidateApplicationEvent.event_type == "manual_decision_recorded",
+        )
+        .all()
+    }
+    assert event_role_ids == {int(owner.id), int(related.id)}
+
+
+def test_related_timeline_uses_historical_membership_authority(client, db):
+    headers, _ = auth_headers(client)
+    app_payload = _create_application(
+        client,
+        headers,
+        candidate_email="historical-related-timeline@example.com",
+    )
+    application = db.get(CandidateApplication, int(app_payload["id"]))
+    owner = db.get(Role, int(application.role_id))
+    related = Role(
+        organization_id=int(application.organization_id),
+        name="Historical timeline role",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        related_source_role_id=int(owner.id),
+        ats_owner_role_id=int(owner.id),
+        job_spec_text="Independent timeline role",
+    )
+    unrelated = Role(
+        organization_id=int(application.organization_id),
+        name="Unrelated role",
+        source="manual",
+    )
+    db.add_all([related, unrelated])
+    db.flush()
+    membership = SisterRoleEvaluation(
+        organization_id=int(application.organization_id),
+        role_id=int(related.id),
+        candidate_id=int(application.candidate_id),
+        source_application_id=int(application.id),
+        ats_application_id=int(application.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="initial_snapshot",
+        spec_fingerprint="historical-timeline",
+        role_fit_score=61,
+    )
+    db.add(membership)
+    db.commit()
+
+    recorded = client.patch(
+        f"/api/v1/applications/{application.id}/manual-decision",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+        json={
+            "status": "submitted",
+            "decision": "hold",
+            "rationale": "Keep this role-local audit marker.",
+            "confidence": "medium",
+        },
+    )
+    assert recorded.status_code == 200, recorded.text
+
+    # An unrelated role cannot borrow the source application's identity to read
+    # another role's event stream.
+    unrelated_history = client.get(
+        f"/api/v1/applications/{application.id}/events",
+        params={"role_id": int(unrelated.id)},
+        headers=headers,
+    )
+    assert unrelated_history.status_code == 404, unrelated_history.text
+
+    # Source/evidence deletion does not remove a live independent membership.
+    application.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    live_history = client.get(
+        f"/api/v1/applications/{application.id}/events",
+        params={"role_id": int(related.id)},
+        headers=headers,
+    )
+    assert live_history.status_code == 200, live_history.text
+    assert "manual_decision_recorded" in {
+        event["event_type"] for event in live_history.json()
+    }
+    live_detail = client.get(
+        f"/api/v1/applications/{application.id}",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert live_detail.status_code == 200, live_detail.text
+
+    # Removing membership closes current-state access, while its immutable,
+    # role-attributed audit events remain readable to an authorized role viewer.
+    membership.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    historical = client.get(
+        f"/api/v1/applications/{application.id}/events",
+        params={"role_id": int(related.id)},
+        headers=headers,
+    )
+    assert historical.status_code == 200, historical.text
+    removed_detail = client.get(
+        f"/api/v1/applications/{application.id}",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert removed_detail.status_code == 404, removed_detail.text

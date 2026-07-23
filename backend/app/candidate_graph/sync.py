@@ -23,6 +23,7 @@ from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.application_interview import ApplicationInterview
 from . import client as graph_client
 from . import episodes as episode_module
+from .event_identity import logical_event_role_id
 
 logger = logging.getLogger("taali.candidate_graph.sync")
 
@@ -249,10 +250,17 @@ def sync_event(
 
     ``bill_organization_id`` attributes graph_sync spend to the org. When it is
     omitted we fall back to the event's own organization_id, then its
-    application chain.
+    application chain. Event-role provenance is authoritative: an explicit
+    billing role must match it, and role admission is always required. The
+    ``require_role_admission`` argument remains for call-site compatibility.
     """
     if not graph_client.is_configured():
         return 0
+    logical_role_id = logical_event_role_id(event)
+    if logical_role_id is None:
+        return 0
+    if bill_role_id is not None and int(bill_role_id) != logical_role_id:
+        raise ValueError("bill_role_id does not match event logical role")
     episode = episode_module.build_event_episode(event)
     if episode is None:
         return 0
@@ -270,10 +278,10 @@ def sync_event(
     return episode_module.dispatch(
         [episode],
         bill_organization_id=bill_org_id,
-        bill_role_id=bill_role_id,
+        bill_role_id=logical_role_id,
         bill_trace_id=f"graph-event-sync:{int(event.id)}",
         require_hard_admission=bill_org_id is not None,
-        require_role_admission=bool(require_role_admission),
+        require_role_admission=True,
         raise_on_error=bool(raise_on_error),
     )
 
@@ -380,7 +388,7 @@ def sync_organization(
     )
     out["events"]["total"] = len(events)
     for event in events:
-        role_id = getattr(getattr(event, "application", None), "role_id", None)
+        role_id = logical_event_role_id(event)
         out["events"]["episodes"] += sync_event(
             event,
             bill_organization_id=organization_id,

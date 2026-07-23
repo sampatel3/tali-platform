@@ -34,7 +34,7 @@ from ...domains.assessments_runtime.job_authorization import (
     require_job_permission,
 )
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
-from ...models.assessment import Assessment, AssessmentStatus
+from ...models.assessment import Assessment
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
@@ -109,6 +109,21 @@ from ...services.cv_score_orchestrator import (
     latest_score_status,
 )
 from ...services.interview_support_service import refresh_application_interview_support
+from ...services.logical_role_application_authority import (
+    LogicalRoleApplicationAuthorizationError,
+    LogicalRoleApplicationContext,
+    authorize_historical_logical_role_application,
+    authorize_logical_role_application,
+)
+from ...services.logical_role_batch_operations import (
+    context_fetch_transport,
+    context_has_cv,
+    filter_contexts_applied_after,
+    is_related_role,
+    logical_role_contexts,
+    parse_applied_after,
+    related_score_targets,
+)
 from ...services.pre_screening_service import refresh_pre_screening_fields
 from ...services.pending_decision_projection import pending_decision_map as _pending_decision_map
 from ...services.related_role_application_runtime import project_related_role_page
@@ -132,6 +147,8 @@ from .application_search_support import (
     normalize_taali_score_for_filter as _normalize_taali_score_for_filter,
     parse_choice_csv_filter as _parse_choice_csv_filter,
 )
+from . import batch_runtime_state as _batch_runtime_state
+from . import role_process_scope as _role_process_scope
 from .global_application_search_service import list_applications_global_data
 from .search_canary_auth import SearchCanaryPrincipal, get_applications_search_principal
 from .role_support import (
@@ -148,19 +165,63 @@ from .related_role_assessment_support import (
     latest_active_assessment_for_role as _latest_active_assessment_for_application,
 )
 from .related_role_actions import require_application_action_permission
+from .pipeline_event_service import (
+    event_to_payload as _event_to_payload,
+    list_application_events,
+)
 from .pipeline_service import (
-    _event_to_payload,
     append_application_event,
     apply_legacy_status_update,
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
-    list_application_events,
     transition_outcome,
     transition_stage,
 )
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
+
+
+def _logical_role_contexts_or_400(
+    db: Session,
+    *,
+    role: Role,
+    application_ids: list[int] | None = None,
+):
+    """Resolve a role-owned pool and fail a forged selection atomically."""
+
+    try:
+        return logical_role_contexts(
+            db,
+            role=role,
+            application_ids=application_ids,
+        )
+    except (LogicalRoleApplicationAuthorizationError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _related_role_rescreen_or_409(
+    db: Session,
+    *,
+    role: Role,
+    application_ids: list[int],
+    reason: str,
+):
+    from ...services.related_role_rescreen_service import (
+        RelatedRoleRescreenUnavailableError,
+        rescreen_related_role_candidates,
+    )
+
+    try:
+        return rescreen_related_role_candidates(
+            db,
+            role,
+            reason=reason,
+            application_ids=application_ids,
+            require_all_memberships=True,
+        )
+    except RelatedRoleRescreenUnavailableError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _direct_related_role_id(
@@ -219,6 +280,43 @@ def _require_application_job_permission(
         lock_for_update=lock_for_update,
     )
     return app
+
+
+def _require_logical_application_job_permission(
+    db: Session,
+    *,
+    current_user: User,
+    application_id: int,
+    view_role_id: int | None,
+    permission: JobPermission,
+) -> LogicalRoleApplicationContext:
+    """Authorize one candidate mutation against its explicit logical role."""
+
+    if view_role_id is None:
+        source = get_application(application_id, current_user.organization_id, db)
+        role_id = int(source.role_id)
+    else:
+        # Related-role membership survives deletion of its source/evidence row;
+        # resolve through the explicit role before applying application-row
+        # lifecycle rules.
+        role_id = int(view_role_id)
+    role = require_job_permission(
+        db,
+        current_user=current_user,
+        role_id=role_id,
+        permission=permission,
+    )
+    try:
+        return authorize_logical_role_application(
+            db,
+            role=role,
+            application_id=int(application_id),
+        )
+    except LogicalRoleApplicationAuthorizationError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Candidate does not belong to this role",
+        ) from exc
 
 
 def _application_is_workable_linked(app: CandidateApplication) -> bool:
@@ -1204,7 +1302,87 @@ def link_fireflies_interview(
     return _application_interview_response(interview)
 
 
-def _application_report_cache_key(app: CandidateApplication) -> str:
+class _RoleLocalReportApplication:
+    """Read-only export facade with logical-role-owned runtime relationships.
+
+    A related role may reuse a physical application as CV evidence, but the
+    application's interviews and assessments belong to the role that created
+    them.  Report builders historically traversed those relationships directly,
+    so presenting the related-role score proxy alone still leaked owner-role
+    history.  This facade keeps the canonical related-role projection while
+    replacing relationship-backed history with the exact logical-role rows.
+    """
+
+    def __init__(
+        self,
+        application,
+        *,
+        assessments: list[Assessment],
+        interviews: list[ApplicationInterview],
+    ) -> None:
+        self._application = application
+        self.assessments = assessments
+        self.interviews = interviews
+
+    def __getattr__(self, name: str):
+        return getattr(self._application, name)
+
+
+def _role_local_report_application(
+    db: Session,
+    context: LogicalRoleApplicationContext,
+):
+    application = context.presented_application
+    if not context.is_related:
+        return application
+    assessments = (
+        db.query(Assessment)
+        .options(joinedload(Assessment.task))
+        .filter(
+            Assessment.organization_id == int(context.role.organization_id),
+            Assessment.role_id == int(context.role.id),
+            # Assessment ownership is the durable logical (role, candidate)
+            # pair. ``application_id`` is only the source row that happened to
+            # be active when the invite was created and can change when an
+            # owner-backed membership becomes a direct related application.
+            Assessment.candidate_id == int(context.candidate_id),
+            Assessment.is_voided.is_(False),
+        )
+        .order_by(Assessment.created_at.desc(), Assessment.id.desc())
+        .all()
+    )
+    # ApplicationInterview currently inherits role identity from its physical
+    # application. That is authoritative only for a direct application owned
+    # by this logical role; an owner-backed evidence row cannot donate interview
+    # history to an independent related role.
+    interviews = (
+        db.query(ApplicationInterview)
+        .filter(
+            ApplicationInterview.organization_id
+            == int(context.role.organization_id),
+            ApplicationInterview.application_id
+            == int(context.source_application.id),
+        )
+        .order_by(
+            ApplicationInterview.meeting_date.desc(),
+            ApplicationInterview.id.desc(),
+        )
+        .all()
+        if int(context.source_application.role_id) == int(context.role.id)
+        else []
+    )
+    return _RoleLocalReportApplication(
+        application,
+        assessments=assessments,
+        interviews=interviews,
+    )
+
+
+def _application_report_cache_key(
+    context: LogicalRoleApplicationContext,
+    *,
+    report_application=None,
+) -> str:
     """Deterministic key for the cached PDF artefact.
 
     Combines the timestamps that mutate when the report's contents
@@ -1214,24 +1392,104 @@ def _application_report_cache_key(app: CandidateApplication) -> str:
     def _ts(value) -> str:
         return value.isoformat() if value else "0"
 
-    role = getattr(app, "role", None)
+    app = context.source_application
+    role = context.role
+    membership = context.related_evaluation
     parts = [
-        str(app.id or 0),
+        f"organization:{int(role.organization_id)}",
+        f"role:{int(role.id)}",
+        f"application:{int(app.id)}",
+        f"membership:{int(membership.id) if membership is not None else 'ordinary'}",
+        f"membership-version:{int(membership.version or 1) if membership is not None else int(app.version or 1)}",
+        f"spec:{getattr(membership, 'spec_fingerprint', None) or ''}",
+        f"cv:{getattr(membership, 'cv_fingerprint', None) or ''}",
         _ts(app.updated_at or app.created_at),
-        _ts(getattr(app, "score_cached_at", None)),
-        _ts(getattr(app, "cv_match_scored_at", None)),
-        _ts(getattr(role, "updated_at", None) if role else None),
+        _ts(getattr(membership, "updated_at", None)),
+        _ts(getattr(membership, "scored_at", None)),
+        _ts(getattr(role, "updated_at", None) or getattr(role, "created_at", None)),
     ]
+    # Relationship rows can change without touching the physical application
+    # or related membership. Bind every report-owned assessment/interview to
+    # the artefact key so a completed assessment or newly linked transcript can
+    # never reuse an older PDF. Related-role facades expose only role-local
+    # relationships, so owner history cannot influence this fingerprint.
+    # Callers that have not built the role-local relationship facade still get
+    # a role/membership-safe identity key; they must not fall back to inherited
+    # physical relationships for a related role.
+    report_subject = report_application
+    for assessment in sorted(
+        list(getattr(report_subject, "assessments", None) or []),
+        key=lambda item: int(getattr(item, "id", 0) or 0),
+    ):
+        assessment_status = getattr(assessment, "status", None)
+        parts.append(
+            "assessment:"
+            + ":".join(
+                [
+                    str(int(getattr(assessment, "id", 0) or 0)),
+                    str(
+                        getattr(assessment_status, "value", None)
+                        or assessment_status
+                        or ""
+                    ),
+                    _ts(
+                        getattr(assessment, "updated_at", None)
+                        or getattr(assessment, "completed_at", None)
+                        or getattr(assessment, "created_at", None)
+                    ),
+                    str(getattr(assessment, "taali_score", None) or ""),
+                    str(getattr(assessment, "final_score", None) or ""),
+                    str(getattr(assessment, "assessment_score", None) or ""),
+                    str(getattr(assessment, "score", None) or ""),
+                ]
+            )
+        )
+    for interview in sorted(
+        list(getattr(report_subject, "interviews", None) or []),
+        key=lambda item: int(getattr(item, "id", 0) or 0),
+    ):
+        content = "|".join(
+            [
+                str(getattr(interview, "summary", None) or ""),
+                str(getattr(interview, "transcript_text", None) or ""),
+                str(getattr(interview, "provider_url", None) or ""),
+            ]
+        )
+        parts.append(
+            "interview:"
+            + ":".join(
+                [
+                    str(int(getattr(interview, "id", 0) or 0)),
+                    _ts(
+                        getattr(interview, "updated_at", None)
+                        or getattr(interview, "linked_at", None)
+                        or getattr(interview, "meeting_date", None)
+                    ),
+                    hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                ]
+            )
+        )
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
 @router.get("/applications/{application_id}/report.pdf")
 def download_application_report_pdf(
     application_id: int,
+    view_role_id: int | None = Query(
+        default=None,
+        description="Logical role whose independent candidate report is requested.",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
+    context = _require_logical_application_job_permission(
+        db,
+        current_user=current_user,
+        application_id=application_id,
+        view_role_id=view_role_id,
+        permission=JobPermission.VIEW,
+    )
+    app = _role_local_report_application(db, context)
     candidate_name = (
         (app.candidate.full_name if getattr(app, "candidate", None) else None)
         or (app.candidate.email if getattr(app, "candidate", None) else "Candidate")
@@ -1245,7 +1503,10 @@ def download_application_report_pdf(
     # snapshot already exists in S3, redirect to a presigned URL so the
     # browser fetches it directly. Skips the 2-10s rebuild on every
     # repeat download.
-    cache_key = _application_report_cache_key(app)
+    cache_key = _application_report_cache_key(
+        context,
+        report_application=app,
+    )
     s3_key = f"cached/reports/{cache_key}.pdf"
     try:
         from ...services.s3_service import (
@@ -1478,26 +1739,34 @@ def update_application(
 def update_application_manual_decision(
     application_id: int,
     body: Dict[str, Any] = Body(...),
+    view_role_id: int | None = Query(
+        default=None,
+        description="Logical role whose independent candidate decision is being edited.",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Record/update a recruiter's manual decision on an application.
 
     Mirrors the assessment-backed ``PATCH /assessments/{id}/manual-evaluation``
-    but persists against the application itself, so a candidate with no
-    assessment linked (e.g. rejected at CV stage) can still have a decision
-    recorded and updated. PATCH is an idempotent upsert; an optimistic
+    but persists against the exact logical role membership, so a candidate
+    shared with an ATS owner and an independent related role can hold different
+    decisions in each. PATCH is an idempotent upsert; an optimistic
     ``expected_version`` guard prevents two recruiters silently clobbering each
     other's edit.
     """
-    app = _require_application_job_permission(
+    context = _require_logical_application_job_permission(
         db,
         current_user=current_user,
         application_id=application_id,
+        view_role_id=view_role_id,
         permission=JobPermission.EDIT_ROLE,
     )
+    app = context.source_application
+    decision_owner = context.related_evaluation or app
 
-    stored = app.manual_decision if isinstance(app.manual_decision, dict) else {}
+    stored_value = getattr(decision_owner, "manual_decision", None)
+    stored = stored_value if isinstance(stored_value, dict) else {}
     stored_version = int(stored.get("version", 0) or 0)
     expected_version = body.get("expected_version")
     if expected_version is not None:
@@ -1523,7 +1792,7 @@ def update_application_manual_decision(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    app.manual_decision = decision
+    decision_owner.manual_decision = decision
     # Surface the decision in the application timeline so manual updates are
     # auditable alongside stage/outcome changes. Drafts are working state, so
     # only a submitted (recorded) decision writes an event.
@@ -1531,6 +1800,7 @@ def update_application_manual_decision(
         append_application_event(
             db,
             app=app,
+            role_id=int(context.role.id),
             event_type="manual_decision_recorded",
             actor_type="recruiter",
             actor_id=current_user.id,
@@ -1547,7 +1817,9 @@ def update_application_manual_decision(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to save manual decision")
 
-    normalized = normalize_stored_application_decision(app.manual_decision)
+    normalized = normalize_stored_application_decision(
+        getattr(decision_owner, "manual_decision", None)
+    )
     return {
         "success": True,
         "manual_decision": normalized,
@@ -2527,50 +2799,43 @@ def get_application_events(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id == int(application_id),
-            CandidateApplication.organization_id == int(current_user.organization_id),
+    if role_id is None:
+        source_role_id = (
+            db.query(CandidateApplication.role_id)
+            .filter(
+                CandidateApplication.id == int(application_id),
+                CandidateApplication.organization_id
+                == int(current_user.organization_id),
+            )
+            .scalar()
         )
-        .one_or_none()
-    )
-    if app is None:
-        raise HTTPException(status_code=404, detail="Application not found")
-    requested_role_id = int(role_id or app.role_id)
-    requested_role = require_job_permission(
+        if source_role_id is None:
+            raise HTTPException(status_code=404, detail="Application not found")
+        requested_role_id = int(source_role_id)
+    else:
+        requested_role_id = int(role_id)
+    role = require_job_permission(
         db,
         current_user=current_user,
         role_id=requested_role_id,
         permission=JobPermission.VIEW,
     )
-    if str(requested_role.role_kind or "") == "sister":
-        membership = (
-            db.query(SisterRoleEvaluation.id)
-            .filter(
-                SisterRoleEvaluation.organization_id
-                == int(current_user.organization_id),
-                SisterRoleEvaluation.role_id == requested_role_id,
-                SisterRoleEvaluation.source_application_id == int(app.id),
-                SisterRoleEvaluation.deleted_at.is_(None),
-            )
-            .scalar()
+    try:
+        context = authorize_historical_logical_role_application(
+            db,
+            role=role,
+            application_id=int(application_id),
         )
-        if membership is None:
-            raise HTTPException(
-                status_code=404,
-                detail="Candidate is not a member of this role",
-            )
-    elif requested_role_id != int(app.role_id):
+    except LogicalRoleApplicationAuthorizationError as exc:
         raise HTTPException(
             status_code=404,
-            detail="Candidate is not a member of this role",
-        )
+            detail="Application history is unavailable for this role",
+        ) from exc
     return list_application_events(
         db,
         organization_id=current_user.organization_id,
-        application_id=app.id,
-        role_id=requested_role_id,
+        application_id=context.source_application.id,
+        role_id=int(context.role.id),
         limit=limit,
         offset=offset,
     )
@@ -3115,178 +3380,23 @@ def _try_fetch_cv_from_workable(
 # Batch scoring
 # ---------------------------------------------------------------------------
 
-# In-memory progress store keyed by role_id
-_batch_score_progress: dict[int, dict] = {}
-_batch_fetch_cvs_progress: dict[int, dict] = {}
-_batch_pre_screen_progress: dict[int, dict] = {}
-# Combined cascade progress (fetch → pre-screen → score) per role.
-# Replaces the three separate dicts above for the new /process flow; the
-# legacy dicts are still used by the deprecated single-action endpoints
-# until those are fully removed.
-_process_progress: dict[int, dict] = {}
-# Org-wide graph sync — keyed by organization_id
-_sync_graph_progress: dict[int, dict] = {}
-
-
-# --------------------------------------------------------------------------- #
-# Cooperative cancellation                                                     #
-#                                                                              #
-# Long-running batch jobs (score + fetch) check a Redis flag between           #
-# iterations and bail out gracefully. Redis (vs. in-memory dict) so the        #
-# Celery worker sees the same flag the API process set.                        #
-#                                                                              #
-# Flag key shapes:                                                             #
-#   batch_score:cancel:{role_id}                                               #
-#   batch_fetch_cvs:cancel:{role_id}                                           #
-# 1-hour TTL prevents stuck cancels if the worker dies before clearing.        #
-# --------------------------------------------------------------------------- #
-
-
-_BATCH_SCORE_CANCEL_PREFIX = "batch_score:cancel:"
-_BATCH_FETCH_CANCEL_PREFIX = "batch_fetch_cvs:cancel:"
-_BATCH_META_PREFIX = "batch_score:meta:"
-_BATCH_QUEUE_PREFIX = "batch_score:queued:"
-_CANCEL_FLAG_TTL_SECONDS = 3600
-_BATCH_META_TTL_SECONDS = 7200  # 2 hours — survives API restart during a batch
-_BATCH_QUEUE_TTL_SECONDS = 7200
-
-
-def _redis_client():
-    """Lazy redis client. Returns None on errors so callers can no-op."""
-    try:
-        import redis  # type: ignore
-
-        from ...platform.config import settings  # late import — avoids cycles
-
-        return redis.Redis.from_url(settings.REDIS_URL)
-    except Exception:
-        logger.exception("Failed to build redis client for cancel flag")
-        return None
-
-
-def _set_cancel_flag(prefix: str, role_id: int) -> bool:
-    """Set the cancel flag for a job. Returns True on success."""
-    client = _redis_client()
-    if client is None:
-        return False
-    try:
-        client.set(f"{prefix}{role_id}", "1", ex=_CANCEL_FLAG_TTL_SECONDS)
-        return True
-    except Exception:
-        logger.exception("Failed to set cancel flag for role_id=%s", role_id)
-        return False
-
-
-def _is_cancelled(prefix: str, role_id: int) -> bool:
-    client = _redis_client()
-    if client is None:
-        return False
-    try:
-        return bool(client.get(f"{prefix}{role_id}"))
-    except Exception:
-        return False
-
-
-def _clear_cancel_flag(prefix: str, role_id: int) -> None:
-    client = _redis_client()
-    if client is None:
-        return
-    try:
-        client.delete(f"{prefix}{role_id}")
-    except Exception:
-        pass
-
-
-def _write_batch_meta(role_id: int, *, total: int, started_at: datetime, include_scored: bool) -> None:
-    """Persist batch start state to Redis so API process restarts don't lose it."""
-    import json as _json
-    client = _redis_client()
-    if client is None:
-        return
-    try:
-        client.set(
-            f"{_BATCH_META_PREFIX}{role_id}",
-            _json.dumps({
-                "total": total,
-                "started_at": started_at.isoformat(),
-                "include_scored": bool(include_scored),
-            }),
-            ex=_BATCH_META_TTL_SECONDS,
-        )
-    except Exception:
-        pass
-
-
-def _read_batch_meta(role_id: int) -> dict | None:
-    """Read persisted batch meta from Redis. Returns None if absent or parse fails."""
-    import json as _json
-    client = _redis_client()
-    if client is None:
-        return None
-    try:
-        raw = client.get(f"{_BATCH_META_PREFIX}{role_id}")
-        if raw is None:
-            return None
-        return _json.loads(raw)
-    except Exception:
-        return None
-
-
-def _delete_batch_meta(role_id: int) -> None:
-    client = _redis_client()
-    if client is None:
-        return
-    try:
-        client.delete(f"{_BATCH_META_PREFIX}{role_id}")
-    except Exception:
-        pass
-
-
-def _write_batch_queue(role_id: int, *, include_scored: bool, applied_after: str | None) -> None:
-    """Persist a queued (waiting) batch request so it survives API restarts."""
-    import json as _json
-    client = _redis_client()
-    if client is None:
-        return
-    try:
-        client.set(
-            f"{_BATCH_QUEUE_PREFIX}{role_id}",
-            _json.dumps({"include_scored": bool(include_scored), "applied_after": applied_after}),
-            ex=_BATCH_QUEUE_TTL_SECONDS,
-        )
-    except Exception:
-        pass
-
-
-def _read_batch_queue(role_id: int) -> dict | None:
-    import json as _json
-    client = _redis_client()
-    if client is None:
-        return None
-    try:
-        raw = client.get(f"{_BATCH_QUEUE_PREFIX}{role_id}")
-        return _json.loads(raw) if raw else None
-    except Exception:
-        return None
-
-
-def _clear_batch_queue(role_id: int) -> None:
-    client = _redis_client()
-    if client is None:
-        return
-    try:
-        client.delete(f"{_BATCH_QUEUE_PREFIX}{role_id}")
-    except Exception:
-        pass
-
-
-def is_batch_score_cancelled(role_id: int) -> bool:
-    """Public — used by the Celery batch_score_role task to bail out."""
-    return _is_cancelled(_BATCH_SCORE_CANCEL_PREFIX, role_id)
-
-
-def is_batch_fetch_cancelled(role_id: int) -> bool:
-    return _is_cancelled(_BATCH_FETCH_CANCEL_PREFIX, role_id)
+_BATCH_FETCH_CANCEL_PREFIX = _batch_runtime_state.BATCH_FETCH_CANCEL_PREFIX
+_BATCH_SCORE_CANCEL_PREFIX = _batch_runtime_state.BATCH_SCORE_CANCEL_PREFIX
+_batch_fetch_cvs_progress = _batch_runtime_state.batch_fetch_cvs_progress
+_batch_pre_screen_progress = _batch_runtime_state.batch_pre_screen_progress
+_batch_score_progress = _batch_runtime_state.batch_score_progress
+_sync_graph_progress = _batch_runtime_state.sync_graph_progress
+_clear_batch_queue = _batch_runtime_state.clear_batch_queue
+_clear_cancel_flag = _batch_runtime_state.clear_cancel_flag
+_delete_batch_meta = _batch_runtime_state.delete_batch_meta
+_read_batch_meta = _batch_runtime_state.read_batch_meta
+_read_batch_queue = _batch_runtime_state.read_batch_queue
+_redis_client = _batch_runtime_state.redis_client
+_set_cancel_flag = _batch_runtime_state.set_cancel_flag
+_write_batch_meta = _batch_runtime_state.write_batch_meta
+_write_batch_queue = _batch_runtime_state.write_batch_queue
+is_batch_fetch_cancelled = _batch_runtime_state.is_batch_fetch_cancelled
+is_batch_score_cancelled = _batch_runtime_state.is_batch_score_cancelled
 
 
 
@@ -3324,7 +3434,53 @@ def batch_score_role(
     if not role_has_job_spec(role):
         raise HTTPException(status_code=400, detail="Upload job spec before batch scoring")
 
+    try:
+        applied_after_cutoff = parse_applied_after(applied_after)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid applied_after date: {applied_after}",
+        ) from exc
+
+    related_contexts = None
+    related_targets = None
+    if is_related_role(role):
+        related_contexts = filter_contexts_applied_after(
+            _logical_role_contexts_or_400(db, role=role),
+            cutoff=applied_after_cutoff,
+        )
+        related_targets = related_score_targets(
+            related_contexts,
+            include_scored=include_scored,
+        )
+
     if dry_run:
+        if related_contexts is not None and related_targets is not None:
+            will_fetch = sum(
+                1
+                for context in related_targets
+                if not context_has_cv(context)
+                and (context_fetch_transport(context) is not None)
+                and str(context_fetch_transport(context).source or "") == "workable"
+            )
+            will_score = sum(
+                1
+                for context in related_targets
+                if context_has_cv(context)
+                or (
+                    context_fetch_transport(context) is not None
+                    and str(context_fetch_transport(context).source or "")
+                    == "workable"
+                )
+            )
+            return {
+                "will_fetch_cv": int(will_fetch),
+                "will_pre_screen": 0,
+                "will_score": int(will_score),
+                "total": len(related_contexts),
+                "include_scored": bool(include_scored),
+                "scoring_scope": "related_role_evaluation",
+            }
         all_apps = (
             db.query(CandidateApplication)
             .filter(
@@ -3407,17 +3563,20 @@ def batch_score_role(
             "include_scored": bool(include_scored),
         }
 
-    target_query = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.deleted_at.is_(None),
+    if related_targets is not None:
+        target_count = len(related_targets)
+    else:
+        target_query = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.role_id == role_id,
+                CandidateApplication.organization_id == current_user.organization_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
         )
-    )
-    if not include_scored:
-        target_query = target_query.filter(CandidateApplication.cv_match_score.is_(None))
-    target_count = target_query.count()
+        if not include_scored:
+            target_query = target_query.filter(CandidateApplication.cv_match_score.is_(None))
+        target_count = target_query.count()
 
     if target_count == 0:
         return {
@@ -3451,10 +3610,28 @@ def batch_score_role(
         "organization_id": current_user.organization_id,
         "role_name": str(getattr(role, "name", "") or ""),
         "run_id": run_id,
+        "scoring_scope": (
+            "related_role_evaluation" if related_targets is not None else "application"
+        ),
+        "related_evaluation_ids": (
+            [int(context.related_evaluation.id) for context in related_targets]
+            if related_targets is not None
+            else None
+        ),
     }
     # Mirror to Redis so the status endpoint survives an API process
     # restart mid-batch (in-process dict is wiped on restart).
-    _write_batch_meta(role_id, total=target_count, started_at=batch_started_at, include_scored=bool(include_scored))
+    _write_batch_meta(
+        role_id,
+        total=target_count,
+        started_at=batch_started_at,
+        include_scored=bool(include_scored),
+        related_evaluation_ids=(
+            [int(context.related_evaluation.id) for context in related_targets]
+            if related_targets is not None
+            else None
+        ),
+    )
 
     from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
 
@@ -3500,22 +3677,66 @@ def score_selected_applications(
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="application_ids must be integers")
 
-    require_job_permission(
+    role = require_job_permission(
         db,
         current_user=current_user,
         role_id=role_id,
         permission=JobPermission.CONTROL_AGENT,
     )
-    apps = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id.in_(application_ids),
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .all()
+    contexts = _logical_role_contexts_or_400(
+        db,
+        role=role,
+        application_ids=application_ids,
     )
+    application_ids = [context.application_id for context in contexts]
+
+    if is_related_role(role):
+        targets = related_score_targets(contexts, include_scored=force)
+        skipped = len(contexts) - len(targets)
+        fetch_ids = {
+            context.application_id
+            for context in targets
+            if not context_has_cv(context)
+            and context_fetch_transport(context) is not None
+            and str(context_fetch_transport(context).source or "") == "workable"
+        }
+        target_ids = [context.application_id for context in targets]
+        # Keep one role-local transition for the complete selected batch.  If
+        # any member first needs an ATS fetch, the worker reauthorizes and then
+        # submits every target to one all-or-nothing rescreen call.
+        immediate_ids = [] if fetch_ids else target_ids
+        outcome = None
+        if immediate_ids:
+            outcome = _related_role_rescreen_or_409(
+                db,
+                role=role,
+                application_ids=immediate_ids,
+                reason="recruiter:selected_role_local_score",
+            )
+        if fetch_ids:
+            threading.Thread(
+                target=_run_fetch_then_score,
+                args=(target_ids, current_user.organization_id),
+                kwargs={
+                    "force": force,
+                    "bypass_pre_screen": bypass_pre_screen,
+                    "role_id": int(role.id),
+                },
+                daemon=True,
+            ).start()
+        return {
+            "status": "enqueued",
+            "requested": len(application_ids),
+            "enqueued": int(outcome.queued_count if outcome is not None else 0),
+            "skipped_unchanged": skipped,
+            "not_eligible": int(
+                outcome.unscorable_count if outcome is not None else 0
+            ),
+            "auto_fetching": len(fetch_ids),
+            "scoring_scope": "related_role_evaluation",
+        }
+
+    apps = [context.source_application for context in contexts]
 
     enqueued = 0
     skipped = 0
@@ -3566,7 +3787,11 @@ def score_selected_applications(
         threading.Thread(
             target=_run_fetch_then_score,
             args=(needs_cv_fetch, current_user.organization_id),
-            kwargs={"force": force, "bypass_pre_screen": bypass_pre_screen},
+            kwargs={
+                "force": force,
+                "bypass_pre_screen": bypass_pre_screen,
+                "role_id": int(role.id),
+            },
             daemon=True,
         ).start()
 
@@ -3604,12 +3829,18 @@ def fetch_cvs_selected_applications(
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="application_ids must be integers")
 
-    require_job_permission(
+    role = require_job_permission(
         db,
         current_user=current_user,
         role_id=role_id,
         permission=JobPermission.CONTROL_AGENT,
     )
+    contexts = _logical_role_contexts_or_400(
+        db,
+        role=role,
+        application_ids=application_ids,
+    )
+    application_ids = [context.application_id for context in contexts]
     org = (
         db.query(Organization)
         .filter(Organization.id == current_user.organization_id)
@@ -3618,28 +3849,20 @@ def fetch_cvs_selected_applications(
     if not org or not org.workable_connected:
         raise HTTPException(status_code=400, detail="Workable is not connected")
 
-    apps = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id.in_(application_ids),
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .all()
-    )
     fetchable = [
-        a.id
-        for a in apps
-        if not (a.cv_text or "").strip() and (a.source or "") == "workable"
+        context.application_id
+        for context in contexts
+        if not context_has_cv(context)
+        and context_fetch_transport(context) is not None
+        and str(context_fetch_transport(context).source or "") == "workable"
     ]
-    already_present = sum(1 for a in apps if (a.cv_text or "").strip())
+    already_present = sum(1 for context in contexts if context_has_cv(context))
 
     if fetchable:
         threading.Thread(
             target=_run_fetch_then_score,
             args=(fetchable, current_user.organization_id),
-            kwargs={"score_after": False},
+            kwargs={"score_after": False, "role_id": int(role.id)},
             daemon=True,
         ).start()
 
@@ -3676,46 +3899,45 @@ def refresh_interview_support_bulk(
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="application_ids must be integers")
 
-    require_job_permission(
+    role = require_job_permission(
         db,
         current_user=current_user,
         role_id=role_id,
         permission=JobPermission.EDIT_ROLE,
     )
-    apps = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.id.in_(application_ids),
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .all()
+    contexts = _logical_role_contexts_or_400(
+        db,
+        role=role,
+        application_ids=application_ids,
     )
+    application_ids = [context.application_id for context in contexts]
+    if is_related_role(role):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Interview-support refresh is unavailable for related roles "
+                "until role-local interview packs are supported."
+            ),
+        )
+    apps = [context.source_application for context in contexts]
 
-    refreshed = 0
-    for app in apps:
-        try:
+    try:
+        for app in apps:
             refresh_application_interview_support(
                 app, organization=getattr(app, "organization", None)
             )
-            refreshed += 1
-        except Exception:
-            logger.exception(
-                "Failed to refresh interview support for application_id=%s",
-                app.id,
-            )
-
-    try:
         db.commit()
-    except Exception:
+    except Exception as exc:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to refresh interview support")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to refresh interview support",
+        ) from exc
 
     return {
         "status": "refreshed",
         "requested": len(application_ids),
-        "refreshed": refreshed,
+        "refreshed": len(apps),
     }
 
 
@@ -3758,7 +3980,7 @@ def batch_score_status(
     """
     # This status read also auto-dispatches a queued paid batch when the prior
     # one completes, so it is an agent-control boundary rather than a pure GET.
-    require_job_permission(
+    role = require_job_permission(
         db,
         current_user=current_user,
         role_id=role_id,
@@ -3767,12 +3989,14 @@ def batch_score_status(
     progress = _batch_score_progress.get(role_id, {})
     total = int(progress.get("total", 0) or 0)
     started_at = progress.get("started_at")
+    related_evaluation_ids = progress.get("related_evaluation_ids")
 
     # If the in-process dict was wiped by an API restart, recover from Redis.
     if total == 0:
         meta = _read_batch_meta(role_id)
         if meta:
             total = int(meta.get("total", 0) or 0)
+            related_evaluation_ids = meta.get("related_evaluation_ids")
             started_at_raw = meta.get("started_at")
             if started_at_raw and started_at is None:
                 try:
@@ -3785,7 +4009,30 @@ def batch_score_status(
     scored = 0
     errors = 0
     pre_screened_out = 0
-    if total > 0 and started_at is not None:
+    related_batch = is_related_role(role)
+    if total > 0 and started_at is not None and related_batch:
+        related_query = db.query(SisterRoleEvaluation.status).filter(
+                SisterRoleEvaluation.role_id == role_id,
+                SisterRoleEvaluation.organization_id
+                == current_user.organization_id,
+                SisterRoleEvaluation.deleted_at.is_(None),
+            )
+        if related_evaluation_ids:
+            related_query = related_query.filter(
+                SisterRoleEvaluation.id.in_(related_evaluation_ids)
+            )
+        else:
+            related_query = related_query.filter(
+                or_(
+                    SisterRoleEvaluation.updated_at >= started_at,
+                    SisterRoleEvaluation.queued_at >= started_at,
+                )
+            )
+        related_rows = related_query.limit(total).all()
+        statuses = [str(row.status or "") for row in related_rows]
+        scored = statuses.count("done")
+        errors = statuses.count("error") + statuses.count("unscorable")
+    elif total > 0 and started_at is not None:
         # Count terminal-state jobs for this role since the batch began.
         # ``cv_score_jobs`` is the source of truth — pre-screen-filtered
         # candidates have ``cache_hit="pre_screen_filtered"`` (those are
@@ -3825,15 +4072,38 @@ def batch_score_status(
     status = progress.get("status", "idle")
     if status == "idle" and total > 0 and started_at is not None:
         # Recovered from Redis after API restart — derive status from DB counts.
-        active_jobs = (
-            db.query(CvScoreJob)
-            .filter(
-                CvScoreJob.role_id == role_id,
-                CvScoreJob.status.in_([SCORE_JOB_PENDING, SCORE_JOB_RUNNING]),
-                CvScoreJob.queued_at >= started_at,
+        if related_batch:
+            active_query = db.query(SisterRoleEvaluation).filter(
+                    SisterRoleEvaluation.role_id == role_id,
+                    SisterRoleEvaluation.organization_id
+                    == current_user.organization_id,
+                    SisterRoleEvaluation.deleted_at.is_(None),
+                    SisterRoleEvaluation.status.in_(
+                        ["pending", "running", "retry_wait", "stale_held"]
+                    ),
+                )
+            if related_evaluation_ids:
+                active_query = active_query.filter(
+                    SisterRoleEvaluation.id.in_(related_evaluation_ids)
+                )
+            else:
+                active_query = active_query.filter(
+                    or_(
+                        SisterRoleEvaluation.updated_at >= started_at,
+                        SisterRoleEvaluation.queued_at >= started_at,
+                    )
+                )
+            active_jobs = active_query.count()
+        else:
+            active_jobs = (
+                db.query(CvScoreJob)
+                .filter(
+                    CvScoreJob.role_id == role_id,
+                    CvScoreJob.status.in_([SCORE_JOB_PENDING, SCORE_JOB_RUNNING]),
+                    CvScoreJob.queued_at >= started_at,
+                )
+                .count()
             )
-            .count()
-        )
         status = "running" if active_jobs > 0 else "completed"
     if total > 0 and (scored + errors + pre_screened_out) >= total:
         if status == "running":
@@ -3883,17 +4153,35 @@ def batch_score_status(
             _clear_cancel_flag(_BATCH_SCORE_CANCEL_PREFIX, role_id)
             q_include = bool(queued_params.get("include_scored"))
             q_after = queued_params.get("applied_after")
-            q_query = (
-                db.query(CandidateApplication)
-                .filter(
-                    CandidateApplication.role_id == role_id,
-                    CandidateApplication.organization_id == current_user.organization_id,
-                    CandidateApplication.deleted_at.is_(None),
+            if related_batch:
+                try:
+                    q_contexts = filter_contexts_applied_after(
+                        _logical_role_contexts_or_400(db, role=role),
+                        cutoff=parse_applied_after(q_after),
+                    )
+                except ValueError:
+                    q_contexts = ()
+                q_targets = related_score_targets(
+                    q_contexts,
+                    include_scored=q_include,
                 )
-            )
-            if not q_include:
-                q_query = q_query.filter(CandidateApplication.cv_match_score.is_(None))
-            q_count = q_query.count()
+                q_count = len(q_targets)
+            else:
+                q_targets = ()
+                q_query = (
+                    db.query(CandidateApplication)
+                    .filter(
+                        CandidateApplication.role_id == role_id,
+                        CandidateApplication.organization_id
+                        == current_user.organization_id,
+                        CandidateApplication.deleted_at.is_(None),
+                    )
+                )
+                if not q_include:
+                    q_query = q_query.filter(
+                        CandidateApplication.cv_match_score.is_(None)
+                    )
+                q_count = q_query.count()
             if q_count > 0:
                 q_started_at = datetime.now(timezone.utc)
                 q_run_id = _create_job_run(
@@ -3912,9 +4200,36 @@ def batch_score_status(
                     "include_scored": q_include,
                     "started_at": q_started_at,
                     "organization_id": current_user.organization_id,
+                    "role_name": str(getattr(role, "name", "") or ""),
                     "run_id": q_run_id,
+                    "scoring_scope": (
+                        "related_role_evaluation"
+                        if related_batch
+                        else "application"
+                    ),
+                    "related_evaluation_ids": (
+                        [
+                            int(context.related_evaluation.id)
+                            for context in q_targets
+                        ]
+                        if related_batch
+                        else None
+                    ),
                 }
-                _write_batch_meta(role_id, total=q_count, started_at=q_started_at, include_scored=q_include)
+                _write_batch_meta(
+                    role_id,
+                    total=q_count,
+                    started_at=q_started_at,
+                    include_scored=q_include,
+                    related_evaluation_ids=(
+                        [
+                            int(context.related_evaluation.id)
+                            for context in q_targets
+                        ]
+                        if related_batch
+                        else None
+                    ),
+                )
                 from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
                 _celery_batch_score_role.delay(role_id, include_scored=q_include, applied_after=q_after)
                 status = "running"
@@ -4056,6 +4371,13 @@ def batch_score_all_roles(
         )
         .all()
     )
+    try:
+        applied_after_cutoff = parse_applied_after(applied_after)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid applied_after date: {applied_after}",
+        ) from exc
 
     # Count scoreable apps per role (same filter as the task will use)
     dispatched = []
@@ -4065,31 +4387,39 @@ def batch_score_all_roles(
             skipped.append({"role_id": role.id, "reason": "no_job_spec"})
             continue
 
-        count_q = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.role_id == role.id,
-                CandidateApplication.organization_id == current_user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
+        related = is_related_role(role)
+        if related:
+            contexts = filter_contexts_applied_after(
+                _logical_role_contexts_or_400(db, role=role),
+                cutoff=applied_after_cutoff,
             )
-        )
-        if not include_scored:
-            count_q = count_q.filter(CandidateApplication.cv_match_score.is_(None))
-        if applied_after:
-            try:
-                from datetime import timezone as _tz
-                cutoff = datetime.fromisoformat(applied_after)
-                if cutoff.tzinfo is None:
-                    cutoff = cutoff.replace(tzinfo=_tz.utc)
+            related_targets = related_score_targets(
+                contexts,
+                include_scored=include_scored,
+            )
+            target_count = len(related_targets)
+        else:
+            related_targets = ()
+            count_q = (
+                db.query(CandidateApplication)
+                .filter(
+                    CandidateApplication.role_id == role.id,
+                    CandidateApplication.organization_id
+                    == current_user.organization_id,
+                    CandidateApplication.deleted_at.is_(None),
+                )
+            )
+            if not include_scored:
+                count_q = count_q.filter(
+                    CandidateApplication.cv_match_score.is_(None)
+                )
+            if applied_after_cutoff is not None:
                 count_q = (
                     count_q
                     .join(Candidate, CandidateApplication.candidate_id == Candidate.id)
-                    .filter(Candidate.workable_created_at >= cutoff)
+                    .filter(Candidate.workable_created_at >= applied_after_cutoff)
                 )
-            except ValueError:
-                raise HTTPException(status_code=400, detail=f"Invalid applied_after date: {applied_after}")
-
-        target_count = count_q.count()
+            target_count = count_q.count()
         if target_count == 0:
             skipped.append({"role_id": role.id, "reason": "nothing_to_score"})
             continue
@@ -4115,12 +4445,25 @@ def batch_score_all_roles(
             "organization_id": current_user.organization_id,
             "role_name": str(getattr(role, "name", "") or ""),
             "run_id": bf_run_id,
+            "scoring_scope": (
+                "related_role_evaluation" if related else "application"
+            ),
+            "related_evaluation_ids": (
+                [int(context.related_evaluation.id) for context in related_targets]
+                if related
+                else None
+            ),
         }
         _write_batch_meta(
             role.id,
             total=target_count,
             started_at=batch_started_at,
             include_scored=bool(include_scored),
+            related_evaluation_ids=(
+                [int(context.related_evaluation.id) for context in related_targets]
+                if related
+                else None
+            ),
         )
 
         from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
@@ -4194,13 +4537,30 @@ def batch_score_all_status(
 
     for entry in meta.get("roles", []):
         role_id = entry["role_id"]
+        role = (
+            db.query(Role)
+            .filter(
+                Role.id == role_id,
+                Role.organization_id == current_user.organization_id,
+                Role.deleted_at.is_(None),
+            )
+            .one_or_none()
+        )
+        related = role is not None and is_related_role(role)
         progress = _batch_score_progress.get(role_id, {})
         status = progress.get("status", "idle")
         started_at = progress.get("started_at")
+        related_ids = (
+            progress.get("related_evaluation_ids")
+            or entry.get("related_evaluation_ids")
+        )
 
         if started_at is None:
             redis_meta = _read_batch_meta(role_id)
             if redis_meta and redis_meta.get("started_at"):
+                related_ids = (
+                    related_ids or redis_meta.get("related_evaluation_ids")
+                )
                 try:
                     started_at = datetime.fromisoformat(redis_meta["started_at"])
                     if started_at.tzinfo is None:
@@ -4209,7 +4569,35 @@ def batch_score_all_status(
                     pass
 
         scored = errors = pre_screened_out = 0
-        if started_at is not None:
+        if started_at is not None and related:
+            related_query = db.query(SisterRoleEvaluation.status).filter(
+                SisterRoleEvaluation.role_id == role_id,
+                SisterRoleEvaluation.organization_id
+                == current_user.organization_id,
+                SisterRoleEvaluation.deleted_at.is_(None),
+            )
+            if related_ids:
+                related_query = related_query.filter(
+                    SisterRoleEvaluation.id.in_(related_ids)
+                )
+            else:
+                related_query = related_query.filter(
+                    or_(
+                        SisterRoleEvaluation.updated_at >= started_at,
+                        SisterRoleEvaluation.queued_at >= started_at,
+                    )
+                )
+            statuses = [
+                str(row.status or "")
+                for row in related_query.limit(int(entry["target"])).all()
+            ]
+            scored = statuses.count("done")
+            errors = statuses.count("error") + statuses.count("unscorable")
+            if scored + errors >= int(entry["target"]):
+                status = "completed"
+                progress["status"] = status
+                _batch_score_progress[role_id] = progress
+        elif started_at is not None:
             pre_screened_out = (
                 db.query(CvScoreJob)
                 .filter(
@@ -4277,6 +4665,7 @@ def _run_fetch_then_score(
     application_ids: list[int],
     org_id: int,
     *,
+    role_id: int,
     score_after: bool = True,
     force: bool = False,
     bypass_pre_screen: bool = False,
@@ -4297,16 +4686,40 @@ def _run_fetch_then_score(
         org = db.query(Organization).filter(Organization.id == org_id).first()
         if not org:
             return
-        apps = (
-            db.query(CandidateApplication)
-            .options(joinedload(CandidateApplication.candidate))
+        role = (
+            db.query(Role)
             .filter(
-                CandidateApplication.id.in_(application_ids),
-                CandidateApplication.organization_id == org_id,
-                CandidateApplication.deleted_at.is_(None),
+                Role.id == int(role_id),
+                Role.organization_id == int(org_id),
+                Role.deleted_at.is_(None),
             )
-            .all()
+            .one_or_none()
         )
+        if role is None:
+            return
+        try:
+            contexts = logical_role_contexts(
+                db,
+                role=role,
+                application_ids=application_ids,
+            )
+        except LogicalRoleApplicationAuthorizationError:
+            logger.warning(
+                "Background fetch stopped because logical-role membership changed "
+                "role_id=%s application_ids=%s",
+                role_id,
+                application_ids,
+            )
+            return
+        related = is_related_role(role)
+        apps = []
+        seen_transport_ids: set[int] = set()
+        for context in contexts:
+            app = context_fetch_transport(context)
+            if app is None or int(app.id) in seen_transport_ids:
+                continue
+            seen_transport_ids.add(int(app.id))
+            apps.append(app)
         for app in apps:
             try:
                 if not (app.cv_text or "").strip():
@@ -4319,7 +4732,7 @@ def _run_fetch_then_score(
                         app.cv_uploaded_at = app.candidate.cv_uploaded_at
                     elif (app.source or "") == "workable":
                         _try_fetch_cv_from_workable(app, app.candidate, db, org)
-                if score_after and (app.cv_text or "").strip():
+                if score_after and not related and (app.cv_text or "").strip():
                     enqueue_score(
                         db,
                         app,
@@ -4335,6 +4748,21 @@ def _run_fetch_then_score(
             db.commit()
         except Exception:
             db.rollback()
+            return
+        if score_after and related:
+            try:
+                _related_role_rescreen_or_409(
+                    db,
+                    role=role,
+                    application_ids=[context.application_id for context in contexts],
+                    reason="recruiter:selected_fetch_then_role_local_score",
+                )
+            except HTTPException:
+                logger.warning(
+                    "Background role-local score stopped because membership changed "
+                    "role_id=%s",
+                    role_id,
+                )
     except Exception:
         logger.exception("_run_fetch_then_score failed for org_id=%s", org_id)
     finally:
@@ -4352,17 +4780,19 @@ def _run_batch_fetch_cvs(role_id: int, org_id: int) -> None:
         if not role:
             return
 
-        apps = (
-            db.query(CandidateApplication)
-            .options(joinedload(CandidateApplication.candidate))
-            .filter(
-                CandidateApplication.role_id == role_id,
-                CandidateApplication.organization_id == org_id,
-                CandidateApplication.deleted_at.is_(None),
-                CandidateApplication.source == "workable",
-            )
-            .all()
-        )
+        contexts = logical_role_contexts(db, role=role)
+        apps = []
+        seen_transport_ids: set[int] = set()
+        for context in contexts:
+            transport = context_fetch_transport(context)
+            if (
+                transport is None
+                or int(transport.id) in seen_transport_ids
+                or str(transport.source or "") != "workable"
+            ):
+                continue
+            seen_transport_ids.add(int(transport.id))
+            apps.append(transport)
 
         apps_to_fetch = [a for a in apps if not (a.cv_text or "").strip()]
         total = len(apps_to_fetch)
@@ -4469,37 +4899,23 @@ def batch_fetch_cvs_role(
     if not org or not org.workable_connected:
         raise HTTPException(status_code=400, detail="Workable is not connected")
 
+    contexts = _logical_role_contexts_or_400(db, role=role)
+    fetch_transport_ids = {
+        int(context_fetch_transport(context).id)
+        for context in contexts
+        if not context_has_cv(context)
+        and context_fetch_transport(context) is not None
+        and str(context_fetch_transport(context).source or "") == "workable"
+    }
+    to_fetch_count = len(fetch_transport_ids)
+
     if dry_run:
-        to_fetch_count = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.role_id == role_id,
-                CandidateApplication.organization_id == current_user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-                CandidateApplication.source == "workable",
-            )
-            .filter(
-                (CandidateApplication.cv_text.is_(None)) | (CandidateApplication.cv_text == "")
-            )
-            .count()
-        )
         return {"will_fetch": int(to_fetch_count)}
 
     existing = _batch_fetch_cvs_progress.get(role_id, {})
     if existing.get("status") == "running":
         return {"status": "already_running", "total": existing.get("total", 0), "fetched": existing.get("fetched", 0)}
 
-    to_fetch = (
-        db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.source == "workable",
-        )
-        .all()
-    )
-    to_fetch_count = sum(1 for a in to_fetch if not (a.cv_text or "").strip())
     fetch_run_id = _create_job_run(
         kind=JOB_KIND_CV_FETCH,
         scope_kind=SCOPE_KIND_ROLE,
@@ -4701,6 +5117,14 @@ def batch_pre_screen_role(
     )
     if not role_has_job_spec(role):
         raise HTTPException(status_code=400, detail="Upload job spec before batch pre-screen")
+    if is_related_role(role):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Pre-screening is unavailable for related roles; use the "
+                "role-local scoring workflow."
+            ),
+        )
 
     if dry_run:
         targets = _select_pre_screen_targets(
@@ -4811,19 +5235,40 @@ def _select_graph_sync_candidates(
         )
     )
     if role_id is not None:
-        # Restrict to candidates with an application on this role. Use a
-        # subquery to keep the SELECT distinct (a candidate could have
-        # multiple applications on the same role due to legacy duplicates).
-        app_subq = (
-            db.query(CandidateApplication.candidate_id)
+        role = (
+            db.query(Role)
             .filter(
-                CandidateApplication.role_id == role_id,
-                CandidateApplication.organization_id == organization_id,
-                CandidateApplication.deleted_at.is_(None),
+                Role.id == int(role_id),
+                Role.organization_id == int(organization_id),
+                Role.deleted_at.is_(None),
             )
-            .subquery()
+            .one_or_none()
         )
-        q = q.filter(Candidate.id.in_(app_subq))
+        if role is None:
+            return []
+        if is_related_role(role):
+            membership_subq = (
+                db.query(SisterRoleEvaluation.candidate_id)
+                .filter(
+                    SisterRoleEvaluation.role_id == int(role_id),
+                    SisterRoleEvaluation.organization_id == int(organization_id),
+                    SisterRoleEvaluation.deleted_at.is_(None),
+                )
+                .subquery()
+            )
+        else:
+            # A candidate may have legacy duplicate applications, so use a
+            # subquery rather than joining and multiplying the profile rows.
+            membership_subq = (
+                db.query(CandidateApplication.candidate_id)
+                .filter(
+                    CandidateApplication.role_id == role_id,
+                    CandidateApplication.organization_id == organization_id,
+                    CandidateApplication.deleted_at.is_(None),
+                )
+                .subquery()
+            )
+        q = q.filter(Candidate.id.in_(membership_subq))
     out: list[int] = []
     for cid, cv_uploaded_at, last_synced_at in q.all():
         if refresh:
@@ -5116,127 +5561,18 @@ def cancel_sync_graph(
 # ---------------------------------------------------------------------------
 
 
-_PROCESS_CANCEL_PREFIX = "process_role:cancel:"
-_PROCESS_PROGRESS_PREFIX = "process_role:progress:"
-# 30 minute TTL is plenty for the longest expected cascade. Re-written every
-# time the worker updates progress so it stays alive while running.
-_PROCESS_PROGRESS_TTL_SECONDS = 1800
-
-
-def is_process_cancelled(role_id: int) -> bool:
-    return _is_cancelled(_PROCESS_CANCEL_PREFIX, role_id)
-
-
-def _write_process_progress(role_id: int, progress: dict) -> None:
-    """Mirror process progress to Redis so other uvicorn workers see it.
-
-    With workers=2 the worker that runs the daemon thread holds the in-memory
-    dict, but status polls round-robin to both workers. Without Redis the
-    other worker returns ``idle`` and the toaster row flickers in/out.
-    """
-    import json as _json
-    client = _redis_client()
-    if client is None:
-        return
-    try:
-        # Convert datetime to iso so json can encode it.
-        safe = dict(progress)
-        if isinstance(safe.get("started_at"), datetime):
-            safe["started_at"] = safe["started_at"].isoformat()
-        client.set(
-            f"{_PROCESS_PROGRESS_PREFIX}{role_id}",
-            _json.dumps(safe, default=str),
-            ex=_PROCESS_PROGRESS_TTL_SECONDS,
-        )
-    except Exception:
-        pass
-
-
-def _read_process_progress(role_id: int) -> dict | None:
-    import json as _json
-    client = _redis_client()
-    if client is None:
-        return None
-    try:
-        raw = client.get(f"{_PROCESS_PROGRESS_PREFIX}{role_id}")
-        if raw is None:
-            return None
-        return _json.loads(raw)
-    except Exception:
-        return None
-
-
-def _set_process_progress(role_id: int, progress: dict) -> None:
-    """Update both the in-memory dict (fast path on the worker that owns it)
-    and Redis (visible to all workers)."""
-    _process_progress[role_id] = progress
-    _write_process_progress(role_id, progress)
-
-
-def _empty_process_progress() -> dict:
-    return {
-        "status": "idle",
-        "role_name": None,
-        "current_step": None,
-        "fetch": {"attempted": 0, "fetched": 0, "unavailable": 0, "errors": 0, "total": 0},
-        "pre_screen": {"total": 0, "processed": 0, "errors": 0},
-        "score": {"total": 0, "scored": 0, "filtered": 0, "errors": 0, "mode": "none"},
-        "graph_sync": {"total": 0, "synced": 0, "errors": 0},
-    }
-
-
-_PIPELINE_STAGE_VALUES = {"applied", "invited", "in_assessment", "review", "advanced"}
-
-
-def _matches_stage_filter(app: CandidateApplication, stage_filter: str | None) -> bool:
-    """Python-side mirror of ``_apply_stage_filter`` for code paths that
-    already pulled a Python list of CandidateApplications and need to
-    narrow it without re-querying."""
-    if not stage_filter or stage_filter == "all":
-        return True
-    if stage_filter == "rejected":
-        return (app.application_outcome or "") == "rejected"
-    if stage_filter in _PIPELINE_STAGE_VALUES:
-        return (
-            (app.application_outcome or "") == "open"
-            and (app.pipeline_stage or "") == stage_filter
-        )
-    return True
-
-
-def _apply_stage_filter(query, stage_filter: str | None):
-    """Narrow a CandidateApplication query to a single pipeline stage or
-    the rejected outcome. ``None`` / ``all`` / empty = no filter.
-
-    Recruiters use the segmented filter above the candidate table to scope
-    the Process cascade to e.g. "Advanced (35)" so they can re-score just
-    the candidates the recruiter has already moved forward — without
-    burning budget on the 300+ Applied rows.
-    """
-    if not stage_filter or stage_filter == "all":
-        return query
-    if stage_filter == "rejected":
-        return query.filter(CandidateApplication.application_outcome == "rejected")
-    if stage_filter in _PIPELINE_STAGE_VALUES:
-        return query.filter(
-            CandidateApplication.application_outcome == "open",
-            CandidateApplication.pipeline_stage == stage_filter,
-        )
-    # Unknown stage — caller should have validated; fall back to no filter.
-    return query
-
-
-def _apply_application_ids_filter(query, application_ids: list[int] | None):
-    """Narrow a CandidateApplication query to an explicit list of IDs.
-
-    Used when the recruiter ticks checkboxes on the candidate table and
-    clicks Process — the cascade only touches those rows. Overrides
-    stage_filter when both are present (the explicit selection wins).
-    ``None`` / empty list = no filter (callers apply stage_filter instead).
-    """
-    if not application_ids:
-        return query
-    return query.filter(CandidateApplication.id.in_(application_ids))
+_PIPELINE_STAGE_VALUES = _role_process_scope._PIPELINE_STAGE_VALUES
+_PROCESS_CANCEL_PREFIX = _role_process_scope._PROCESS_CANCEL_PREFIX
+_apply_application_ids_filter = _role_process_scope._apply_application_ids_filter
+_apply_stage_filter = _role_process_scope._apply_stage_filter
+_empty_process_progress = _role_process_scope._empty_process_progress
+_matches_stage_filter = _role_process_scope._matches_stage_filter
+_process_progress = _role_process_scope._process_progress
+_read_process_progress = _role_process_scope._read_process_progress
+_set_process_progress = _role_process_scope._set_process_progress
+_write_process_progress = _role_process_scope._write_process_progress
+is_process_cancelled = _role_process_scope.is_process_cancelled
+_process_dry_run_impl = _role_process_scope._process_dry_run
 
 
 def _process_dry_run(
@@ -5254,160 +5590,59 @@ def _process_dry_run(
     stage_filter: str | None = None,
     application_ids: list[int] | None = None,
 ) -> dict:
-    """Compute counts for each cascade step without starting the worker.
-
-    Cascade-aware: when ``fetch_cvs`` is on, the pre-screen and score counts
-    include candidates that will end up with a CV after the fetch step.
-    ``refresh_cvs`` extends the fetch step to every Workable-sourced
-    candidate, even ones already cached.
-
-    ``stage_filter`` narrows the cascade to one segment of the candidate
-    table (e.g. "advanced" to re-score only the 35 candidates the
-    recruiter has already moved forward). ``None`` / ``"all"`` runs the
-    full role. ``application_ids`` is an explicit override — when set,
-    only those specific applications are processed (ignores stage_filter).
-    """
-    apps_query = (
-        db.query(CandidateApplication)
-        .options(joinedload(CandidateApplication.candidate))
-        .filter(
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.organization_id == organization_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-    )
-    if application_ids:
-        apps_query = _apply_application_ids_filter(apps_query, application_ids)
-    else:
-        apps_query = _apply_stage_filter(apps_query, stage_filter)
-    apps = apps_query.all()
-
-    def has_cv(a):
-        return bool((a.cv_text or "").strip())
-
-    def will_have_cv(a):
-        if has_cv(a):
-            return True
-        if not fetch_cvs:
-            return False
-        # Will be fetched only if source=workable.
-        return (a.source or "") == "workable"
-
-    # Fetch step — refresh_cvs forces every Workable-sourced application
-    # back into the fetch list regardless of whether a CV is already
-    # cached on the application or its parent candidate.
-    if fetch_cvs and refresh_cvs:
-        will_fetch = sum(1 for a in apps if (a.source or "") == "workable")
-    elif fetch_cvs:
-        will_fetch = sum(1 for a in apps if not has_cv(a) and (a.source or "") == "workable")
-    else:
-        will_fetch = 0
-    no_cv_no_workable = sum(
-        1 for a in apps if not has_cv(a) and (a.source or "") != "workable"
+    return _process_dry_run_impl(
+        db,
+        role_id=role_id,
+        organization_id=organization_id,
+        fetch_cvs=fetch_cvs,
+        refresh_cvs=refresh_cvs,
+        pre_screen=pre_screen,
+        refresh_pre_screen=refresh_pre_screen,
+        score_mode=score_mode,
+        sync_graph=sync_graph,
+        refresh_graph=refresh_graph,
+        stage_filter=stage_filter,
+        application_ids=application_ids,
+        select_graph_sync_candidates=_select_graph_sync_candidates,
     )
 
-    # Pre-screen step
-    if refresh_pre_screen:
-        # Refresh = run for everyone who'll have a CV, regardless of prior result.
-        will_pre_screen = sum(1 for a in apps if will_have_cv(a))
-    elif pre_screen:
-        will_pre_screen = sum(
-            1 for a in apps
-            if will_have_cv(a)
-            and (
-                # never run, or about to be fetched (so the existing rec is None anyway),
-                # or stale (CV uploaded after pre-screen ran).
-                a.pre_screen_recommendation is None
-                or a.pre_screen_run_at is None
-                or (a.cv_uploaded_at is not None and a.cv_uploaded_at > a.pre_screen_run_at)
-            )
-        )
-    else:
-        will_pre_screen = 0
 
-    # Score step
-    if score_mode == "all":
-        will_score = sum(1 for a in apps if will_have_cv(a))
-    elif score_mode == "new":
-        def needs_score(a):
-            if not will_have_cv(a):
-                return False
-            if a.cv_match_score is not None:
-                # Already scored — only stale CV would force a rescore (we
-                # don't auto-rescore on stale CV in score=new mode).
-                return False
-            # Below-threshold candidates whose pre-screen is still valid: skip.
-            if (a.pre_screen_recommendation or "") == "Below threshold":
-                if a.pre_screen_run_at is not None and (
-                    a.cv_uploaded_at is None or a.cv_uploaded_at <= a.pre_screen_run_at
-                ):
-                    return False
-            return True
-        will_score = sum(1 for a in apps if needs_score(a))
-    else:
-        will_score = 0
 
-    # Graph sync step — count candidates of THIS role who'll need a sync.
-    # The graph sync runs per-candidate, not per-application, so we
-    # de-dupe by candidate_id. Cascade-aware: when the fetch step is on,
-    # candidates whose Candidate.cv_text is currently empty but whose
-    # app.source=workable will end up with a CV after fetch and need
-    # their first graph sync — the selector won't return them today
-    # (it filters on Candidate.cv_text != None), so we add them in.
-    will_graph_sync = 0
-    if sync_graph:
-        graph_targets: set[int] = set(
-            _select_graph_sync_candidates(
-                db,
-                organization_id=organization_id,
-                refresh=refresh_graph,
-                role_id=role_id,
-            )
-        )
-        if fetch_cvs:
-            for a in apps:
-                if (
-                    not has_cv(a)
-                    and (a.source or "") == "workable"
-                    and a.candidate_id is not None
-                ):
-                    graph_targets.add(int(a.candidate_id))
-        # When the recruiter scoped the cascade (via stage filter or
-        # explicit application_ids), the graph sync count needs to match
-        # — otherwise the dialog claims it'll index hundreds of
-        # candidates that the cascade won't actually touch. ``apps`` is
-        # already the scoped list, so we can derive the candidate-id
-        # ceiling from it.
-        if application_ids or (stage_filter and stage_filter not in (None, "", "all")):
-            scoped_candidate_ids = {
-                int(a.candidate_id) for a in apps if a.candidate_id is not None
-            }
-            graph_targets = graph_targets & scoped_candidate_ids
-        will_graph_sync = len(graph_targets)
 
-    return {
-        "fetch_cvs": {
-            "will_attempt": int(will_fetch),
-            "no_cv_no_workable": int(no_cv_no_workable),
-        },
-        "pre_screen": {
-            "will_run": int(will_pre_screen),
-            "refresh": bool(refresh_pre_screen),
-        },
-        "score": {
-            "will_run": int(will_score),
-            "mode": score_mode,
-        },
-        "graph_sync": {
-            "will_run": int(will_graph_sync),
-            "refresh": bool(refresh_graph),
-            # Rough estimate: ~5 episodes/candidate × ~$0.005 each on Haiku.
-            # Surfaced in the preview so recruiters see the indexing spend
-            # before it lands in their role budget.
-            "estimated_cost_cents": int(round(will_graph_sync * 2.0)),
-        },
-        "total_candidates": len(apps),
-    }
+def _run_related_role_process(
+    db: Session,
+    *,
+    role: Role,
+    org: Organization,
+    progress: dict,
+    fetch_cvs: bool,
+    refresh_cvs: bool,
+    score_mode: str,
+    sync_graph: bool,
+    refresh_graph: bool,
+    stage_filter: str | None,
+    application_ids: list[int] | None,
+    user_id: int | None,
+) -> None:
+    from .role_process_related_worker import run_related_role_process
+
+    run_related_role_process(
+        db,
+        role=role,
+        org=org,
+        progress=progress,
+        fetch_cvs=fetch_cvs,
+        refresh_cvs=refresh_cvs,
+        score_mode=score_mode,
+        sync_graph=sync_graph,
+        refresh_graph=refresh_graph,
+        stage_filter=stage_filter,
+        application_ids=application_ids,
+        user_id=user_id,
+        fetch_cv=_try_fetch_cv_from_workable,
+    )
+
+
 
 
 def _run_process(
@@ -5425,396 +5660,29 @@ def _run_process(
     application_ids: list[int] | None = None,
     user_id: int | None = None,
 ) -> None:
-    """Background worker: cascade fetch → pre-screen → score → graph sync.
+    from .role_process_worker import run_process
 
-    Each step is independently toggleable. ``sync_graph`` runs the
-    Graphiti projection for the candidates of THIS role only (not the
-    whole org).
-
-    ``stage_filter`` narrows the cascade to one segment of the candidate
-    table (``applied|invited|in_assessment|review|advanced|rejected``).
-    ``None`` / ``"all"`` runs the full role. ``application_ids`` is an
-    explicit override — when set, only those specific applications are
-    processed (stage_filter is ignored).
-
-    Updates ``_process_progress[role_id]`` in real time so the status endpoint
-    can report combined progress.
-    """
-    from ...components.scoring.pre_screen_execution import (
-        execute_pre_screen_with_role_fence,
+    run_process(
+        role_id,
+        org_id,
+        fetch_cvs=fetch_cvs,
+        refresh_cvs=refresh_cvs,
+        pre_screen=pre_screen,
+        refresh_pre_screen=refresh_pre_screen,
+        score_mode=score_mode,
+        sync_graph=sync_graph,
+        refresh_graph=refresh_graph,
+        stage_filter=stage_filter,
+        application_ids=application_ids,
+        user_id=user_id,
+        session_factory=SessionLocal,
+        fetch_cv=_try_fetch_cv_from_workable,
+        select_pre_screen_targets=_select_pre_screen_targets,
+        select_graph_sync_candidates=_select_graph_sync_candidates,
+        refresh_rank_score=_refresh_rank_score,
     )
-    from ...services.claude_client_resolver import get_client_for_org
-    from ...services.pre_screening_service import execute_pre_screen_only
 
-    db = SessionLocal()
-    progress = _process_progress.get(role_id) or _empty_process_progress()
-    try:
-        if user_id is not None:
-            initiating_user = (
-                db.query(User)
-                .filter(
-                    User.id == int(user_id),
-                    User.organization_id == int(org_id),
-                )
-                .one_or_none()
-            )
-            if initiating_user is None:
-                progress["status"] = "failed"
-                progress["error"] = "initiating_user_unavailable"
-                _set_process_progress(role_id, progress)
-                return
-            try:
-                require_job_permission(
-                    db,
-                    current_user=initiating_user,
-                    role_id=role_id,
-                    permission=JobPermission.CONTROL_AGENT,
-                    lock_for_update=False,
-                )
-            except HTTPException:
-                progress["status"] = "failed"
-                progress["error"] = "authorization_revoked"
-                _set_process_progress(role_id, progress)
-                return
-        org = db.query(Organization).filter(Organization.id == org_id).first()
-        role = (
-            db.query(Role)
-            .filter(
-                Role.id == role_id,
-                Role.organization_id == org_id,
-                Role.deleted_at.is_(None),
-            )
-            .first()
-        )
-        if not org or not role:
-            progress["status"] = "failed"
-            _set_process_progress(role_id, progress)
-            return
 
-        org_client = get_client_for_org(org)
-        progress["role_name"] = role.name
-        progress["status"] = "running"
-        progress["current_step"] = None
-        _set_process_progress(role_id, progress)
-
-        # ── Step 1: Fetch CVs ────────────────────────────────────────────
-        if fetch_cvs:
-            progress["current_step"] = "fetch"
-            fetch_query = (
-                db.query(CandidateApplication)
-                .options(joinedload(CandidateApplication.candidate))
-                .filter(
-                    CandidateApplication.role_id == role_id,
-                    CandidateApplication.organization_id == org_id,
-                    CandidateApplication.deleted_at.is_(None),
-                    CandidateApplication.source == "workable",
-                )
-            )
-            if application_ids:
-                fetch_query = _apply_application_ids_filter(fetch_query, application_ids)
-            else:
-                fetch_query = _apply_stage_filter(fetch_query, stage_filter)
-            apps_to_fetch = fetch_query.all()
-            # In refresh mode every Workable-sourced application gets re-
-            # fetched regardless of whether a CV is already cached. The
-            # default still skips cached CVs to keep the common-case run
-            # cheap.
-            if not refresh_cvs:
-                apps_to_fetch = [a for a in apps_to_fetch if not (a.cv_text or "").strip()]
-            progress["fetch"]["total"] = len(apps_to_fetch)
-            _set_process_progress(role_id, progress)
-
-            for idx, app in enumerate(apps_to_fetch):
-                if is_process_cancelled(role_id):
-                    progress["status"] = "cancelled"
-                    _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                    _set_process_progress(role_id, progress)
-                    return
-                try:
-                    success = False
-                    # Refresh mode bypasses the candidate-row short-circuit
-                    # and goes back to Workable for the freshest CV. The
-                    # cached candidate row is still updated as a side
-                    # effect of the Workable fetch.
-                    if (
-                        not refresh_cvs
-                        and app.candidate
-                        and (app.candidate.cv_text or "").strip()
-                    ):
-                        # CV already on the candidate row — copy it onto the app.
-                        app.cv_file_url = app.candidate.cv_file_url
-                        app.cv_filename = app.candidate.cv_filename
-                        app.cv_text = app.candidate.cv_text
-                        app.cv_uploaded_at = app.candidate.cv_uploaded_at
-                        success = True
-                    elif (app.source or "") == "workable":
-                        success = bool(_try_fetch_cv_from_workable(app, app.candidate, db, org))
-                    if success:
-                        progress["fetch"]["fetched"] += 1
-                    else:
-                        progress["fetch"]["unavailable"] += 1
-                except Exception:
-                    logger.exception("Process fetch failed for application_id=%s", app.id)
-                    progress["fetch"]["errors"] += 1
-                progress["fetch"]["attempted"] = idx + 1
-                _set_process_progress(role_id, progress)
-                if (idx + 1) % 3 == 0:
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
-
-        # ── Step 2: Pre-screen ───────────────────────────────────────────
-        if pre_screen or refresh_pre_screen:
-            progress["current_step"] = "pre_screen"
-            apps = _select_pre_screen_targets(
-                db, role_id=role_id, organization_id=org_id, refresh=refresh_pre_screen
-            )
-            if application_ids:
-                _id_set = {int(i) for i in application_ids}
-                apps = [a for a in apps if a.id in _id_set]
-            elif stage_filter and stage_filter != "all":
-                apps = [a for a in apps if _matches_stage_filter(a, stage_filter)]
-            progress["pre_screen"]["total"] = len(apps)
-            _set_process_progress(role_id, progress)
-
-            for idx, app in enumerate(apps):
-                if is_process_cancelled(role_id):
-                    progress["status"] = "cancelled"
-                    _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                    _set_process_progress(role_id, progress)
-                    return
-                try:
-                    result = execute_pre_screen_with_role_fence(
-                        db,
-                        application=app,
-                        role=role,
-                        execute=lambda: execute_pre_screen_only(
-                            app, db=db, client=org_client
-                        ),
-                    )
-                    if result.get("status") == "error":
-                        progress["pre_screen"]["errors"] += 1
-                    if result.get("status") == "ok":
-                        from ...tasks.automation_tasks import (
-                            run_application_auto_reject,
-                        )
-
-                        try:
-                            run_application_auto_reject.delay(int(app.id))
-                        except Exception:
-                            logger.exception(
-                                "Process pre-screen auto-reject dispatch failed "
-                                "for application_id=%s",
-                                app.id,
-                            )
-                except Exception:
-                    logger.exception("Process pre-screen failed for application_id=%s", app.id)
-                    progress["pre_screen"]["errors"] += 1
-                progress["pre_screen"]["processed"] = idx + 1
-                _set_process_progress(role_id, progress)
-
-        # ── Step 3: Score ────────────────────────────────────────────────
-        if score_mode in ("new", "all"):
-            progress["current_step"] = "score"
-            progress["score"]["mode"] = score_mode
-            include_scored = score_mode == "all"
-            apps_query = (
-                db.query(CandidateApplication)
-                .options(
-                    joinedload(CandidateApplication.candidate),
-                    joinedload(CandidateApplication.role),
-                    joinedload(CandidateApplication.interviews),
-                    joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
-                )
-                .filter(
-                    CandidateApplication.role_id == role_id,
-                    CandidateApplication.organization_id == org_id,
-                    CandidateApplication.deleted_at.is_(None),
-                )
-            )
-            if application_ids:
-                apps_query = _apply_application_ids_filter(apps_query, application_ids)
-            else:
-                apps_query = _apply_stage_filter(apps_query, stage_filter)
-            if not include_scored:
-                apps_query = apps_query.filter(CandidateApplication.cv_match_score.is_(None))
-            apps = apps_query.all()
-            progress["score"]["total"] = len(apps)
-            _set_process_progress(role_id, progress)
-
-            job_spec_text = ((role.job_spec_text if role else None) or "").strip()
-            for idx, app in enumerate(apps):
-                if is_process_cancelled(role_id):
-                    progress["status"] = "cancelled"
-                    _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-                    _set_process_progress(role_id, progress)
-                    return
-                try:
-                    cv_text = (app.cv_text or "").strip()
-                    if not cv_text or not job_spec_text or not settings.ANTHROPIC_API_KEY:
-                        # Can't score without inputs — count as filtered for visibility.
-                        progress["score"]["filtered"] += 1
-                        progress["score"]["scored"] = idx + 1
-                        _set_process_progress(role_id, progress)
-                        continue
-                    if not include_scored:
-                        if app.cv_match_score is not None:
-                            progress["score"]["scored"] = idx + 1
-                            _set_process_progress(role_id, progress)
-                            continue
-                        if (
-                            (app.pre_screen_recommendation or "") == "Below threshold"
-                            and app.pre_screen_run_at is not None
-                            and (app.cv_uploaded_at is None or app.cv_uploaded_at <= app.pre_screen_run_at)
-                        ):
-                            progress["score"]["filtered"] += 1
-                            progress["score"]["scored"] = idx + 1
-                            _set_process_progress(role_id, progress)
-                            continue
-                    job = enqueue_score(
-                        db,
-                        app,
-                        force=include_scored,
-                        requires_active_agent=False,
-                    )
-                    if job is not None and job.status == "error":
-                        progress["score"]["errors"] += 1
-                    _refresh_rank_score(app)
-                    refresh_application_score_cache(app, db=db)
-                    refresh_application_interview_support(app)
-                    run_auto_reject_if_needed(
-                        db=db, org=org, app=app, role=role, actor_type="system"
-                    )
-                    db.flush()
-                except Exception:
-                    logger.exception("Process score failed for application_id=%s", app.id)
-                    progress["score"]["errors"] += 1
-                progress["score"]["scored"] = idx + 1
-                _set_process_progress(role_id, progress)
-                if (idx + 1) % 5 == 0:
-                    try:
-                        db.commit()
-                    except Exception:
-                        db.rollback()
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
-
-        # ── Step 4: Graph sync ───────────────────────────────────────────
-        if sync_graph:
-            from ...candidate_graph import sync as graph_sync_module
-            from ...candidate_graph import client as graph_client
-            from ...models.candidate import Candidate as _Candidate
-
-            progress["current_step"] = "graph_sync"
-            _set_process_progress(role_id, progress)
-
-            if not graph_client.is_configured():
-                # Not configured — record as a single error rather than failing
-                # the whole process.
-                progress["graph_sync"]["errors"] = 1
-                _set_process_progress(role_id, progress)
-            else:
-                candidate_ids = _select_graph_sync_candidates(
-                    db,
-                    organization_id=org_id,
-                    refresh=refresh_graph,
-                    role_id=role_id,
-                )
-                if application_ids or (stage_filter and stage_filter != "all"):
-                    # Constrain to candidate_ids whose application is in
-                    # the scoped selection — otherwise a recruiter who
-                    # ticked 5 boxes still pays for the graph indexing of
-                    # the other 300+.
-                    scope_query = (
-                        db.query(CandidateApplication.candidate_id)
-                        .filter(
-                            CandidateApplication.role_id == role_id,
-                            CandidateApplication.organization_id == org_id,
-                            CandidateApplication.deleted_at.is_(None),
-                            CandidateApplication.candidate_id.isnot(None),
-                        )
-                    )
-                    if application_ids:
-                        scope_query = _apply_application_ids_filter(scope_query, application_ids)
-                    else:
-                        scope_query = _apply_stage_filter(scope_query, stage_filter)
-                    scoped_candidate_ids = {int(cid) for (cid,) in scope_query.all()}
-                    candidate_ids = [cid for cid in candidate_ids if int(cid) in scoped_candidate_ids]
-                progress["graph_sync"]["total"] = len(candidate_ids)
-                _set_process_progress(role_id, progress)
-
-                for idx, cid in enumerate(candidate_ids):
-                    if is_process_cancelled(role_id):
-                        progress["status"] = "cancelled"
-                        _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
-                        try:
-                            db.commit()
-                        except Exception:
-                            db.rollback()
-                        _set_process_progress(role_id, progress)
-                        return
-                    try:
-                        cand = db.query(_Candidate).filter(_Candidate.id == cid).first()
-                        if cand is None:
-                            progress["graph_sync"]["errors"] += 1
-                        else:
-                            sent = graph_sync_module.sync_candidate(
-                                cand,
-                                db=db,
-                                include_cv_text=True,
-                                bill_organization_id=org_id,
-                                bill_role_id=role_id,
-                                bill_user_id=user_id,
-                                require_role_admission=True,
-                            )
-                            if sent == 0:
-                                # Graphiti returned no episodes — likely an
-                                # LLM extraction issue. Count as error so it
-                                # surfaces in the toaster, but don't bail.
-                                progress["graph_sync"]["errors"] += 1
-                    except Exception:
-                        logger.exception("Process graph sync failed for candidate_id=%s", cid)
-                        progress["graph_sync"]["errors"] += 1
-                    progress["graph_sync"]["synced"] = idx + 1
-                    _set_process_progress(role_id, progress)
-                    if (idx + 1) % 5 == 0:
-                        try:
-                            db.commit()
-                        except Exception:
-                            db.rollback()
-                try:
-                    db.commit()
-                except Exception:
-                    db.rollback()
-
-        progress["current_step"] = None
-        progress["status"] = "completed"
-        _set_process_progress(role_id, progress)
-    except Exception:
-        logger.exception("Process cascade failed for role_id=%s", role_id)
-        progress["status"] = "failed"
-        _set_process_progress(role_id, progress)
-    finally:
-        db.close()
 
 
 @router.post("/roles/{role_id}/process")
@@ -5880,31 +5748,24 @@ def process_role(
     # touch rows the recruiter doesn't own.
     raw_ids = payload.get("application_ids")
     application_ids: list[int] | None = None
-    if raw_ids:
+    if raw_ids is not None:
         if not isinstance(raw_ids, list):
             raise HTTPException(status_code=400, detail="application_ids must be a list of integers")
+        if not raw_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="application_ids must not be empty when provided",
+            )
         try:
             requested_ids = [int(x) for x in raw_ids]
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="application_ids must be integers")
-        if requested_ids:
-            owned = {
-                int(row.id)
-                for row in db.query(CandidateApplication.id)
-                .filter(
-                    CandidateApplication.id.in_(requested_ids),
-                    CandidateApplication.role_id == role_id,
-                    CandidateApplication.organization_id == current_user.organization_id,
-                    CandidateApplication.deleted_at.is_(None),
-                )
-                .all()
-            }
-            application_ids = [i for i in requested_ids if i in owned]
-            if not application_ids:
-                raise HTTPException(
-                    status_code=400,
-                    detail="None of the requested application_ids belong to this role",
-                )
+        contexts = _logical_role_contexts_or_400(
+            db,
+            role=role,
+            application_ids=requested_ids,
+        )
+        application_ids = [context.application_id for context in contexts]
     if score_mode not in ("none", "new", "all"):
         raise HTTPException(status_code=400, detail="score must be one of: none, new, all")
     if not (fetch_cvs or pre_screen or refresh_pre_screen or score_mode != "none" or sync_graph):
@@ -5912,6 +5773,14 @@ def process_role(
 
     if (pre_screen or refresh_pre_screen or score_mode != "none") and not role_has_job_spec(role):
         raise HTTPException(status_code=400, detail="Upload job spec before pre-screen or scoring")
+    if is_related_role(role) and (pre_screen or refresh_pre_screen):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Pre-screening is unavailable for related roles; use the "
+                "role-local scoring step."
+            ),
+        )
 
     if dry_run:
         counts = _process_dry_run(

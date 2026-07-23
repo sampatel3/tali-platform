@@ -131,6 +131,7 @@ def application_summary(
         "pipeline_stage_updated_at": _isoformat(app.pipeline_stage_updated_at),
         "workable_stage": app.workable_stage,
         "bullhorn_status": getattr(app, "bullhorn_status", None),
+        "external_stage_raw": app.external_stage_raw,
         "external_stage_normalized": app.external_stage_normalized,
         "ats_context": ats_context,
         "taali_score": app.taali_score_cache_100,
@@ -201,6 +202,7 @@ def _candidate_membership_summary(application: Any) -> dict[str, Any]:
     ats_context = getattr(application, "ats_context", None)
     if not isinstance(ats_context, dict):
         ats_context = application_ats_context(application)
+    assessment_score = getattr(application, "assessment_score_cache_100", None)
     return {
         "application_id": application.id,
         "role_id": application.role_id,
@@ -211,6 +213,8 @@ def _candidate_membership_summary(application: Any) -> dict[str, Any]:
         "bullhorn_status": getattr(application, "bullhorn_status", None),
         "ats_context": ats_context,
         "taali_score": application.taali_score_cache_100,
+        "assessment_score": assessment_score,
+        "assessment_score_cache_100": assessment_score,
         "pre_screen_score": application.pre_screen_score_100,
         "frontend_url": application_url(
             application.id,

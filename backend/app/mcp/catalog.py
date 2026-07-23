@@ -32,9 +32,14 @@ AGENT_CHAT = "agent_chat"
 AUTONOMOUS_AGENT = "autonomous_agent"
 
 CANDIDATE_POOL_STATE = "candidate.pool_state"
+CANDIDATE_POOL_EXHAUSTIVE = "candidate.pool_exhaustive"
 CANDIDATE_DETAIL = "candidate.detail"
 CANDIDATE_ACTION_HISTORY = "candidate.action_history"
+CANDIDATE_ACTION_HISTORY_EXHAUSTIVE = "candidate.action_history_exhaustive"
 CANDIDATE_DECISION_HISTORY = "candidate.decision_history"
+CANDIDATE_DECISION_HISTORY_EXHAUSTIVE = "candidate.decision_history_exhaustive"
+CANDIDATE_QUALITATIVE_EVIDENCE = "candidate.qualitative_evidence"
+CANDIDATE_QUALITATIVE_EXACT_EMPTY = "candidate.qualitative_exact_empty"
 
 
 class ToolInput(BaseModel):
@@ -125,6 +130,20 @@ class SearchRoleCandidatesInput(SearchApplicationsInput):
             "or its normalized value."
         ),
     )
+    workable_stage: str | None = Field(
+        default=None,
+        description=(
+            "Exact match against the linked Workable application's current "
+            "stage. Use ats_stage for provider-neutral or partial matching."
+        ),
+    )
+    has_pending_decision: bool | None = Field(
+        default=None,
+        description=(
+            "Filter to candidates that do, or do not, have a live pending, "
+            "processing, or feedback-reverted agent decision in this logical role."
+        ),
+    )
 
 
 class GetApplicationInput(ToolInput):
@@ -144,6 +163,10 @@ class GetCandidateInput(ToolInput):
 
 class CompareApplicationsInput(ToolInput):
     application_ids: ComparisonApplicationIds
+
+
+class CompareRoleApplicationsInput(CompareApplicationsInput):
+    role_id: PositiveInt
 
 
 class FindTopCandidatesInput(ToolInput):
@@ -240,8 +263,19 @@ class ListCandidateActionsInput(ToolInput):
     target_stage: str | None = None
     status: CandidateActionStatus = "confirmed"
     actor_type: CandidateActionActor | None = None
+    actor_id: PositiveInt | None = Field(
+        default=None,
+        description="Exact recruiter/agent actor id when the requester identity matters.",
+    )
     occurred_after: datetime | None = Field(default=None, strict=False)
     occurred_before: datetime | None = Field(default=None, strict=False)
+    result_view: Literal["events", "candidates"] = Field(
+        default="events",
+        description=(
+            "Use candidates for one row per logical candidate (with backing "
+            "event ids); use events for the full workflow-event audit."
+        ),
+    )
     limit: PageLimit = 50
     offset: NonNegativeInt = 0
 
@@ -311,9 +345,7 @@ def _compact_schema(value: Any) -> Any:
 
     if isinstance(value, dict):
         return {
-            key: _compact_schema(item)
-            for key, item in value.items()
-            if key != "title"
+            key: _compact_schema(item) for key, item in value.items() if key != "title"
         }
     if isinstance(value, list):
         return [_compact_schema(item) for item in value]
@@ -365,9 +397,7 @@ class ToolSpec:
         if arguments is None:
             arguments = {}
         elif not isinstance(arguments, dict):
-            raise ValueError(
-                f"invalid arguments for {self.name}: expected an object"
-            )
+            raise ValueError(f"invalid arguments for {self.name}: expected an object")
         try:
             parsed = self.input_model.model_validate(arguments)
         except ValidationError as exc:
@@ -381,9 +411,7 @@ class ToolSpec:
 
 _BOTH = frozenset({PUBLIC_MCP, TAALI_CHAT})
 _CHAT = frozenset({TAALI_CHAT})
-_ALL_AGENT_READS = frozenset(
-    {PUBLIC_MCP, TAALI_CHAT, AGENT_CHAT, AUTONOMOUS_AGENT}
-)
+_ALL_AGENT_READS = frozenset({PUBLIC_MCP, TAALI_CHAT, AGENT_CHAT, AUTONOMOUS_AGENT})
 _ROLES_READ = frozenset({SCOPE_ROLES_READ})
 _APPLICATIONS_READ = frozenset({SCOPE_APPLICATIONS_READ})
 _ASSESSMENTS_READ = frozenset({SCOPE_ASSESSMENTS_READ})
@@ -412,12 +440,13 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "search_applications",
-        "Filter applications by score, pipeline stage, outcome, or simple name/email/position text. Use natural-language search for skills or experience.",
+        "Search active logical role memberships across the organization (or one exact role) by score, current stage, outcome, or simple name/email/position text. Related roles keep their own membership and state. Returns a row array: for exhaustive pagination, advance offset by the returned row count until a page is shorter than limit; a full page is never terminal. Use natural-language search for skills or experience.",
         SearchApplicationsInput,
         "search_applications",
         _BOTH,
         _APPLICATIONS_READ,
         renderer="candidate_grid",
+        capabilities=frozenset({CANDIDATE_POOL_STATE}),
     ),
     ToolSpec(
         "search_role_candidates",
@@ -432,7 +461,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "get_application",
-        "Fetch one application with scores, evidence, rejection context, ATS state, and recruiter notes.",
+        "Legacy physical-record lookup for candidate identity, CV/source evidence, and explicit ATS transport fields only. It intentionally omits logical-role membership, score, pipeline, outcome, recommendations, and recruiter judgments. Use get_role_candidate with role_id for authoritative candidate state.",
         GetApplicationInput,
         "get_application",
         _BOTH,
@@ -460,7 +489,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "compare_applications",
-        "Compare two to five applications on a common scorecard before recommending who should advance.",
+        "Legacy physical-record comparison for candidate identity and explicit ATS transport evidence only. It intentionally omits logical-role membership, scores, pipeline, outcome, and recommendations. Use compare_role_applications with role_id before making a role-specific comparison or recommendation.",
         CompareApplicationsInput,
         "compare_applications",
         _BOTH,
@@ -468,15 +497,34 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         renderer="comparison",
     ),
     ToolSpec(
+        "compare_role_applications",
+        "Compare two to five candidate applications inside one exact logical role. Returns only live memberships with role-local scores, pipeline/outcome, ATS restrictions, and current state; related roles never inherit their ATS owner's judgments.",
+        CompareRoleApplicationsInput,
+        "compare_role_applications",
+        _ALL_AGENT_READS,
+        _APPLICATIONS_READ,
+        renderer="comparison",
+        capabilities=frozenset({CANDIDATE_POOL_STATE}),
+        role_scoped=True,
+    ),
+    ToolSpec(
         "find_top_candidates",
-        "Default for bounded qualitative candidate discovery, even without top/best wording. Unhedged qualities are required; only explicit ideally/prefer/nice-to-have wording is optional. Returns verified required matches ranked by grounded constraints/preferences and query relevance; any existing role score is shown separately as context, not evidence for the search requirement. Includes explicit criterion verdicts/coverage and an unguessable 30-day read-only bearer report link. The query must be self-contained, including any title/population retained from a follow-up. Use query='candidates' for a bare top-N report; role scorecard evidence is reused when available.",
+        "Default for bounded qualitative candidate discovery, even without top/best wording. Unhedged qualities are required; only explicit ideally/prefer/nice-to-have wording is optional. Returns verified required matches ranked by grounded constraints/preferences and query relevance; any existing role score is shown separately as context, not evidence for the search requirement. Includes explicit criterion verdicts/coverage and an unguessable 30-day read-only bearer report link. The query must be self-contained, including any title/population retained from a follow-up. Use query='candidates' for a bare top-N report; stored scorecard evidence for the role is reused when available. Surface criteria_unchecked whenever required evidence could not be verified.",
         FindTopCandidatesInput,
         "find_top_candidates",
-        _CHAT,
+        _ALL_AGENT_READS,
         _APPLICATIONS_READ,
         cost="paid",
         persistence="sensitive",
         renderer="candidate_evidence",
+        capabilities=frozenset(
+            {
+                CANDIDATE_POOL_STATE,
+                CANDIDATE_QUALITATIVE_EVIDENCE,
+                CANDIDATE_QUALITATIVE_EXACT_EMPTY,
+            }
+        ),
+        role_scoped=True,
     ),
     ToolSpec(
         "screen_pool_against_requirement",
@@ -530,7 +578,7 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ),
     ToolSpec(
         "list_candidate_actions",
-        "List confirmed or failed candidate workflow actions for one logical role, with exact totals, occurrence time, target stage/outcome, actor, linked decision when available, and each candidate's current state. Use for 'who was advanced/rejected/moved/sent an assessment and when'; pending recommendations are not completed actions.",
+        "List confirmed or failed candidate workflow actions for one logical role, with exact totals, occurrence time, target stage/outcome, actor, linked decision when available, and each candidate's current state. Use result_view='candidates' for 'who' or candidate-list questions: it returns one logical candidate even when one advance produced both a local pipeline event and an ATS transport event, retaining every backing event_id. Use result_view='events' for the complete event audit. Pending recommendations are not completed actions.",
         ListCandidateActionsInput,
         "list_candidate_actions",
         _ALL_AGENT_READS,
@@ -617,9 +665,14 @@ __all__ = [
     "AGENT_CHAT",
     "AUTONOMOUS_AGENT",
     "CANDIDATE_ACTION_HISTORY",
+    "CANDIDATE_ACTION_HISTORY_EXHAUSTIVE",
     "CANDIDATE_DECISION_HISTORY",
+    "CANDIDATE_DECISION_HISTORY_EXHAUSTIVE",
     "CANDIDATE_DETAIL",
     "CANDIDATE_POOL_STATE",
+    "CANDIDATE_POOL_EXHAUSTIVE",
+    "CANDIDATE_QUALITATIVE_EVIDENCE",
+    "CANDIDATE_QUALITATIVE_EXACT_EMPTY",
     "PUBLIC_MCP",
     "TAALI_CHAT",
     "TOOL_SPECS",

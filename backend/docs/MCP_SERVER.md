@@ -10,7 +10,8 @@ Once connected, ask Claude things like:
 
 - "Show me every candidate above 70 for the Senior Backend role"
 - "List the 5 highest-ranked candidates currently in review"
-- "Compare applications 412, 413, and 415 — which should we advance?"
+- "Compare applications 412, 413, and 415 in role 12 — which should we advance?"
+- "Who in role 12 has cited hands-on Agentforce experience?"
 - "Pull up Sam Patel's profile and every role they've applied for"
 - "Read me the job spec for `tali://role/12`"
 
@@ -20,10 +21,14 @@ Once connected, ask Claude things like:
 |---|---|
 | `list_roles` | All active roles for your org. Use first to discover `role_id` values. |
 | `get_role` | Job spec, criteria, per-stage open-application counts. |
-| `search_applications` | Score / stage / outcome / simple text filters (matches name/email/position only). Default sort: `taali_score desc` over open applications. |
-| `get_application` | One application with all four scores, evidence, notes. Optional CV text. |
+| `search_applications` | Organization-wide logical-role membership search (or one exact role) with role-local score / stage / outcome / identity filters. Returns a row array; advance contiguous offsets until a page is shorter than `limit` to prove exhaustion. |
+| `search_role_candidates` | Exact, pageable logical-role roster and current-state search. |
+| `get_application` | Legacy physical source/ATS evidence only. It deliberately omits logical-role state, scores, outcomes, and judgments. |
+| `get_role_candidate` | Authoritative detail for one application in one logical role, including role-local state, score, evidence, and restrictions. |
 | `get_candidate` | Cross-role profile + every application that candidate has filed. |
-| `compare_applications` | 2–5 applications side-by-side with the full score legend. |
+| `compare_applications` | Legacy physical source/ATS evidence comparison only; no logical-role state or scores. |
+| `compare_role_applications` | Authoritative 2–5 candidate comparison inside one logical role. |
+| `find_top_candidates` | **Paid, bounded qualitative search** over the complete active logical-role pool. Verifies cited evidence and reports exact-empty only after exhaustive successful checks; scores rank matches but never define membership. |
 | `nl_search_candidates` | **Semantic** search across CV text + JSONB skills/experience + graph predicates + LLM rerank. Use this for *"AWS Glue engineer with 5 years"*, *"senior backend devs in EMEA who've worked at fintechs"*. |
 | `graph_search_candidates` | Knowledge-graph search via Graphiti/Neo4j. Use for *"colleagues of X"*, *"people who worked at startups"*. Returns `warnings: [{code: 'neo4j_unavailable'}]` when graph is not configured. |
 | `get_candidate_cv` | Parsed CV sections + raw text for one candidate. Use when you need to quote a CV verbatim. |
@@ -31,7 +36,8 @@ Once connected, ask Claude things like:
 Resources (use as `@`-mentions in claude.ai):
 
 - `tali://role/{role_id}` — role spec as markdown
-- `tali://application/{application_id}` — application snapshot as markdown
+- `tali://application/{application_id}` — legacy physical source/ATS evidence only
+- `tali://role/{role_id}/application/{application_id}` — authoritative role-local candidate state and evidence
 - `tali://candidate/{candidate_id}/cv` — raw CV text
 
 Every result that names an entity includes a `frontend_url` so Claude can
@@ -80,7 +86,7 @@ auto-scaled to 0–100 to match the recruiter UI's behaviour.
     ```
 
 3. Restart Claude Desktop. The Tali server should appear in the connector
-   list with six tools and three resource templates.
+   list with the catalogue-backed read tools and four resource templates.
 
 ## Connecting claude.ai (Custom Connector)
 
@@ -101,11 +107,12 @@ cross-org isolation is covered by `tests/test_mcp_server.py::test_get_applicatio
 
 ## Internal use: Taali Chat
 
-The same tool surface drives the **Taali Chat** in-product chat UI
-(`/api/v1/taali-chat/*`). The chat backend reuses the pure-function
-handlers in `app/mcp/handlers.py` rather than going over HTTP — same
-behaviour, no extra hop. See [TAALI_CHAT.md](TAALI_CHAT.md) for the
-chat-specific endpoint and frontend integration.
+The same catalogue-backed candidate reads drive **Taali Chat**, **Agent Chat**,
+and the autonomous role agent. Each role-bound surface injects its logical role
+server-side and reuses the pure handlers in `app/mcp/handlers.py`; Agent Chat
+retains its candidate-evidence card renderer without carrying a second search
+definition. See [TAALI_CHAT.md](TAALI_CHAT.md) for the chat-specific endpoint
+and frontend integration.
 
 ## Not in v1
 

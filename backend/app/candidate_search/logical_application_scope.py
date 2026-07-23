@@ -16,9 +16,14 @@ from typing import Any, Iterable, Mapping
 from sqlalchemy import and_, case, false, func, literal, or_, select
 from sqlalchemy.orm import Query, Session
 
+from ..models.assessment import Assessment, AssessmentStatus
 from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import SisterRoleEvaluation
+from .role_assessment_scores import (
+    assessment_score_value_expression,
+    blended_taali_score_expression,
+)
 
 
 LogicalMembershipKey = tuple[int, int]
@@ -69,6 +74,7 @@ class LogicalApplicationSelection:
     owner_roles_by_id: Mapping[int, Role]
     related_role_ids: tuple[int, ...]
     membership_rows: Any
+    assessment_rows: Any
 
     @property
     def active(self) -> bool:
@@ -83,9 +89,17 @@ class LogicalApplicationSelection:
 
         if not self.active:
             return query.filter(CandidateApplication.deleted_at.is_(None))
-        return query.join(
+        joined = query.join(
             self.membership_rows,
             self.membership_rows.c.application_id == CandidateApplication.id,
+        )
+        return joined.outerjoin(
+            self.assessment_rows,
+            and_(
+                self.assessment_rows.c.role_id == self.logical_role_id_expression(),
+                self.assessment_rows.c.candidate_id
+                == CandidateApplication.candidate_id,
+            ),
         )
 
     def logical_role_id_expression(self) -> Any:
@@ -147,9 +161,7 @@ class LogicalApplicationSelection:
         return case(
             (
                 self._uses_related_evaluation(),
-                self._evaluation_value(
-                    SisterRoleEvaluation.pipeline_stage_updated_at
-                ),
+                self._evaluation_value(SisterRoleEvaluation.pipeline_stage_updated_at),
             ),
             else_=CandidateApplication.pipeline_stage_updated_at,
         )
@@ -159,9 +171,7 @@ class LogicalApplicationSelection:
             (
                 self._uses_related_evaluation(),
                 func.coalesce(
-                    self._evaluation_value(
-                        SisterRoleEvaluation.application_outcome
-                    ),
+                    self._evaluation_value(SisterRoleEvaluation.application_outcome),
                     "open",
                 ),
             ),
@@ -198,18 +208,23 @@ class LogicalApplicationSelection:
         source = getattr(CandidateApplication, score_field)
         if not self.related_role_ids:
             return source
-        if score_field in {"assessment_score_cache_100", "workable_score"}:
+        role_fit_value = self._evaluation_value(SisterRoleEvaluation.role_fit_score)
+        if score_field == "assessment_score_cache_100":
+            related_value = self.assessment_rows.c.assessment_score
+        elif score_field == "taali_score_cache_100":
+            related_value = blended_taali_score_expression(
+                assessment_expression=self.assessment_rows.c.assessment_score,
+                role_fit_expression=role_fit_value,
+            )
+        elif score_field == "workable_score":
             related_value = literal(None)
         elif score_field in {
-            "taali_score_cache_100",
             "pre_screen_score_100",
             "rank_score",
             "cv_match_score",
             "role_fit_score_cache_100",
         }:
-            related_value = self._evaluation_value(
-                SisterRoleEvaluation.role_fit_score
-            )
+            related_value = role_fit_value
         else:
             related_value = source
         return case(
@@ -246,8 +261,7 @@ class LogicalApplicationSelection:
 
         normalized = tuple(
             dict.fromkeys(
-                (int(role_id), int(application_id))
-                for role_id, application_id in keys
+                (int(role_id), int(application_id)) for role_id, application_id in keys
             )
         )
         if not normalized or not self.active:
@@ -342,6 +356,53 @@ def _membership_subquery(
     return direct.union(related).subquery("logical_application_memberships")
 
 
+def _assessment_subquery(*, organization_id: int) -> Any:
+    """One active completed technical score per logical role/candidate."""
+
+    score = assessment_score_value_expression()
+    ranked = (
+        select(
+            Assessment.role_id.label("role_id"),
+            Assessment.candidate_id.label("candidate_id"),
+            score.label("assessment_score"),
+            func.row_number()
+            .over(
+                partition_by=(Assessment.role_id, Assessment.candidate_id),
+                order_by=(
+                    Assessment.completed_at.desc(),
+                    Assessment.created_at.desc(),
+                    Assessment.id.desc(),
+                ),
+            )
+            .label("assessment_rank"),
+        )
+        .where(
+            Assessment.organization_id == int(organization_id),
+            Assessment.role_id.isnot(None),
+            Assessment.is_voided.is_(False),
+            Assessment.status.in_(
+                (
+                    AssessmentStatus.COMPLETED,
+                    AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+                )
+            ),
+            Assessment.scoring_partial.is_not(True),
+            Assessment.scoring_failed.is_not(True),
+            score.is_not(None),
+        )
+        .subquery("ranked_logical_role_assessment_scores")
+    )
+    return (
+        select(
+            ranked.c.role_id,
+            ranked.c.candidate_id,
+            ranked.c.assessment_score,
+        )
+        .where(ranked.c.assessment_rank == 1)
+        .subquery("logical_role_assessment_scores")
+    )
+
+
 def resolve_logical_application_selection(
     db: Session,
     *,
@@ -392,6 +453,9 @@ def resolve_logical_application_selection(
             organization_id=int(organization_id),
             valid_role_ids=valid_ids,
             related_role_ids=related_ids,
+        ),
+        assessment_rows=_assessment_subquery(
+            organization_id=int(organization_id),
         ),
     )
 

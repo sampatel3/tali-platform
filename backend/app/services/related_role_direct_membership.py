@@ -7,6 +7,10 @@ from datetime import datetime, timezone
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from ..models.agent_decision import (
+    AGENT_DECISION_ACTIVE_STATUSES,
+    AgentDecision,
+)
 from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, Role
@@ -22,6 +26,12 @@ from .sister_role_evaluation_lifecycle import archive_evaluation_result
 
 _SOURCED_ERROR_CODE = "sourced_prospect"
 _SOURCED_ERROR_MESSAGE = "Sourced prospects are not scored until they apply"
+_LIFECYCLE_ASSESSMENT_VOID_REASON = (
+    "Superseded when the candidate re-applied to this role"
+)
+_LIFECYCLE_DECISION_DISCARD_REASON = (
+    "superseded: candidate started a new role membership lifecycle"
+)
 
 
 def _is_sourced(application: CandidateApplication) -> bool:
@@ -59,6 +69,49 @@ def _reset_sourced_evaluation(
     evaluation.scored_at = None
     evaluation.last_error_code = _SOURCED_ERROR_CODE
     evaluation.error_message = _SOURCED_ERROR_MESSAGE
+
+
+def _close_previous_role_lifecycle(
+    db: Session,
+    *,
+    organization_id: int,
+    role_id: int,
+    candidate_id: int,
+    now: datetime,
+) -> None:
+    """Close active workflow state while retaining its immutable audit rows."""
+
+    assessments = (
+        db.query(Assessment)
+        .filter(
+            Assessment.organization_id == int(organization_id),
+            Assessment.role_id == int(role_id),
+            Assessment.candidate_id == int(candidate_id),
+            Assessment.is_voided.is_(False),
+        )
+        .with_for_update(of=Assessment)
+        .all()
+    )
+    for assessment in assessments:
+        assessment.is_voided = True
+        assessment.voided_at = now
+        assessment.void_reason = _LIFECYCLE_ASSESSMENT_VOID_REASON
+
+    decisions = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.organization_id == int(organization_id),
+            AgentDecision.role_id == int(role_id),
+            AgentDecision.candidate_id == int(candidate_id),
+            AgentDecision.status.in_(AGENT_DECISION_ACTIVE_STATUSES),
+        )
+        .with_for_update(of=AgentDecision)
+        .all()
+    )
+    for decision in decisions:
+        decision.status = "discarded"
+        decision.resolved_at = decision.resolved_at or now
+        decision.resolution_note = _LIFECYCLE_DECISION_DISCARD_REASON
 
 
 def create_direct_related_membership(
@@ -104,7 +157,7 @@ def create_direct_related_membership(
             .with_for_update(of=CandidateApplication)
             .first()
         )
-    existing = (
+    existing_rows = (
         db.query(SisterRoleEvaluation)
         .filter(
             SisterRoleEvaluation.organization_id == int(role.organization_id),
@@ -115,17 +168,57 @@ def create_direct_related_membership(
             ),
         )
         .with_for_update(of=SisterRoleEvaluation)
-        .one_or_none()
+        .order_by(
+            SisterRoleEvaluation.deleted_at.asc().nullsfirst(),
+            SisterRoleEvaluation.updated_at.desc().nullslast(),
+            SisterRoleEvaluation.id.desc(),
+        )
+        .all()
     )
+    live_rows = [row for row in existing_rows if row.deleted_at is None]
+    if len(live_rows) > 1:
+        raise ValueError(
+            "Candidate has multiple live memberships in this related role"
+        )
+    matching_direct = next(
+        (
+            row
+            for row in existing_rows
+            if int(row.source_application_id) == int(application.id)
+        ),
+        None,
+    )
+    live = live_rows[0] if live_rows else None
+    if live is not None and live is not matching_direct:
+        # A direct application begins a new role-owned lifecycle. Preserve the
+        # owner-backed compatibility row as an audit shadow; never rebind that
+        # physical record or let it remain the current membership.
+        now = datetime.now(timezone.utc)
+        archive_evaluation_result(live)
+        live.deleted_at = now
+        live.membership_source = "legacy_compat_shadow"
+        live.version = int(live.version or 1) + 1
+        _close_previous_role_lifecycle(
+            db,
+            organization_id=int(role.organization_id),
+            role_id=int(role.id),
+            candidate_id=int(application.candidate_id),
+            now=now,
+        )
+    existing = matching_direct
+    if existing is None and live is None:
+        # Re-applying after a previously closed lifecycle restores that
+        # archived membership record so its score/history chain remains
+        # inspectable. A currently-live owner-backed row is handled above by
+        # creating a new direct row and retaining the owner row as a shadow.
+        existing = next(
+            (row for row in existing_rows if row.deleted_at is not None),
+            None,
+        )
     if existing is not None:
         if existing.deleted_at is None:
-            if (
-                int(existing.candidate_id or 0) != int(application.candidate_id)
-                or int(existing.source_application_id) != int(application.id)
-            ):
-                raise ValueError(
-                    "A live related-role membership cannot be rebound to another application"
-                )
+            if int(existing.candidate_id or 0) != int(application.candidate_id):
+                raise ValueError("Related-role membership candidate mismatch")
             if _is_sourced(application):
                 _reset_sourced_evaluation(
                     existing,
@@ -215,37 +308,17 @@ def create_direct_related_membership(
             existing.last_error_code = None
             existing.error_message = None
 
-        prior_assessments = (
-            db.query(Assessment)
-            .filter(
-                Assessment.organization_id == int(role.organization_id),
-                Assessment.role_id == int(role.id),
-                Assessment.candidate_id == int(application.candidate_id),
-                Assessment.is_voided.is_(False),
-            )
-            .with_for_update(of=Assessment)
-            .all()
-        )
-        for assessment in prior_assessments:
-            assessment.is_voided = True
-            assessment.voided_at = now
-            assessment.void_reason = (
-                "Superseded when the candidate re-applied to this role"
-            )
-
         from ..domains.assessments_runtime.pipeline_service import (
             append_application_event,
         )
-        from .pre_screen_decision_emitter import discard_pending_decisions_for_app
 
-        for application_id in {prior_application_id, int(application.id)}:
-            discard_pending_decisions_for_app(
-                db,
-                application_id=application_id,
-                role_id=int(role.id),
-                reason="superseded: candidate started a new role membership lifecycle",
-                include_processing=True,
-            )
+        _close_previous_role_lifecycle(
+            db,
+            organization_id=int(role.organization_id),
+            role_id=int(role.id),
+            candidate_id=int(application.candidate_id),
+            now=now,
+        )
         append_application_event(
             db,
             app=application,

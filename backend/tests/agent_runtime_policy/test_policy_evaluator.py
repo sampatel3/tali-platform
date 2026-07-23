@@ -300,7 +300,7 @@ def test_missing_application_returns_no_action(db):
     assert outputs == {}
 
 
-def test_application_from_another_role_stops_before_subagents(db, monkeypatch):
+def test_application_from_another_role_is_invisible_to_subagents(db, monkeypatch):
     org, _owner_role, _candidate, app = make_world(db)
     other_role = Role(
         organization_id=int(org.id),
@@ -323,7 +323,9 @@ def test_application_from_another_role_stops_before_subagents(db, monkeypatch):
     )
 
     assert verdict.decision_type == "no_action"
-    assert verdict.rule_path == ["application_role_mismatch"]
+    # Role scope is the authority boundary. Do not reveal that an application
+    # id exists in another role; it is indistinguishable from a missing id.
+    assert verdict.rule_path == ["application_missing"]
     assert outputs == {}
     gather.assert_not_called()
 

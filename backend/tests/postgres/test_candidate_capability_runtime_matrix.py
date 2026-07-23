@@ -232,13 +232,15 @@ def _add_event(
         role_id=role_id,
         application_id=application_id,
         agent_decision_id=decision_id,
+        # Technical Interview is a provider target.  A local Tali transition
+        # to ``advanced`` is separate evidence and cannot certify this fact.
         event_type=(
-            "pipeline_stage_changed"
+            "workable_moved"
             if effect_status == "confirmed"
-            else "pipeline_stage_change_failed"
+            else "workable_move_stage_failed"
         ),
-        from_stage="review",
-        to_stage="advanced",
+        from_stage=None,
+        to_stage=None,
         actor_type=actor_type,
         actor_id=None,
         reason=f"Constructed {effect_status} action for {key}",
@@ -266,6 +268,7 @@ def _seed_role_truth(
     candidates: dict[str, int] = {}
     names: dict[str, str] = {}
     decisions: dict[str, int] = {}
+    event_applications: dict[str, int] = {}
     score = 98.0
     ats_stages = {
         "current-and-moved": "Technical Interview",
@@ -289,7 +292,13 @@ def _seed_role_truth(
     for key in SEMANTIC_KEYS:
         # One related member has its own direct application.  Every member,
         # regardless of storage form, still has an explicit live SRE row.
-        direct_related_member = related_owner is not None and key == "resolved-no-effect"
+        # The direct-recruiter oracle is a fully independent membership: its
+        # source row belongs to the related role, while a different owner-role
+        # row carries the optional ATS transport state.  Because this key is
+        # included in the Technical Interview filter assertion below, every
+        # tool surface must resolve ats_application_id instead of reading the
+        # local/source row as ATS authority.
+        direct_related_member = related_owner is not None and key == "direct-recruiter"
         persistence_role = role if direct_related_member else related_owner or role
         candidate, application = _candidate_application(
             db,
@@ -316,15 +325,34 @@ def _seed_role_truth(
         candidates[key] = int(candidate.id)
         names[key] = str(candidate.full_name)
         if related_owner is not None:
+            ats_application_id = int(application.id)
+            if direct_related_member:
+                ats_transport = CandidateApplication(
+                    organization_id=int(organization.id),
+                    candidate_id=int(candidate.id),
+                    role_id=int(related_owner.id),
+                    source="workable",
+                    status="applied",
+                    pipeline_stage="review",
+                    pipeline_stage_updated_at=NOW - timedelta(hours=6),
+                    pipeline_stage_source="recruiter",
+                    application_outcome="open",
+                    application_outcome_updated_at=NOW - timedelta(hours=6),
+                    workable_candidate_id=f"wk-{prefix}-{key}",
+                    workable_stage=ats_stages[key],
+                    external_stage_raw=ats_stages[key],
+                    external_stage_normalized="advanced",
+                )
+                db.add(ats_transport)
+                db.flush()
+                ats_application_id = int(ats_transport.id)
             db.add(
                 SisterRoleEvaluation(
                     organization_id=int(organization.id),
                     role_id=int(role.id),
                     candidate_id=int(candidate.id),
                     source_application_id=int(application.id),
-                    ats_application_id=(
-                        None if direct_related_member else int(application.id)
-                    ),
+                    ats_application_id=ats_application_id,
                     status=SISTER_EVAL_DONE,
                     pipeline_stage=local_stages[key],
                     pipeline_stage_updated_at=NOW - timedelta(hours=6),
@@ -345,8 +373,36 @@ def _seed_role_truth(
                     model_version="offline-fixture",
                     prompt_version="offline-fixture",
                     scored_at=NOW - timedelta(hours=8),
+                    created_at=NOW - timedelta(days=30),
                 )
             )
+            event_applications[key] = ats_application_id
+        else:
+            event_applications[key] = int(application.id)
+    if related_owner is not None:
+        # The direct member previously used its ATS-owner row as role evidence.
+        # That deleted lifecycle and the live direct lifecycle intentionally
+        # share one transport id. Any last-row-wins mapping will expose the old
+        # physical id instead of the current role-owned membership.
+        direct_key = "direct-recruiter"
+        db.add(
+            SisterRoleEvaluation(
+                organization_id=int(organization.id),
+                role_id=int(role.id),
+                candidate_id=candidates[direct_key],
+                source_application_id=event_applications[direct_key],
+                ats_application_id=event_applications[direct_key],
+                status=SISTER_EVAL_DONE,
+                pipeline_stage="review",
+                pipeline_stage_source="recruiter",
+                application_outcome="open",
+                application_outcome_source="recruiter",
+                membership_source="legacy_compat_shadow",
+                spec_fingerprint=f"prior-spec-{role.id}",
+                created_at=NOW - timedelta(days=60),
+                deleted_at=NOW - timedelta(days=31),
+            )
+        )
     db.flush()
 
     decision_specs = {
@@ -448,7 +504,10 @@ def _seed_role_truth(
         db,
         organization_id=int(organization.id),
         role_id=int(role.id),
-        application_id=applications["direct-recruiter"],
+        # Related roles may record the immutable provider movement on a
+        # separate ATS transport row. All role-bound surfaces must still expose
+        # it through the independent role member's canonical application id.
+        application_id=event_applications["direct-recruiter"],
         key="direct-recruiter",
         occurred_at=NOW - timedelta(days=4),
         target_stage="Technical Interview",
@@ -456,6 +515,17 @@ def _seed_role_truth(
         actor_type="recruiter",
         decision_id=None,
     )
+    if related_owner is not None:
+        # Pre-provenance events are immutable and therefore retain a NULL
+        # role_id after the expand migration.  Every tool surface must recover
+        # the historical logical role from the event metadata plus explicit
+        # related-role membership; the physical ATS-owner application must
+        # never win merely because it stores the transport record.
+        direct_recruiter_event.role_id = None
+        direct_recruiter_event.event_metadata = {
+            "fixture": "direct-recruiter",
+            "acting_role_id": int(role.id),
+        }
 
     return RoleTruth(
         role=role,
@@ -815,6 +885,18 @@ def _assert_tool_surface_truth(
         independent_role=independent_role,
     )
     if independent_role:
+        direct_transport_detail = invoke(
+            "get_role_candidate",
+            {"application_id": truth.applications["direct-recruiter"]},
+        )
+        assert direct_transport_detail["workable_stage"] == "Technical Interview"
+        assert direct_transport_detail["external_stage_raw"] == (
+            "Technical Interview"
+        )
+        assert direct_transport_detail["external_stage_normalized"] == "advanced"
+        assert direct_transport_detail["current_state"]["ats"]["raw_stage"] == (
+            "Technical Interview"
+        )
         soft_deleted_source_detail = invoke(
             "get_role_candidate",
             {"application_id": truth.applications["pending-only"]},
@@ -856,6 +938,34 @@ def _assert_tool_surface_truth(
     assert truth.names["direct-recruiter"] in {
         item["candidate_name"] for item in actions["items"]
     }
+    direct_recruiter_action = next(
+        item
+        for item in actions["items"]
+        if item["candidate_name"] == truth.names["direct-recruiter"]
+    )
+    assert direct_recruiter_action["application_id"] == truth.applications[
+        "direct-recruiter"
+    ]
+    assert direct_recruiter_action["in_current_role_pool"] is True
+    direct_recruiter_only = invoke(
+        "list_candidate_actions",
+        {
+            "application_id": truth.applications["direct-recruiter"],
+            "action": "advanced",
+            "target_stage": "Technical Interview",
+            "status": "confirmed",
+            "occurred_after": WINDOW_START.isoformat(),
+            "occurred_before": NOW.isoformat(),
+            "limit": 100,
+            "offset": 0,
+        },
+    )
+    _assert_exact_envelope(direct_recruiter_only, total=1)
+    [filtered_action] = direct_recruiter_only["items"]
+    assert filtered_action["event_id"] == direct_recruiter_action["event_id"]
+    assert filtered_action["application_id"] == truth.applications[
+        "direct-recruiter"
+    ]
     _assert_no_storage_role_leak(
         actions,
         logical_role_id=role_id,
@@ -1138,3 +1248,96 @@ def test_related_role_candidate_capabilities_match_constructed_truth_across_all_
         truth=candidate_capability_world.related,
         monkeypatch=monkeypatch,
     )
+
+
+def test_removed_related_membership_leaves_pool_but_keeps_role_history_on_every_surface(
+    postgres_search_db: Any,
+    candidate_capability_world: CapabilityWorld,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Current membership and immutable role history have different lifecycles."""
+
+    db = postgres_search_db
+    world = candidate_capability_world
+    truth = world.related
+    key = "direct-recruiter"
+    membership = (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.organization_id == int(world.user.organization_id),
+            SisterRoleEvaluation.role_id == int(truth.role.id),
+            SisterRoleEvaluation.candidate_id == truth.candidates[key],
+            SisterRoleEvaluation.deleted_at.is_(None),
+        )
+        .one()
+    )
+    membership.deleted_at = NOW
+    db.flush()
+
+    principal = Principal(
+        organization_id=int(world.user.organization_id),
+        auth_kind="jwt",
+        scopes=frozenset(
+            {SCOPE_ROLES_READ, SCOPE_APPLICATIONS_READ, SCOPE_ASSESSMENTS_READ}
+        ),
+        user=world.user,
+    )
+    monkeypatch.setattr(mcp_server, "SessionLocal", lambda: _BorrowedSession(db))
+    monkeypatch.setattr(
+        mcp_server,
+        "authenticate_request",
+        lambda _request, _db: principal,
+    )
+
+    def override_db():
+        yield db
+
+    previous = dict(app.dependency_overrides)
+    app.dependency_overrides[get_db] = override_db
+    app.dependency_overrides[get_current_user] = lambda: world.user
+    app.dependency_overrides[get_applications_search_principal] = lambda: world.user
+    try:
+        with TestClient(app) as client:
+            for invoke in _surface_invokers(
+                db=db,
+                user=world.user,
+                role=truth.role,
+                client=client,
+            ).values():
+                roster = invoke(
+                    "search_role_candidates",
+                    {"application_outcome": "open", "limit": 100, "offset": 0},
+                )
+                assert truth.names[key] not in {
+                    item["candidate_name"] for item in roster["items"]
+                }
+                actions = invoke(
+                    "list_candidate_actions",
+                    {
+                        "action": "advanced",
+                        "target_stage": "Technical Interview",
+                        "status": "confirmed",
+                        "occurred_after": WINDOW_START.isoformat(),
+                        "occurred_before": NOW.isoformat(),
+                        "limit": 100,
+                        "offset": 0,
+                    },
+                )
+                historical = next(
+                    item
+                    for item in actions["items"]
+                    if item["candidate_name"] == truth.names[key]
+                )
+                assert historical["in_current_role_pool"] is False
+                assert historical["role_id"] == int(truth.role.id)
+
+            response = client.get(
+                f"/api/v1/applications/{truth.applications[key]}/events",
+                params={"role_id": int(truth.role.id)},
+            )
+            assert response.status_code == 200, response.text
+            event_ids = {int(event["id"]) for event in response.json()}
+            assert int(truth.confirmed_technical_event_ids[1]) in event_ids
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(previous)

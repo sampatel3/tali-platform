@@ -113,11 +113,17 @@ class CreatePublicShareLink(BaseModel):
         description="'client' (scrubbed: score + summary) or 'recruiter' (full report).",
     )
     expiry: str = Field(default="7d", description="'24h' | '7d' | '30d'.")
+    view_role_id: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Logical role whose independent candidate report is shared.",
+    )
 
 
 class PublicShareLink(BaseModel):
     id: int
     application_id: int
+    view_role_id: Optional[int] = None
     token: str
     url: str
     mode: str

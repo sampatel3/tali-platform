@@ -34,7 +34,10 @@ def load_role_candidate_metrics(
     related_role_ids = [
         int(role.id)
         for role in roles
-        if str(role.role_kind or "") == ROLE_KIND_SISTER
+        if (
+            str(role.role_kind or "") == ROLE_KIND_SISTER
+            or role.ats_owner_role_id is not None
+        )
     ]
     related_ids = set(related_role_ids)
     standard_role_ids = [

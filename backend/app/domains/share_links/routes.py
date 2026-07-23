@@ -25,8 +25,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from ...candidate_search.application_role_scope import (
@@ -48,6 +47,12 @@ from ...models.share_link import (
 from ...models.sister_role_evaluation import SisterRoleEvaluation
 from ...models.user import User
 from ...platform.database import get_db
+from .schemas import (
+    CreateShareLinkPayload,
+    PublicShareViewResponse,
+    ShareLinkListResponse,
+    ShareLinkResponse,
+)
 
 
 router = APIRouter(tags=["Share links"])
@@ -142,6 +147,20 @@ def _resolve_share_application_context(
     return application, scope, evaluation
 
 
+def _share_link_role_filter(view_role_id: int | None):
+    """Keep link management inside one exact logical-report boundary.
+
+    A physical application can back several independent roles.  Omitting this
+    predicate made the management list for one report expose links minted for
+    every other role using the same evidence row.  Legacy unscoped links remain
+    addressable only from the legacy physical-application context.
+    """
+
+    if view_role_id is None:
+        return ShareLink.view_role_id.is_(None)
+    return ShareLink.view_role_id == int(view_role_id)
+
+
 def _serialize_link(link: ShareLink) -> dict[str, Any]:
     now = _utcnow()
     expires_at = _as_aware(link.expires_at)
@@ -166,64 +185,6 @@ def _serialize_link(link: ShareLink) -> dict[str, Any]:
         "expired": expired,
         "single_view_consumed": consumed,
     }
-
-
-class CreateShareLinkPayload(BaseModel):
-    mode: str = Field(
-        ...,
-        description="Share mode: 'recruiter' | 'client' | 'single-view'.",
-    )
-    expiry: str = Field(
-        ...,
-        description="Expiry preset key: '24h' | '7d' | '30d' | 'single-view'.",
-    )
-    view_role_id: int | None = Field(
-        default=None,
-        ge=1,
-        description="Logical role whose candidate standing report is shared.",
-    )
-
-
-class ShareLinkResponse(BaseModel):
-    id: int
-    application_id: int
-    view_role_id: int | None = None
-    token: str
-    mode: str
-    expiry_preset: str | None
-    expires_at: str | None
-    revoked_at: str | None
-    view_count: int
-    last_viewed_at: str | None
-    created_at: str | None
-    active: bool
-    revoked: bool
-    expired: bool
-    single_view_consumed: bool
-
-
-class ShareLinkListResponse(BaseModel):
-    links: list[ShareLinkResponse]
-
-
-class PublicShareViewResponse(BaseModel):
-    """Single-shot response for share-link recipients.
-
-    Returns the full application detail payload (scrubbed when the link's
-    mode is ``client``) so the SPA can render the standing report in one
-    round-trip — no separate auth-bypassed application fetch needed.
-
-    Metadata fields (``application_id``, ``mode``, ``view``, ``expires_at``)
-    are kept top-level for the test surface and so the SPA can inspect
-    them without unpacking ``application``.
-    """
-
-    application_id: int
-    view_role_id: int | None = None
-    mode: str
-    view: str
-    expires_at: str | None
-    application: dict[str, Any]
 
 
 @router.post(
@@ -271,23 +232,32 @@ def create_share_link(
 )
 def list_share_links(
     application_id: int,
+    view_role_id: int | None = Query(
+        default=None,
+        ge=1,
+        description="Logical role whose report links should be managed.",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List all share links for an application — active and inactive.
+    """List links for one exact logical report — active and inactive.
 
     The report footer's "Active links" panel uses the ``active`` flag on
     each row to decide what to render; revoked / expired / consumed
     links are surfaced too so recruiters can see audit history.
     """
-    # Ensure the recruiter can read this application before exposing
-    # links — get_application already raises 404 otherwise.
-    app = get_application(application_id, current_user.organization_id, db)
+    app, _scope, _evaluation = _resolve_share_application_context(
+        db,
+        organization_id=int(current_user.organization_id),
+        application_id=int(application_id),
+        view_role_id=view_role_id,
+    )
     links = (
         db.query(ShareLink)
         .filter(
             ShareLink.application_id == app.id,
             ShareLink.organization_id == app.organization_id,
+            _share_link_role_filter(view_role_id),
         )
         .order_by(ShareLink.created_at.desc())
         .all()
@@ -298,19 +268,36 @@ def list_share_links(
 @router.delete("/share-links/{link_id}", response_model=ShareLinkResponse)
 def revoke_share_link(
     link_id: int,
+    view_role_id: int | None = Query(
+        default=None,
+        ge=1,
+        description="Logical role whose report link should be revoked.",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    link = (
-        db.query(ShareLink)
-        .filter(
-            ShareLink.id == link_id,
-            ShareLink.organization_id == current_user.organization_id,
-        )
-        .first()
+    link_query = db.query(ShareLink).filter(
+        ShareLink.id == link_id,
+        ShareLink.organization_id == current_user.organization_id,
     )
+    if view_role_id is not None:
+        link_query = link_query.filter(_share_link_role_filter(view_role_id))
+    link = link_query.first()
     if link is None:
         raise HTTPException(status_code=404, detail="Share link not found")
+
+    # The persisted link owns its logical report context. Resolve it again at
+    # mutation time so a removed related-role membership cannot be managed via
+    # the still-existing physical evidence application. Related memberships
+    # with a soft-deleted evidence row remain valid through this same resolver.
+    _resolve_share_application_context(
+        db,
+        organization_id=int(current_user.organization_id),
+        application_id=int(link.application_id),
+        view_role_id=(
+            int(link.view_role_id) if link.view_role_id is not None else None
+        ),
+    )
     if link.revoked_at is None:
         link.revoked_at = _utcnow()
         db.commit()
@@ -443,7 +430,7 @@ def view_share_link(
     # auth-only endpoints (assessment timeline + /events), which the unauth
     # share page can't call itself. Client shares stay scrubbed.
     if view == "recruiter":
-        from ..assessments_runtime.pipeline_service import list_application_events
+        from ..assessments_runtime.pipeline_event_service import list_application_events
 
         application_payload["application_events"] = list_application_events(
             db,

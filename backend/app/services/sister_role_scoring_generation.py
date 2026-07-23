@@ -172,7 +172,10 @@ def lock_sister_score_rows(
         return None
     ats_application = None
     if owner_available and locator.ats_application_id is not None:
-        if locator.ats_application_id == locator.application_id:
+        if (
+            locator.ats_application_id == locator.application_id
+            and int(application.role_id) == int(locator.ats_owner_role_id)
+        ):
             ats_application = application
         else:
             ats_application = (

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from app.decision_policy.feedback_aggregator import (
     DEFAULT_SIGNAL_WEIGHTS,
@@ -14,7 +14,6 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.decision_feedback import DecisionFeedback
-from app.models.role import Role
 from app.models.user import User
 from sqlalchemy import event
 
@@ -169,7 +168,8 @@ def test_default_weights_used_when_no_org_override(db):
         organization_id=org.id, role_id=role.id, trigger="manual",
         status="succeeded", model_version="m", prompt_version="p",
     )
-    db.add(run); db.flush()
+    db.add(run)
+    db.flush()
     decision = _make_decision(db, org=org, role=role, app=app, agent_run=run)
     fb = DecisionFeedback(
         organization_id=org.id,
@@ -197,7 +197,8 @@ def test_unsigned_org_scope_feedback_skipped(db):
         organization_id=org.id, role_id=role.id, trigger="manual",
         status="succeeded", model_version="m", prompt_version="p",
     )
-    db.add(run); db.flush()
+    db.add(run)
+    db.flush()
     decision = _make_decision(db, org=org, role=role, app=app, agent_run=run)
     fb = DecisionFeedback(
         organization_id=org.id,

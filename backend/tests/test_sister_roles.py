@@ -525,8 +525,8 @@ def test_create_sister_role_persists_separate_scores_and_initial_pool_snapshot(
     row = open_by_id[applications[0].id]
     assert row["id"] == applications[0].id
     assert row["role_id"] == sister["id"]
-    assert row["operational_role_id"] == source.id
-    assert row["source_role_score"] == 72.0
+    assert row["operational_role_id"] is None
+    assert row["source_role_score"] is None
     assert row["taali_score"] is None
     assert row["score_status"] == "pending"
     assert open_by_id[applications[1].id]["application_outcome"] == "open"
@@ -2308,5 +2308,5 @@ def test_sister_application_api_ranks_by_alternate_score(client, db):
     )
     assert detail.status_code == 200, detail.text
     assert detail.json()["role_id"] == sister.id
-    assert detail.json()["operational_role_id"] == source.id
+    assert detail.json()["operational_role_id"] is None
     assert detail.json()["taali_score"] == 93.0

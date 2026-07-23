@@ -24,9 +24,8 @@ from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
-from ._activity_feed import AgentActivityEntry, OrgActivityPayload, build_activity_feed
+from ._activity_feed import OrgActivityPayload, build_activity_feed
 from ._hub_shared import (
-    month_start_utc,
     now_utc,
     pending_filter,
     start_of_day_utc,
@@ -208,7 +207,6 @@ def agent_panel(
     org_id = current_user.organization_id
     now = now_utc()
     today_start = start_of_day_utc()
-    month_start = month_start_utc()
     window_start = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=_TS_HOURS - 1)
 
     base = _compute_kpis(db, organization_id=org_id, range_days=7)

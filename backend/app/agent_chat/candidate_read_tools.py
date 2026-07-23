@@ -234,46 +234,41 @@ def compact_comments(
     return out
 
 
-def list_candidates(
+def search_candidate_comments(
     db: Session,
     role: Role,
     *,
-    bucket: str,
     limit: int,
-    workable_stage: str | None,
+    ats_stage: str | None,
     comment_contains: str | None,
-    include_comments: bool,
     impact: Any,
-    list_resolved: Callable[..., dict[str, Any]],
     matches_comment: Callable[[list[dict[str, Any]] | None, str], bool],
     compact: Callable[..., list[dict[str, Any]]],
 ) -> dict[str, Any]:
-    # Only pay for comment JSON when the recruiter filters or asks to see it.
+    """Search recruiter comments without becoming a second state reader.
+
+    Membership and optional ATS-stage filtering come from the same canonical
+    role adapter used by the exact candidate tools. The response deliberately
+    omits pipeline, outcome, score, and pending-decision fields: callers must
+    use ``search_role_candidates`` for those facts.
+    """
+
     comment_filter = (comment_contains or "").strip()
-    want_comments = bool(comment_filter) or bool(include_comments)
-    rows = impact.load_open_candidates(db, role, with_comments=want_comments)
-    effective = impact.effective_threshold(db, role)
-    above, below = impact.split_by_threshold(rows, effective)
+    rows = impact.load_open_candidates(db, role, with_comments=True)
+    chosen = [row for row in rows if row.comments]
 
-    if bucket == "above":
-        chosen = above
-    elif bucket == "below":
-        chosen = below
-    elif bucket == "advanced":
-        chosen = [row for row in rows if row.pipeline_stage == "advanced"]
-    elif bucket == "rejected":
-        return list_resolved(db, role, outcome="rejected", limit=limit)
-    elif bucket == "pending":
-        chosen = [row for row in rows if row.has_pending_decision]
-    else:
-        chosen = rows
-
-    stage_filter = (workable_stage or "").strip().lower()
+    stage_filter = (ats_stage or "").strip().lower()
     if stage_filter:
         chosen = [
             row
             for row in chosen
-            if stage_filter in (row.workable_stage or "").lower()
+            if any(
+                stage_filter in str(value or "").lower()
+                for value in (
+                    row.ats_context.get("raw_stage"),
+                    row.ats_context.get("normalized_stage"),
+                )
+            )
         ]
     if comment_filter:
         chosen = [
@@ -287,66 +282,17 @@ def list_candidates(
         reverse=True,
     )
 
-    from ..services.ats_context_service import application_ats_context
-
-    apps_by_id = {
-        int(application.id): application
-        for application in db.query(CandidateApplication)
-        .filter(
-            CandidateApplication.organization_id == int(role.organization_id),
-            CandidateApplication.id.in_(
-                [row.application_id for row in chosen[: int(limit)]] or [-1]
-            ),
-        )
-        .all()
-    }
-    role_scope = resolve_candidate_role_scope(
-        db,
-        organization_id=int(role.organization_id),
-        role_id=int(role.id),
-    )
-    evaluation_map = role_scope.evaluation_map(
-        db,
-        application_ids=list(apps_by_id),
-    )
-    adapter = role_scope.row_adapter(evaluation_map)
-    presented_by_id = {
-        application_id: (
-            adapter(application) if adapter is not None else application
-        )
-        for application_id, application in apps_by_id.items()
-    }
-
-    def _ats_context(application_id: int) -> dict[str, Any]:
-        application = presented_by_id[application_id]
-        state = getattr(application, "ats_context", None)
-        return (
-            state
-            if isinstance(state, dict)
-            else application_ats_context(application)
-        )
-
     return {
-        "bucket": bucket,
-        "workable_stage_filter": workable_stage or None,
+        "scope": "candidate_comments",
+        "ats_stage_filter": ats_stage or None,
         "comment_filter": comment_filter or None,
-        "count": len(chosen),
-        "effective_threshold": effective,
+        "match_count": len(chosen),
+        "match_count_is_exact": True,
         "candidates": [
             {
                 "application_id": row.application_id,
                 "name": row.candidate_name,
-                "score": row.score,
-                "stage": row.pipeline_stage,
-                "workable_stage": row.workable_stage,
-                "bullhorn_status": row.bullhorn_status,
-                "ats_context": _ats_context(row.application_id),
-                "pending_decision": row.pending_decision_type,
-                **(
-                    {"comments": compact(row.comments)}
-                    if want_comments
-                    else {}
-                ),
+                "comments": compact(row.comments),
             }
             for row in chosen[: int(limit)]
         ],
@@ -414,7 +360,7 @@ def list_resolved(
 __all__ = [
     "comment_match",
     "compact_comments",
-    "list_candidates",
+    "search_candidate_comments",
     "list_resolved",
     "role_overview",
 ]

@@ -13,6 +13,7 @@ from app.candidate_search.tool_failure_contract import (
     CANDIDATE_SEARCH_UNAVAILABLE_MESSAGE,
 )
 from app.agent_chat.engine import persist_user_message, run_agent_response
+from app.agent_chat.system_prompt import SYSTEM_PROMPT as AGENT_CHAT_SYSTEM_PROMPT
 from app.agent_chat.tools import AGENT_CHAT_TOOLS, dispatch_tool
 from app.components.ai_routing.contracts import TaskKey
 from app.components.ai_routing.lineage import current_route
@@ -27,10 +28,11 @@ from app.models.organization import Organization
 from app.mcp.provenance import (
     ACTION_HISTORY_REQUIRED_MESSAGE,
     DECISION_HISTORY_REQUIRED_MESSAGE,
-    POOL_STATE_REQUIRED_MESSAGE,
+    QUALITATIVE_EVIDENCE_REQUIRED_MESSAGE,
 )
 from app.models.role import Role
 from app.models.user import User
+from app.taali_chat.system_prompt import SYSTEM_PROMPT as TAALI_CHAT_SYSTEM_PROMPT
 
 
 def _routed_transport_stub():
@@ -148,9 +150,7 @@ def test_paid_boundaries_never_hold_the_agent_chat_transaction(db):
     def model_call(*args, **kwargs):
         boundaries.append(("model", db.in_transaction()))
         routed_calls.append((args[0], kwargs["model"]))
-        model_tool_names.append(
-            {str(tool["name"]) for tool in kwargs.get("tools", [])}
-        )
+        model_tool_names.append({str(tool["name"]) for tool in kwargs.get("tools", [])})
         return next(responses)
 
     def run_tool(*_args, **_kwargs):
@@ -260,7 +260,7 @@ def test_agent_chat_withholds_unsupported_historical_candidate_claim(db):
         (
             "Hello",
             "Zero candidates have PySpark experience in this pool.",
-            POOL_STATE_REQUIRED_MESSAGE,
+            QUALITATIVE_EVIDENCE_REQUIRED_MESSAGE,
         ),
         (
             "Show the pending agent decisions",
@@ -307,6 +307,431 @@ def test_agent_chat_withholds_unread_pool_and_decision_claims(
     assert assistant.stop_reason == "grounding_required"
 
 
+def test_identity_only_role_search_cannot_ground_pyspark_zero(db):
+    """Regression: q searches names/positions, never CV skill evidence."""
+
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message="Show PySpark candidates",
+    )
+    db.commit()
+    tool_round = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="tool_use",
+                id="identity-search",
+                name="search_role_candidates",
+                input={"q": "PySpark"},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    false_zero = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="text",
+                text="Zero candidates have PySpark experience in this pool.",
+            )
+        ],
+        stop_reason="end_turn",
+    )
+
+    with (
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
+        patch("app.agent_chat.engine.reserve"),
+        patch(
+            "app.agent_chat.engine.one_call",
+            side_effect=[tool_round, false_zero],
+        ),
+        patch(
+            "app.agent_chat.engine.dispatch_tool",
+            return_value={
+                "items": [],
+                "total": 0,
+                "total_is_exact": True,
+                "has_more": False,
+                "filters": {"q": "PySpark"},
+            },
+        ),
+    ):
+        assistant = run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+
+    assert assistant.text == QUALITATIVE_EVIDENCE_REQUIRED_MESSAGE
+    assert assistant.stop_reason == "grounding_required"
+
+
+def test_cited_pyspark_result_can_ground_agent_chat_answer(db):
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message="Show PySpark candidates",
+    )
+    db.commit()
+    tool_round = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="tool_use",
+                id="evidence-search",
+                name="find_top_candidates",
+                input={"query": "PySpark experience"},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    supported_text = "Avery has PySpark experience, supported by the cited CV evidence."
+    final_round = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=supported_text)],
+        stop_reason="end_turn",
+    )
+    evidence_result = {
+        "type": "candidate_evidence",
+        "criteria_requested": ["PySpark experience"],
+        "required_criteria": ["PySpark experience"],
+        "criteria_unchecked": [],
+        "candidates": [
+            {
+                "application_id": 1,
+                "candidate_name": "Avery",
+                "criteria": [
+                    {
+                        "criterion": "PySpark experience",
+                        "status": "met",
+                        "grounded": True,
+                        "evidence": [
+                            {
+                                "quote": "Built streaming services with PySpark.",
+                                "source": "cv",
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+        "returned": 1,
+        "deep_checked": 1,
+        "evidence_succeeded": 1,
+        "search_status": "matches_found",
+        "capped": False,
+        "exhaustive": True,
+        "is_exact_empty": False,
+        "warnings": [],
+    }
+
+    with (
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
+        patch("app.agent_chat.engine.reserve"),
+        patch(
+            "app.agent_chat.engine.one_call",
+            side_effect=[tool_round, final_round],
+        ),
+        patch("app.agent_chat.engine.dispatch_tool", return_value=evidence_result),
+    ):
+        assistant = run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+
+    assert assistant.text == supported_text
+    assert assistant.stop_reason == "end_turn"
+
+
+@pytest.mark.parametrize(
+    ("user_message", "expected_tool", "supported_text"),
+    [
+        (
+            "Give me the candidates I advanced to technical interview last week",
+            "list_candidate_actions",
+            "Avery was advanced to technical interview last week.",
+        ),
+        (
+            "Show PySpark candidates",
+            "find_top_candidates",
+            "Avery has PySpark experience supported by cited CV evidence.",
+        ),
+        (
+            "Who is currently in technical interview?",
+            "search_role_candidates",
+            "Avery is currently in technical interview.",
+        ),
+        (
+            "Show the pending agent decisions",
+            "list_recent_agent_decisions",
+            "There is one pending agent decision.",
+        ),
+    ],
+)
+def test_agent_chat_forces_canonical_grounded_reads_with_bound_filters(
+    db,
+    user_message,
+    expected_tool,
+    supported_text,
+):
+    """Offline runtime matrix shared with the global Taali Chat contract."""
+
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message=user_message,
+    )
+    db.commit()
+    tool_round = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="tool_use",
+                id="forced-read",
+                name="adjust_agent_settings",
+                input={"auto_promote": True},
+            )
+        ],
+        stop_reason="tool_use",
+    )
+    final_round = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=supported_text)],
+        stop_reason="end_turn",
+    )
+    dispatched: list[tuple[str, dict]] = []
+
+    def grounded_result(name, arguments, **_kwargs):
+        dispatched.append((name, dict(arguments)))
+        filters = {
+            key: value
+            for key, value in arguments.items()
+            if key not in {"limit", "offset"}
+        }
+        if name == "list_candidate_actions":
+            return {
+                "role": {"id": int(role.id), "name": role.name},
+                "items": [
+                    {
+                        "event_id": 1,
+                        "candidate_name": "Avery",
+                        "action": "advanced",
+                        "target_stage": "Technical Interview",
+                    }
+                ],
+                "total": 1,
+                "limit": arguments["limit"],
+                "offset": arguments["offset"],
+                "total_is_exact": True,
+                "has_more": False,
+                "filters": filters,
+            }
+        if name == "search_role_candidates":
+            return {
+                "role": {"id": int(role.id), "name": role.name},
+                "items": [{"application_id": 1, "candidate_name": "Avery"}],
+                "total": 1,
+                "limit": arguments["limit"],
+                "offset": arguments["offset"],
+                "total_is_exact": True,
+                "has_more": False,
+                "filters": filters,
+            }
+        if name == "list_recent_agent_decisions":
+            return {
+                "items": [{"id": 1, "candidate_name": "Avery"}],
+                "total": 1,
+                "limit": arguments["limit"],
+                "offset": arguments["offset"],
+                "total_is_exact": True,
+                "has_more": False,
+                "filters": {"role_id": int(role.id), **filters},
+            }
+        assert name == "find_top_candidates"
+        return {
+            "type": "candidate_evidence",
+            "criteria_requested": ["PySpark experience"],
+            "required_criteria": ["PySpark experience"],
+            "criteria_unchecked": [],
+            "candidates": [
+                {
+                    "application_id": 1,
+                    "candidate_name": "Avery",
+                    "criteria": [
+                        {
+                            "criterion": "PySpark experience",
+                            "status": "met",
+                            "grounded": True,
+                            "evidence": [
+                                {
+                                    "quote": "Built production pipelines in PySpark.",
+                                    "source": "cv",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "qualified_total": 1,
+            "search_status": "matches_found",
+            "capped": False,
+            "exhaustive": True,
+            "is_exact_empty": False,
+            "warnings": [],
+        }
+
+    with (
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
+        patch("app.agent_chat.engine.reserve"),
+        patch(
+            "app.agent_chat.engine.one_call",
+            side_effect=[tool_round, final_round],
+        ) as model_call,
+        patch(
+            "app.agent_chat.engine.dispatch_tool",
+            side_effect=grounded_result,
+        ),
+    ):
+        assistant = run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+
+    assert assistant.text == supported_text
+    assert [name for name, _ in dispatched] == [expected_tool]
+    sent = dispatched[0][1]
+    assert "role_id" not in sent
+    assert sent["limit"] in {10, 100}
+    if expected_tool == "list_candidate_actions":
+        assert sent["action"] == "advanced"
+        assert sent["target_stage"] == "technical interview"
+        assert sent["status"] == "confirmed"
+        assert sent["occurred_after"] < sent["occurred_before"]
+    elif expected_tool == "find_top_candidates":
+        assert sent["query"] == user_message
+    elif expected_tool == "search_role_candidates":
+        assert sent["ats_stage"] == "technical interview"
+    else:
+        assert sent["status"] == "pending"
+    assert model_call.call_args_list[0].kwargs["tool_choice"] == {
+        "type": "tool",
+        "name": expected_tool,
+        "disable_parallel_tool_use": True,
+    }
+
+
+def test_agent_chat_continues_exhaustive_action_pages_before_answering(db):
+    user, role, conversation = _world(db)
+    organization = db.get(Organization, int(role.organization_id))
+    persist_user_message(
+        db=db,
+        conversation=conversation,
+        user=user,
+        user_message=(
+            "Give me the candidates I advanced to technical interview last week"
+        ),
+    )
+    db.commit()
+    tool_rounds = [
+        SimpleNamespace(
+            content=[
+                SimpleNamespace(
+                    type="tool_use",
+                    id=f"action-page-{page}",
+                    name="get_role_candidate",
+                    input={"application_id": 999_999},
+                )
+            ],
+            stop_reason="tool_use",
+        )
+        for page in (1, 2)
+    ]
+    final_round = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="text",
+                text=("150 candidates were advanced to technical interview last week."),
+            )
+        ],
+        stop_reason="end_turn",
+    )
+    offsets: list[int] = []
+
+    def action_page(name, arguments, **_kwargs):
+        assert name == "list_candidate_actions"
+        offset = int(arguments["offset"])
+        offsets.append(offset)
+        returned = 100 if offset == 0 else 50
+        filters = {
+            key: value
+            for key, value in arguments.items()
+            if key not in {"limit", "offset"}
+        }
+        return {
+            "role": {"id": int(role.id), "name": role.name},
+            "items": [
+                {
+                    "event_id": offset + index + 1,
+                    "candidate_name": f"Candidate {offset + index + 1}",
+                }
+                for index in range(returned)
+            ],
+            "total": 150,
+            "limit": arguments["limit"],
+            "offset": offset,
+            "total_is_exact": True,
+            "has_more": offset + returned < 150,
+            "filters": filters,
+        }
+
+    with (
+        patch(
+            "app.agent_chat.engine.routed_messages_client",
+            return_value=_routed_transport_stub(),
+        ),
+        patch("app.agent_chat.engine.reserve"),
+        patch(
+            "app.agent_chat.engine.one_call",
+            side_effect=[*tool_rounds, final_round],
+        ) as model_call,
+        patch("app.agent_chat.engine.dispatch_tool", side_effect=action_page),
+    ):
+        assistant = run_agent_response(
+            db=db,
+            role=role,
+            user=user,
+            organization=organization,
+            conversation=conversation,
+        )
+
+    assert assistant.text.startswith("150 candidates were advanced")
+    assert offsets == [0, 100]
+    assert [
+        call.kwargs["tool_choice"]["name"] for call in model_call.call_args_list[:2]
+    ] == ["list_candidate_actions", "list_candidate_actions"]
+
+
 def test_registry_exposes_every_new_command_once():
     names = [tool["name"] for tool in AGENT_CHAT_TOOLS]
     assert len(names) == len(set(names))
@@ -333,6 +758,22 @@ def test_registry_exposes_every_new_command_once():
         "start_related_role_draft",
     }.issubset(names)
     assert "post_workable_note" not in names
+
+
+def test_related_role_prompts_describe_independent_logical_pool_seeding():
+    tool_text = json.dumps(AGENT_CHAT_TOOLS).lower()
+    prompt_text = f"{AGENT_CHAT_SYSTEM_PROMPT}\n{TAALI_CHAT_SYSTEM_PROMPT}".lower()
+    combined = f"{prompt_text}\n{tool_text}"
+
+    assert "selected logical role's explicit candidate pool" in combined
+    assert "ats link is transport/restrictions only" in combined
+    for stale in (
+        "cousin",
+        "sister",
+        "this ats role's existing applicants",
+        "this ats role's existing candidate pool",
+    ):
+        assert stale not in combined
 
 
 def test_approve_decision_previews_then_executes_after_later_confirmation(db):
@@ -752,13 +1193,18 @@ def test_candidate_search_failure_is_terminal_sanitized_and_precedes_mutation(db
         .order_by(AgentConversationMessage.id.desc())
         .first()
     )
+    # The server-required qualitative read binds the first provider envelope
+    # to ``find_top_candidates`` and discards every additional untrusted tool
+    # call before persistence. The apparent mutation is therefore never a
+    # mutation, and the second provider call cannot survive as an executable
+    # transcript entry.
     assert [block["tool_use_id"] for block in hidden_result.content] == [
         "mutation-first-in-model-output",
-        "search-second-in-model-output",
     ]
     serialized = json.dumps(hidden_result.content)
+    assert "search-second-in-model-output" not in serialized
     assert raw_marker not in serialized
-    assert "not_executed_after_search_failure" in serialized
+    assert "find_top_candidates" in serialized
     assert CANDIDATE_SEARCH_UNAVAILABLE_CODE in serialized
 
 

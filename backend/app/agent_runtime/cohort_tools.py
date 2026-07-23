@@ -353,7 +353,7 @@ def find_apps_in_state(
                 AgentDecision.role_id == role_id,
                 AgentDecision.status == "pending",
             )
-            .subquery()
+            .scalar_subquery()
         )
         q = q.filter(~CandidateApplication.id.in_(pending_subq))
     if state == "ready_for_assessment_decision":
@@ -474,8 +474,13 @@ def _state_query(
     )
     base = db.query(CandidateApplication).filter(
         CandidateApplication.organization_id == organization_id,
-        CandidateApplication.deleted_at.is_(None),
     )
+    # Ordinary membership is the live application row. Related membership is
+    # the live SisterRoleEvaluation row, so deleting its evidence/ATS transport
+    # must add a restriction—not make the candidate disappear from the agent's
+    # mandatory planning survey.
+    if not role_scope.is_related:
+        base = base.filter(CandidateApplication.deleted_at.is_(None))
     base = scope_with_evaluations(role_scope, base)
     stage = pipeline_stage_expression(role_scope)
     outcome = application_outcome_expression(role_scope)

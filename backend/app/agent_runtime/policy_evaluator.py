@@ -361,6 +361,7 @@ def evaluate_for_application(
     actions = read_recent_manual_actions(
         db,
         application_id=int(application_id),
+        role_id=int(role.id),
         lookback_hours=lookback,
     )
 

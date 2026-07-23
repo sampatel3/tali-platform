@@ -110,6 +110,7 @@ def rescreen_related_role_candidates(
     application_ids: list[int] | None = None,
     only_outdated: bool = False,
     void_active_assessments: bool = False,
+    require_all_memberships: bool = False,
 ) -> RelatedRoleRescreenResult:
     """Reset and publish a bounded set of this related role's memberships.
 
@@ -150,6 +151,16 @@ def rescreen_related_role_candidates(
         if requested_count is not None
         else 0
     )
+    if require_all_memberships and missing_membership_count:
+        # Autonomous batches validate before entering this service, then repeat
+        # the all-or-nothing check under the live Organization/Role locks.  If a
+        # membership disappeared between those boundaries, do not reset or
+        # publish the still-valid subset.
+        db.rollback()
+        raise RelatedRoleRescreenUnavailableError(
+            "One or more candidates are no longer in this related role. "
+            "No candidates were re-screened."
+        )
     if not identities:
         # Release the Organization/Role locks. There is no persisted transition
         # and therefore nothing that may be published after this boundary.

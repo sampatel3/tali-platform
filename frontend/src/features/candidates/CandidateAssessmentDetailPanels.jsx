@@ -369,14 +369,18 @@ export const ApplicationDecisionPanel = ({
     setSaving(true);
     setSavingMode(mode);
     try {
-      const res = await rolesApi.updateApplicationDecision(applicationId, {
-        status,
-        expected_version: persisted?.version ?? 0,
-        decision: decision || null,
-        rationale: String(rationale || '').trim() || null,
-        confidence: confidence || null,
-        next_steps: Array.isArray(nextSteps) ? nextSteps : [],
-      });
+      const res = await rolesApi.updateApplicationDecision(
+        applicationId,
+        {
+          status,
+          expected_version: persisted?.version ?? 0,
+          decision: decision || null,
+          rationale: String(rationale || '').trim() || null,
+          confidence: confidence || null,
+          next_steps: Array.isArray(nextSteps) ? nextSteps : [],
+        },
+        application?.role_id || null,
+      );
       const saved = res?.data?.manual_decision;
       if (saved && typeof saved === 'object') {
         hydrate(saved);
@@ -400,14 +404,18 @@ export const ApplicationDecisionPanel = ({
   const reload = useCallback(async () => {
     if (!applicationId || !rolesApi?.getApplication) return;
     try {
-      const res = await rolesApi.getApplication(applicationId);
+      const roleId = application?.role_id || null;
+      const res = await rolesApi.getApplication(
+        applicationId,
+        roleId ? { params: { view_role_id: roleId } } : {},
+      );
       hydrate(res?.data?.manual_decision || null);
       setConflict(false);
       showToast('Reloaded the latest decision.', 'success');
     } catch (err) {
       showToast(err?.response?.data?.detail || 'Failed to reload.', 'error');
     }
-  }, [applicationId, rolesApi, hydrate, showToast]);
+  }, [application?.role_id, applicationId, rolesApi, hydrate, showToast]);
 
   if (!application) return null;
 

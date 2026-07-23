@@ -53,6 +53,14 @@ def main() -> None:
     import app.models  # noqa: F401
     from app.platform.database import Base, engine
 
+    # This database is explicitly disposable and guarded by the exact database
+    # name above. Rebuild it on every invocation instead of layering
+    # ``create_all`` over a stale developer/CI schema: ``create_all`` does not
+    # add new columns to existing tables, while the final Alembic stamp would
+    # otherwise falsely claim that the old schema is at repository head.
+    with engine.begin() as connection:
+        connection.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+        connection.execute(text("CREATE SCHEMA public"))
     Base.metadata.create_all(bind=engine)
     # ORM metadata declares server defaults for these transition timestamps,
     # but migration 032 intentionally removed those defaults before making the

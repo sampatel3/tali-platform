@@ -974,6 +974,113 @@ def batch_score_role(
             .first()
         )
 
+        from ..services.logical_role_batch_operations import (
+            context_fetch_transport,
+            context_has_cv,
+            filter_contexts_applied_after,
+            is_related_role,
+            logical_role_contexts,
+            parse_applied_after,
+            related_score_targets,
+        )
+
+        if is_related_role(role):
+            from ..domains.assessments_runtime.applications_routes import (
+                _try_fetch_cv_from_workable,
+                is_batch_score_cancelled,
+            )
+            from ..services.related_role_rescreen_service import (
+                RelatedRoleRescreenUnavailableError,
+                rescreen_related_role_candidates,
+            )
+
+            try:
+                cutoff = parse_applied_after(applied_after)
+            except ValueError:
+                return {
+                    "status": "invalid_applied_after",
+                    "role_id": role_id,
+                    "applied_after": applied_after,
+                }
+            contexts = filter_contexts_applied_after(
+                logical_role_contexts(db, role=role),
+                cutoff=cutoff,
+            )
+            targets = related_score_targets(
+                contexts,
+                include_scored=include_scored,
+            )
+            fetched = 0
+            fetch_failures = 0
+            seen_transport_ids: set[int] = set()
+            for context in targets:
+                if is_batch_score_cancelled(role_id):
+                    db.rollback()
+                    return {
+                        "status": "cancelled",
+                        "role_id": role_id,
+                        "count": 0,
+                        "fetched": fetched,
+                        "fetch_failures": fetch_failures,
+                    }
+                if context_has_cv(context):
+                    continue
+                transport = context_fetch_transport(context)
+                if (
+                    transport is None
+                    or int(transport.id) in seen_transport_ids
+                    or str(transport.source or "") != "workable"
+                    or org is None
+                ):
+                    continue
+                seen_transport_ids.add(int(transport.id))
+                try:
+                    if _try_fetch_cv_from_workable(
+                        transport,
+                        transport.candidate,
+                        db,
+                        org,
+                    ):
+                        fetched += 1
+                    else:
+                        fetch_failures += 1
+                except Exception:
+                    fetch_failures += 1
+                    logger.exception(
+                        "Related-role batch CV fetch failed "
+                        "role_id=%s application_id=%s",
+                        role_id,
+                        context.application_id,
+                    )
+            db.commit()
+            try:
+                outcome = rescreen_related_role_candidates(
+                    db,
+                    role,
+                    reason="recruiter:related_role_batch_score",
+                    application_ids=[
+                        context.application_id for context in targets
+                    ],
+                    require_all_memberships=True,
+                )
+            except RelatedRoleRescreenUnavailableError as exc:
+                return {
+                    "status": "role_state_changed",
+                    "role_id": role_id,
+                    "count": 0,
+                    "error": str(exc),
+                }
+            return {
+                "status": "enqueued",
+                "role_id": role_id,
+                "count": outcome.reset_count,
+                "fetched": fetched,
+                "fetch_failures": fetch_failures,
+                "pre_screened_out": 0,
+                "scoring_scope": "related_role_evaluation",
+                "summary": outcome.as_dict(),
+            }
+
         query = (
             db.query(CandidateApplication)
             .options(joinedload(CandidateApplication.candidate))

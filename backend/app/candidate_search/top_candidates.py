@@ -203,7 +203,8 @@ def _ground_window(
         app, cv, notes = job
         try:
             return _ground(
-                cv, notes,
+                cv,
+                notes,
                 criteria=criteria,
                 route_client_factory=route_client_factory,
                 organization_id=organization_id,
@@ -216,7 +217,9 @@ def _ground_window(
             # An exhausted/failed check is NOT "no evidence" — mark it error so the
             # UI shows "couldn't verify" and the candidate isn't falsely blanked.
             return [
-                CriterionVerdict(criterion=c, status="error", note="Evidence check failed.")
+                CriterionVerdict(
+                    criterion=c, status="error", note="Evidence check failed."
+                )
                 for c in criteria
             ]
 
@@ -230,8 +233,7 @@ def _ground_window(
     ex = cf.ThreadPoolExecutor(max_workers=workers)
     try:
         fut_to_idx = {
-            ex.submit(copy_context().run, _one, job): i
-            for i, job in enumerate(jobs)
+            ex.submit(copy_context().run, _one, job): i for i, job in enumerate(jobs)
         }
         done, not_done = cf.wait(fut_to_idx, timeout=GROUND_BATCH_DEADLINE_S)
         for fut in done:
@@ -242,7 +244,9 @@ def _ground_window(
         if not_done:
             logger.warning(
                 "grounding batch deadline (%.0fs) hit: %d/%d candidates incomplete",
-                GROUND_BATCH_DEADLINE_S, len(not_done), len(jobs),
+                GROUND_BATCH_DEADLINE_S,
+                len(not_done),
+                len(jobs),
             )
             for fut in not_done:
                 results[fut_to_idx[fut]] = [_timed_out(c) for c in criteria]
@@ -250,7 +254,10 @@ def _ground_window(
         # Don't block the response on stragglers; cancel anything not started.
         ex.shutdown(wait=False, cancel_futures=True)
 
-    return [(jobs[i][0], results.get(i) or [_timed_out(c) for c in criteria]) for i in range(len(jobs))]
+    return [
+        (jobs[i][0], results.get(i) or [_timed_out(c) for c in criteria])
+        for i in range(len(jobs))
+    ]
 
 
 def _grounding_models(
@@ -289,7 +296,9 @@ def _short_label(text: str) -> str:
     return f"{cut or t[:_ECHO_CRITERION_MAX].rstrip()}…"
 
 
-def _build_spec(parsed, *, query: str, rank_by: str, criteria: list[str]) -> dict[str, Any]:
+def _build_spec(
+    parsed, *, query: str, rank_by: str, criteria: list[str]
+) -> dict[str, Any]:
     locations = list(parsed.locations_country) + list(parsed.locations_region)
     population = {
         "skills_all": list(parsed.skills_all),
@@ -337,8 +346,16 @@ def _build_spec(parsed, *, query: str, rank_by: str, criteria: list[str]) -> dic
 
 
 _COVER_NOTE_OPENERS = (
-    "dear ", "hi ", "hi,", "hello", "i hope this", "i am writing", "to whom",
-    "greetings", "i came across", "i recently came across",
+    "dear ",
+    "hi ",
+    "hi,",
+    "hello",
+    "i hope this",
+    "i am writing",
+    "to whom",
+    "greetings",
+    "i came across",
+    "i recently came across",
 )
 
 
@@ -362,11 +379,18 @@ def _candidate_blurb(cand) -> str | None:
     headline = str(getattr(cand, "headline", "") or "").strip()
     if headline:
         parts.append(headline)
-    experience = cv_sections.get("experience") or getattr(cand, "experience_entries", None) or []
+    experience = (
+        cv_sections.get("experience") or getattr(cand, "experience_entries", None) or []
+    )
     if isinstance(experience, list) and experience and isinstance(experience[0], dict):
         e0 = experience[0]
         recent = " at ".join(
-            p for p in [str(e0.get("title") or "").strip(), str(e0.get("company") or "").strip()] if p
+            p
+            for p in [
+                str(e0.get("title") or "").strip(),
+                str(e0.get("company") or "").strip(),
+            ]
+            if p
         )
         if recent:
             parts.append(f"most recently {recent}")
@@ -402,7 +426,7 @@ def _scoring_summary(app: CandidateApplication) -> tuple[str | None, str | None]
         return None, None
     m = _FIRST_SENTENCE_RE.match(summary)
     if m and m.end() < len(summary):
-        return m.group(1).strip()[:200], summary[m.end():].strip()[:700]
+        return m.group(1).strip()[:200], summary[m.end() :].strip()[:700]
     return summary[:200], None
 
 
@@ -494,6 +518,7 @@ def find_top_candidates(
     row_adapter: Callable[[Any], Any] | None = None,
     payload_transform: Callable[[Any, dict[str, Any]], dict[str, Any]] | None = None,
     authoritative_pool_size: int | None = None,
+    candidate_loader: Any | None = None,
 ) -> dict[str, Any]:
     """Run the grounded top-N procedure.
 
@@ -559,6 +584,7 @@ def find_top_candidates(
             if payload_transform is not None
             else payload
         )
+
     # Structural matches bias the window; `None` when the query had no structural
     # filter at all (then the whole pool is fair game, ranked by score).
     has_structural = _has_structural(parsed)
@@ -569,11 +595,19 @@ def find_top_candidates(
         if result.retrieval_matches is not None
         else len(result.application_ids or [])
     )
-    matched_count = retrieval_count if matcher_ids is not None else pool_count
     candidate_pool = (
         base_query
         if matcher_ids is None
-        else base_query.filter(CandidateApplication.id.in_(matcher_ids))
+        else (
+            candidate_loader.filter_matches(base_query, matcher_ids)
+            if candidate_loader is not None
+            else base_query.filter(CandidateApplication.id.in_(matcher_ids))
+        )
+    )
+    matched_count = (
+        _pool_count(candidate_pool)
+        if matcher_ids is not None and candidate_loader is not None
+        else (retrieval_count if matcher_ids is not None else pool_count)
     )
 
     warnings = [w.model_dump(mode="json") for w in result.warnings]
@@ -595,7 +629,7 @@ def find_top_candidates(
         # `pool_size` to distinguish "no structural matches" from "empty pool".
         "total_matched": matched_count,
         "pool_size": pool_count,
-        "structural_matches": len(matcher_ids) if matcher_ids is not None else None,
+        "structural_matches": matched_count if matcher_ids is not None else None,
         "criteria_requested": requested_criteria,
         "criteria_checked": criteria,
         "criteria_unchecked": unchecked_criteria,
@@ -704,8 +738,13 @@ def find_top_candidates(
     # Final/window ordering: structural matches first, then by score. Applied in
     # Python so it's deterministic regardless of the bounded load order.
     def _rank_key(a):
+        is_structural_match = bool(matcher_ids) and (
+            candidate_loader.is_match(a, matcher_ids)
+            if candidate_loader is not None
+            else a.id in matcher_ids
+        )
         return (
-            bool(matcher_ids) and a.id in matcher_ids,
+            is_structural_match,
             getattr(a, score_col) is not None,
             getattr(a, score_col) or float("-inf"),
         )
@@ -720,15 +759,14 @@ def find_top_candidates(
             score_attr=score_attr,
             size=limit,
             row_adapter=row_adapter,
+            candidate_loader=candidate_loader,
         )
         apps.sort(key=_rank_key, reverse=True)
         shown = []
         reused = 0
         for i, app in enumerate(apps[:limit], start=1):
             verdicts = (
-                _stored_role_requirement_verdicts(app)
-                if role_id is not None
-                else []
+                _stored_role_requirement_verdicts(app) if role_id is not None else []
             )
             if any(verdict.grounded for verdict in verdicts):
                 reused += 1
@@ -748,12 +786,12 @@ def find_top_candidates(
             "deep_checked": 0,
             "qualified": None,
             "eligible_after_hard_constraints": matched_count,
-            "evidence_basis": (
-                "stored_role_requirements" if reused else "score_only"
-            ),
+            "evidence_basis": ("stored_role_requirements" if reused else "score_only"),
             "evidence_reused": reused,
             "evidence_succeeded": reused,
-            "capped": result.capped or not result.exhaustive or matched_count > len(shown),
+            "capped": result.capped
+            or not result.exhaustive
+            or matched_count > len(shown),
             "candidates": shown,
             "excluded": {
                 "required_total": 0,
@@ -780,6 +818,13 @@ def find_top_candidates(
         # final sort below still uses grounded constraint/preference signals and
         # the query-relevance order.
         load_kwargs = {"row_adapter": row_adapter} if row_adapter is not None else {}
+        if candidate_loader is not None:
+            load_kwargs.update(
+                {
+                    "candidate_loader": candidate_loader,
+                    "score_attr": score_attr,
+                }
+            )
         apps = _load_candidates_by_ids(
             candidate_pool, relevance_ids[:window_size], **load_kwargs
         )
@@ -790,6 +835,7 @@ def find_top_candidates(
             score_attr=score_attr,
             size=max(window_size, limit),
             row_adapter=row_adapter,
+            candidate_loader=candidate_loader,
         )
     apps.sort(key=_rank_key, reverse=True)
     grounded = _ground_window(
@@ -809,13 +855,10 @@ def find_top_candidates(
     # rather than being hidden.
     preferred_keys = {criterion.lower() for criterion in preferred_criteria}
     required_constraint_keys = {
-        criterion.lower()
-        for criterion in checked_required
-        if _is_constraint(criterion)
+        criterion.lower() for criterion in checked_required if _is_constraint(criterion)
     }
     relevance_position = {
-        int(application_id): index
-        for index, application_id in enumerate(relevance_ids)
+        int(application_id): index for index, application_id in enumerate(relevance_ids)
     }
 
     def _signal_key(item):
@@ -867,11 +910,15 @@ def find_top_candidates(
     evidence_succeeded = _evidence_succeeded_count(grounded)
     qualification_criteria = checked_required or criteria
     qualified_in_checked = _fully_met_count(survivors, qualification_criteria)
-    population_capped = result.capped or not result.exhaustive or matched_count > len(grounded)
-    qualified_total = (
-        qualified_in_checked
-        if not population_capped and evidence_succeeded == len(grounded)
-        else None
+    population_capped = (
+        result.capped or not result.exhaustive or matched_count > len(grounded)
+    )
+    evidence_exhaustive = bool(
+        not population_capped and evidence_succeeded == len(grounded)
+    )
+    qualified_total = qualified_in_checked if evidence_exhaustive else None
+    exact_qualitative_empty = bool(
+        not shown and qualified_total == 0 and evidence_exhaustive
     )
     response_warnings = list(base_payload["warnings"])
     evidence_models = _grounding_models(grounded)
@@ -901,10 +948,10 @@ def find_top_candidates(
         "qualified_in_checked": qualified_in_checked,
         "qualified_total": qualified_total,
         "eligible_after_hard_constraints": len(survivors),
-        "search_status": (
-            "matches_found" if shown else "no_verified_matches"
-        ),
-        "capped": population_capped,
+        "search_status": ("matches_found" if shown else "no_verified_matches"),
+        "capped": not evidence_exhaustive,
+        "exhaustive": evidence_exhaustive,
+        "is_exact_empty": exact_qualitative_empty,
         "candidates": shown,
         "excluded": excluded,
         "evidence_model": evidence_models[0] if len(evidence_models) == 1 else None,
@@ -1018,9 +1065,7 @@ def screen_pool_against_requirement(
         if result.database_matches is not None
         else len(result_ids)
     )
-    matched_pool = base_query.filter(
-        CandidateApplication.id.in_(result_ids or [-1])
-    )
+    matched_pool = base_query.filter(CandidateApplication.id.in_(result_ids or [-1]))
 
     warnings = [w.model_dump(mode="json") for w in result.warnings]
     if unchecked_criteria:
@@ -1034,7 +1079,9 @@ def screen_pool_against_requirement(
             }
         )
     base_payload = {
-        "spec": _build_spec(parsed, query=requirement, rank_by="taali", criteria=criteria),
+        "spec": _build_spec(
+            parsed, query=requirement, rank_by="taali", criteria=criteria
+        ),
         **search_output_metadata(result, retrieval_matches=matched_count),
         "mode": "rediscovery",
         "total_matched": matched_count,
@@ -1066,7 +1113,9 @@ def screen_pool_against_requirement(
         return {
             **base_payload,
             "screened": 0,
-            "capped": result.capped or not result.exhaustive or matched_count > len(shown),
+            "capped": result.capped
+            or not result.exhaustive
+            or matched_count > len(shown),
             "screen_cap": SCREEN_GROUND_WINDOW,
             "evaluated": 0,
             "shown": len(shown),
@@ -1181,13 +1230,10 @@ def screen_pool_against_requirement(
     survivors, excluded = _partition_required_matches(grounded, checked_required)
     preferred_keys = {criterion.lower() for criterion in preferred_criteria}
     required_constraint_keys = {
-        criterion.lower()
-        for criterion in checked_required
-        if _is_constraint(criterion)
+        criterion.lower() for criterion in checked_required if _is_constraint(criterion)
     }
     relevance_position = {
-        int(application_id): index
-        for index, application_id in enumerate(result_ids)
+        int(application_id): index for index, application_id in enumerate(result_ids)
     }
 
     def _signal_key(item):
@@ -1239,7 +1285,9 @@ def screen_pool_against_requirement(
     evidence_succeeded = _evidence_succeeded_count(grounded)
     qualification_criteria = checked_required or criteria
     qualified_in_checked = _fully_met_count(survivors, qualification_criteria)
-    population_capped = result.capped or not result.exhaustive or matched_count > len(grounded)
+    population_capped = (
+        result.capped or not result.exhaustive or matched_count > len(grounded)
+    )
     qualified_total = (
         qualified_in_checked
         if not population_capped and evidence_succeeded == len(grounded)

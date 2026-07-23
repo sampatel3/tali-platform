@@ -132,6 +132,58 @@ def test_queue_decision_returns_existing_pending_on_same_app_different_type(db):
     assert n == 1
 
 
+def test_queue_decision_returns_existing_taught_card_instead_of_duplicate(db):
+    """A taught card remains live until the recruiter resolves it."""
+
+    org, role, app = _seed(db)
+    first_run = _agent_run(db, role)
+    taught = queue_decision.run(
+        db,
+        Actor.agent(int(first_run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="advance_to_interview",
+        reasoning="Initial recommendation.",
+        confidence=0.8,
+        model_version="m",
+        prompt_version="p",
+        expected_score_generation=_score_generation(db, role, app),
+    )
+    taught.status = "reverted_for_feedback"
+    db.commit()
+
+    second_run = _agent_run(db, role)
+    returned = queue_decision.run(
+        db,
+        Actor.agent(int(second_run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="send_assessment",
+        reasoning="A later cycle must not duplicate the taught card.",
+        confidence=0.9,
+        model_version="m",
+        prompt_version="p",
+        expected_score_generation=_score_generation(db, role, app),
+    )
+
+    assert returned.id == taught.id
+    assert returned.status == "reverted_for_feedback"
+    assert (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role.id,
+            AgentDecision.application_id == app.id,
+            AgentDecision.status.in_(
+                ("pending", "processing", "reverted_for_feedback")
+            ),
+        )
+        .count()
+        == 1
+    )
+
+
 def test_queue_decision_refuses_older_done_score_when_newer_attempt_is_stale(db):
     org, role, app = _seed(db)
     run = _agent_run(db, role)

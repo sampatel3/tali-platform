@@ -8,13 +8,16 @@ exercised the same way claude.ai would hit them.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
 
+from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
-from app.models.role import Role
+from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.sister_role_evaluation import SisterRoleEvaluation
 from tests.conftest import auth_headers
 
 
@@ -29,11 +32,18 @@ def _parse_sse_payload(text: str) -> dict[str, Any]:
     for line in text.splitlines():
         line = line.strip()
         if line.startswith("data:"):
-            return json.loads(line[len("data:"):].strip())
+            return json.loads(line[len("data:") :].strip())
     raise AssertionError(f"no SSE data: line in body: {text!r}")
 
 
-def _mcp_call(client, headers: dict[str, str], method: str, params: dict | None = None, *, request_id: int = 1) -> dict:
+def _mcp_call(
+    client,
+    headers: dict[str, str],
+    method: str,
+    params: dict | None = None,
+    *,
+    request_id: int = 1,
+) -> dict:
     body: dict[str, Any] = {"jsonrpc": "2.0", "id": request_id, "method": method}
     if params is not None:
         body["params"] = params
@@ -57,10 +67,14 @@ def _tool_payload(rpc_response: dict) -> Any:
     if content:
         text = content[0].get("text", "")
         return json.loads(text)
-    raise AssertionError(f"tools/call returned no structuredContent or content: {result}")
+    raise AssertionError(
+        f"tools/call returned no structuredContent or content: {result}"
+    )
 
 
-def _create_role_via_db(db, *, organization_id: int, name: str = "Senior Engineer", **kwargs) -> Role:
+def _create_role_via_db(
+    db, *, organization_id: int, name: str = "Senior Engineer", **kwargs
+) -> Role:
     role = Role(
         organization_id=organization_id,
         name=name,
@@ -141,7 +155,9 @@ def test_mcp_requires_bearer_token(client, db):
 
 def test_mcp_rejects_invalid_token(client, db):
     headers = {"Authorization": "Bearer not.a.valid.jwt"}
-    rpc = _mcp_call(client, headers, "tools/call", {"name": "list_roles", "arguments": {}})
+    rpc = _mcp_call(
+        client, headers, "tools/call", {"name": "list_roles", "arguments": {}}
+    )
     result = rpc.get("result", {})
     assert result.get("isError") is True
 
@@ -158,6 +174,8 @@ def test_mcp_lists_all_tools(client, db):
         "get_role_candidate",
         "get_candidate",
         "compare_applications",
+        "compare_role_applications",
+        "find_top_candidates",
         "list_candidate_actions",
         "list_recent_agent_decisions",
         "nl_search_candidates",
@@ -234,7 +252,9 @@ def test_list_roles_returns_org_roles_only(client, db, org_user):
     db.commit()
     _create_role_via_db(db, organization_id=other_org.id, name="Leak")
 
-    rpc = _mcp_call(client, headers, "tools/call", {"name": "list_roles", "arguments": {}})
+    rpc = _mcp_call(
+        client, headers, "tools/call", {"name": "list_roles", "arguments": {}}
+    )
     rows = _tool_payload(rpc)
     names = {r["name"] for r in rows}
     assert names == {"A", "B"}
@@ -252,7 +272,10 @@ def test_get_role_returns_full_payload(client, db, org_user):
         db, organization_id=org_id, name="Backend", job_spec_text="Build APIs"
     )
     rpc = _mcp_call(
-        client, headers, "tools/call", {"name": "get_role", "arguments": {"role_id": role.id}}
+        client,
+        headers,
+        "tools/call",
+        {"name": "get_role", "arguments": {"role_id": role.id}},
     )
     payload = _tool_payload(rpc)
     assert payload["role_id"] == role.id
@@ -264,7 +287,10 @@ def test_get_role_returns_full_payload(client, db, org_user):
 def test_get_role_404_for_missing(client, db, org_user):
     headers, _user, _org_id = org_user
     rpc = _mcp_call(
-        client, headers, "tools/call", {"name": "get_role", "arguments": {"role_id": 999_999}}
+        client,
+        headers,
+        "tools/call",
+        {"name": "get_role", "arguments": {"role_id": 999_999}},
     )
     result = rpc["result"]
     assert result["isError"] is True
@@ -307,7 +333,9 @@ def test_search_applications_filters_by_min_score(client, db, org_user):
     rows = _tool_payload(rpc)
     assert [r["application_id"] for r in rows] == [high.id]
     assert rows[0]["candidate_name"] == "High Score"
-    assert rows[0]["frontend_url"].endswith(f"/candidates/{high.id}?from=jobs/{role.id}")
+    assert rows[0]["frontend_url"].endswith(
+        f"/candidates/{high.id}?from=jobs/{role.id}"
+    )
 
 
 def test_search_applications_threshold_accepts_0_to_10_scale(client, db, org_user):
@@ -315,16 +343,29 @@ def test_search_applications_threshold_accepts_0_to_10_scale(client, db, org_use
     headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id)
     _create_application(
-        db, organization_id=org_id, role=role, full_name="A", email="a@x.test", taali_score=49.0
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="A",
+        email="a@x.test",
+        taali_score=49.0,
     )
     keep = _create_application(
-        db, organization_id=org_id, role=role, full_name="B", email="b@x.test", taali_score=72.0
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="B",
+        email="b@x.test",
+        taali_score=72.0,
     )
     rpc = _mcp_call(
         client,
         headers,
         "tools/call",
-        {"name": "search_applications", "arguments": {"role_id": role.id, "min_score": 7}},
+        {
+            "name": "search_applications",
+            "arguments": {"role_id": role.id, "min_score": 7},
+        },
     )
     rows = _tool_payload(rpc)
     assert [r["application_id"] for r in rows] == [keep.id]
@@ -418,15 +459,27 @@ def test_search_applications_filters_by_stage_and_outcome(client, db, org_user):
     headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id)
     _create_application(
-        db, organization_id=org_id, role=role, full_name="Rejected", email="r@x.test",
-        taali_score=90.0, application_outcome="rejected",
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Rejected",
+        email="r@x.test",
+        taali_score=90.0,
+        application_outcome="rejected",
     )
     open_app = _create_application(
-        db, organization_id=org_id, role=role, full_name="Open", email="o@x.test",
-        taali_score=80.0, application_outcome="open",
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Open",
+        email="o@x.test",
+        taali_score=80.0,
+        application_outcome="open",
     )
     rpc = _mcp_call(
-        client, headers, "tools/call",
+        client,
+        headers,
+        "tools/call",
         {"name": "search_applications", "arguments": {"role_id": role.id}},
     )
     rows = _tool_payload(rpc)
@@ -437,18 +490,34 @@ def test_search_applications_score_type_pre_screen(client, db, org_user):
     headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id)
     bad = _create_application(
-        db, organization_id=org_id, role=role, full_name="B", email="b@x.test",
-        taali_score=20.0, pre_screen_score=10.0,
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="B",
+        email="b@x.test",
+        taali_score=20.0,
+        pre_screen_score=10.0,
     )
     good = _create_application(
-        db, organization_id=org_id, role=role, full_name="G", email="g@x.test",
-        taali_score=20.0, pre_screen_score=85.0,
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="G",
+        email="g@x.test",
+        taali_score=20.0,
+        pre_screen_score=85.0,
     )
     rpc = _mcp_call(
-        client, headers, "tools/call",
+        client,
+        headers,
+        "tools/call",
         {
             "name": "search_applications",
-            "arguments": {"role_id": role.id, "min_score": 50, "score_type": "pre_screen"},
+            "arguments": {
+                "role_id": role.id,
+                "min_score": 50,
+                "score_type": "pre_screen",
+            },
         },
     )
     rows = _tool_payload(rpc)
@@ -504,7 +573,9 @@ def test_search_applications_workable_threshold_accepts_either_scale(
     assert rows[0]["workable_score_100"] == 82.0
 
 
-def test_search_applications_supports_assessment_score_filter_and_sort(client, db, org_user):
+def test_search_applications_supports_assessment_score_filter_and_sort(
+    client, db, org_user
+):
     headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id)
     low = _create_application(
@@ -551,15 +622,25 @@ def test_search_applications_q_matches_name(client, db, org_user):
     headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id)
     _create_application(
-        db, organization_id=org_id, role=role, full_name="Alice Anderson", email="alice@x.test",
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Alice Anderson",
+        email="alice@x.test",
         taali_score=60.0,
     )
     bob = _create_application(
-        db, organization_id=org_id, role=role, full_name="Bob Brown", email="bob@x.test",
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Bob Brown",
+        email="bob@x.test",
         taali_score=60.0,
     )
     rpc = _mcp_call(
-        client, headers, "tools/call",
+        client,
+        headers,
+        "tools/call",
         {"name": "search_applications", "arguments": {"q": "bob"}},
     )
     rows = _tool_payload(rpc)
@@ -571,23 +652,42 @@ def test_search_applications_q_matches_name(client, db, org_user):
 # ---------------------------------------------------------------------------
 
 
-def test_get_application_returns_detail_payload(client, db, org_user):
+def test_get_application_is_explicitly_physical_evidence_only(client, db, org_user):
     headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id)
     app = _create_application(
-        db, organization_id=org_id, role=role, full_name="Cara", email="cara@x.test",
-        taali_score=77.0, pre_screen_score=64.0,
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Cara",
+        email="cara@x.test",
+        taali_score=77.0,
+        pre_screen_score=64.0,
     )
     rpc = _mcp_call(
-        client, headers, "tools/call",
+        client,
+        headers,
+        "tools/call",
         {"name": "get_application", "arguments": {"application_id": app.id}},
     )
     payload = _tool_payload(rpc)
     assert payload["application_id"] == app.id
-    assert payload["taali_score"] == 77.0
-    assert payload["pre_screen_score"] == 64.0
     assert payload["candidate_name"] == "Cara"
     assert payload["cv_text"] is None  # default include_cv_text=False
+    assert payload["record_scope"] == "physical_application_evidence_only"
+    assert payload["logical_role_state_included"] is False
+    assert "role-aware" in payload["notice"]
+    for state_field in (
+        "role_id",
+        "role_name",
+        "taali_score",
+        "pre_screen_score",
+        "pipeline_stage",
+        "application_outcome",
+        "current_state",
+        "recruiter_notes",
+    ):
+        assert state_field not in payload
 
 
 def test_get_application_cross_org_404(client, db, org_user):
@@ -600,11 +700,17 @@ def test_get_application_cross_org_404(client, db, org_user):
     db.commit()
     other_role = _create_role_via_db(db, organization_id=other_org.id, name="Foreign")
     foreign_app = _create_application(
-        db, organization_id=other_org.id, role=other_role,
-        full_name="Hidden", email="hidden@x.test", taali_score=99.0,
+        db,
+        organization_id=other_org.id,
+        role=other_role,
+        full_name="Hidden",
+        email="hidden@x.test",
+        taali_score=99.0,
     )
     rpc = _mcp_call(
-        client, headers, "tools/call",
+        client,
+        headers,
+        "tools/call",
         {"name": "get_application", "arguments": {"application_id": foreign_app.id}},
     )
     assert rpc["result"]["isError"] is True
@@ -615,7 +721,11 @@ def test_get_candidate_includes_cross_role_applications(client, db, org_user):
     role_a = _create_role_via_db(db, organization_id=org_id, name="Role A")
     role_b = _create_role_via_db(db, organization_id=org_id, name="Role B")
     app_a = _create_application(
-        db, organization_id=org_id, role=role_a, full_name="Sam", email="sam@x.test",
+        db,
+        organization_id=org_id,
+        role=role_a,
+        full_name="Sam",
+        email="sam@x.test",
         taali_score=70.0,
     )
     # Reuse same candidate id by upserting a second application
@@ -635,7 +745,9 @@ def test_get_candidate_includes_cross_role_applications(client, db, org_user):
     db.commit()
 
     rpc = _mcp_call(
-        client, headers, "tools/call",
+        client,
+        headers,
+        "tools/call",
         {"name": "get_candidate", "arguments": {"candidate_id": candidate_id}},
     )
     payload = _tool_payload(rpc)
@@ -643,33 +755,219 @@ def test_get_candidate_includes_cross_role_applications(client, db, org_user):
     assert role_ids == {role_a.id, role_b.id}
 
 
-def test_compare_applications_returns_scores(client, db, org_user):
+def test_public_mcp_get_candidate_preserves_related_assessment_truth(
+    client, db, org_user
+):
+    """The HTTP MCP profile keeps one assessment truth per logical role."""
+
+    headers, _user, org_id = org_user
+    owner = _create_role_via_db(db, organization_id=org_id, name="ATS Owner")
+    related = _create_role_via_db(
+        db,
+        organization_id=org_id,
+        name="Independent Related",
+        source="sister",
+        role_kind=ROLE_KIND_SISTER,
+        ats_owner_role_id=int(owner.id),
+    )
+    application = _create_application(
+        db,
+        organization_id=org_id,
+        role=owner,
+        full_name="Assessment Truth",
+        email="assessment-truth@mcp.test",
+        taali_score=92,
+    )
+    application.assessment_score_cache_100 = 96
+    application.role_fit_score_cache_100 = 88
+    evaluation = SisterRoleEvaluation(
+        organization_id=org_id,
+        role_id=int(related.id),
+        candidate_id=int(application.candidate_id),
+        source_application_id=int(application.id),
+        ats_application_id=int(application.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="public_mcp_truth",
+        spec_fingerprint="public-mcp-profile-assessment-truth",
+        role_fit_score=88,
+    )
+    now = datetime.now(timezone.utc)
+    db.add_all(
+        [
+            evaluation,
+            Assessment(
+                organization_id=org_id,
+                candidate_id=int(application.candidate_id),
+                role_id=int(owner.id),
+                application_id=int(application.id),
+                status=AssessmentStatus.COMPLETED,
+                completed_at=now,
+                assessment_score=96,
+                is_voided=False,
+            ),
+            Assessment(
+                organization_id=org_id,
+                candidate_id=int(application.candidate_id),
+                role_id=int(related.id),
+                application_id=int(application.id),
+                status=AssessmentStatus.COMPLETED,
+                completed_at=now,
+                assessment_score=34,
+                is_voided=False,
+            ),
+        ]
+    )
+    db.commit()
+
+    payload = _tool_payload(
+        _mcp_call(
+            client,
+            headers,
+            "tools/call",
+            {
+                "name": "get_candidate",
+                "arguments": {"candidate_id": int(application.candidate_id)},
+            },
+        )
+    )
+
+    memberships = {
+        int(row["role_id"]): row for row in payload["applications"]
+    }
+    assert set(memberships) == {int(owner.id), int(related.id)}
+    assert memberships[int(owner.id)]["assessment_score_cache_100"] == 96
+    assert memberships[int(owner.id)]["taali_score"] == 92
+    assert memberships[int(related.id)]["assessment_score_cache_100"] == 34
+    assert memberships[int(related.id)]["taali_score"] == 61
+
+
+def test_compare_applications_is_explicitly_physical_evidence_only(
+    client, db, org_user
+):
     headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id)
-    a = _create_application(db, organization_id=org_id, role=role, full_name="A",
-                            email="a@x.test", taali_score=70.0)
-    b = _create_application(db, organization_id=org_id, role=role, full_name="B",
-                            email="b@x.test", taali_score=85.0)
+    a = _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="A",
+        email="a@x.test",
+        taali_score=70.0,
+    )
+    b = _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="B",
+        email="b@x.test",
+        taali_score=85.0,
+    )
     rpc = _mcp_call(
-        client, headers, "tools/call",
-        {"name": "compare_applications", "arguments": {"application_ids": [a.id, b.id]}},
+        client,
+        headers,
+        "tools/call",
+        {
+            "name": "compare_applications",
+            "arguments": {"application_ids": [a.id, b.id]},
+        },
     )
     payload = _tool_payload(rpc)
     assert [r["application_id"] for r in payload["applications"]] == [a.id, b.id]
-    assert payload["applications"][0]["scores"]["taali"] == 70.0
-    assert payload["applications"][1]["scores"]["taali"] == 85.0
-    assert "score_legend" in payload
+    assert payload["record_scope"] == "physical_application_evidence_only"
+    assert payload["logical_role_state_included"] is False
+    assert "score_legend" not in payload
+    for row in payload["applications"]:
+        assert "scores" not in row
+        assert "pipeline_stage" not in row
+        assert "application_outcome" not in row
+        assert "role_id" not in row
+
+
+def test_role_aware_detail_and_compare_return_authoritative_state(client, db, org_user):
+    headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id)
+    first = _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Role A",
+        email="role-a@x.test",
+        taali_score=70.0,
+        pipeline_stage="review",
+    )
+    second = _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Role B",
+        email="role-b@x.test",
+        taali_score=85.0,
+        pipeline_stage="applied",
+    )
+
+    detail = _tool_payload(
+        _mcp_call(
+            client,
+            headers,
+            "tools/call",
+            {
+                "name": "get_role_candidate",
+                "arguments": {
+                    "role_id": role.id,
+                    "application_id": first.id,
+                },
+            },
+        )
+    )
+    assert detail["role_id"] == role.id
+    assert detail["taali_score"] == 70.0
+    assert detail["current_state"]["pipeline_stage"] == "review"
+
+    comparison = _tool_payload(
+        _mcp_call(
+            client,
+            headers,
+            "tools/call",
+            {
+                "name": "compare_role_applications",
+                "arguments": {
+                    "role_id": role.id,
+                    "application_ids": [first.id, second.id],
+                },
+            },
+        )
+    )
+    assert comparison["role"]["id"] == role.id
+    assert [row["scores"]["taali"] for row in comparison["applications"]] == [
+        70.0,
+        85.0,
+    ]
+    assert [
+        row["current_state"]["pipeline_stage"] for row in comparison["applications"]
+    ] == ["review", "applied"]
 
 
 def test_compare_applications_reports_missing_ids(client, db, org_user):
     headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id)
-    a = _create_application(db, organization_id=org_id, role=role, full_name="A",
-                            email="a@x.test", taali_score=70.0)
+    a = _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="A",
+        email="a@x.test",
+        taali_score=70.0,
+    )
     rpc = _mcp_call(
-        client, headers, "tools/call",
-        {"name": "compare_applications",
-         "arguments": {"application_ids": [a.id, 999_999]}},
+        client,
+        headers,
+        "tools/call",
+        {
+            "name": "compare_applications",
+            "arguments": {"application_ids": [a.id, 999_999]},
+        },
     )
     payload = _tool_payload(rpc)
     assert [r["application_id"] for r in payload["applications"]] == [a.id]
@@ -684,11 +982,15 @@ def test_compare_applications_reports_missing_ids(client, db, org_user):
 def test_resource_role_returns_markdown(client, db, org_user):
     headers, _user, org_id = org_user
     role = _create_role_via_db(
-        db, organization_id=org_id, name="Platform Eng",
+        db,
+        organization_id=org_id,
+        name="Platform Eng",
         job_spec_text="Distributed systems work.",
     )
     rpc = _mcp_call(
-        client, headers, "resources/read",
+        client,
+        headers,
+        "resources/read",
         {"uri": f"tali://role/{role.id}"},
     )
     contents = rpc["result"]["contents"]
@@ -696,6 +998,44 @@ def test_resource_role_returns_markdown(client, db, org_user):
     body = contents[0]["text"]
     assert "Platform Eng" in body
     assert "Distributed systems work." in body
+
+
+def test_application_resources_separate_physical_evidence_from_role_state(
+    client, db, org_user
+):
+    headers, _user, org_id = org_user
+    role = _create_role_via_db(db, organization_id=org_id, name="Resource Role")
+    app = _create_application(
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Resource Candidate",
+        email="resource@x.test",
+        taali_score=91.0,
+        pipeline_stage="review",
+    )
+
+    legacy = _mcp_call(
+        client,
+        headers,
+        "resources/read",
+        {"uri": f"tali://application/{app.id}"},
+    )["result"]["contents"][0]["text"]
+    assert "physical application evidence" in legacy
+    assert "does not include or certify logical-role" in legacy
+    assert "Role-local scores" not in legacy
+    assert "Current stage" not in legacy
+
+    role_aware = _mcp_call(
+        client,
+        headers,
+        "resources/read",
+        {"uri": f"tali://role/{role.id}/application/{app.id}"},
+    )["result"]["contents"][0]["text"]
+    assert "Resource Role" in role_aware
+    assert "Current stage `review`" in role_aware
+    assert "Role-local scores" in role_aware
+    assert "taali: 91.0" in role_aware
 
 
 # ---------------------------------------------------------------------------
@@ -734,7 +1074,9 @@ def test_api_key_happy_path_returns_org_scoped_data(client, db, org_user):
     secret = _mint_key(db, organization_id=org_id)  # default scopes = full read
 
     rpc = _mcp_call(
-        client, _key_headers(secret), "tools/call",
+        client,
+        _key_headers(secret),
+        "tools/call",
         {"name": "list_roles", "arguments": {}},
     )
     rows = _tool_payload(rpc)
@@ -749,7 +1091,9 @@ def test_api_key_via_x_api_key_header(client, db, org_user):
     secret = _mint_key(db, organization_id=org_id)
 
     rpc = _mcp_call(
-        client, {"X-API-Key": secret}, "tools/call",
+        client,
+        {"X-API-Key": secret},
+        "tools/call",
         {"name": "list_roles", "arguments": {}},
     )
     rows = _tool_payload(rpc)
@@ -770,7 +1114,9 @@ def test_api_key_cross_org_isolation(client, db, org_user):
 
     secret_b = _mint_key(db, organization_id=org_b.id)
     rpc = _mcp_call(
-        client, _key_headers(secret_b), "tools/call",
+        client,
+        _key_headers(secret_b),
+        "tools/call",
         {"name": "list_roles", "arguments": {}},
     )
     rows = _tool_payload(rpc)
@@ -781,7 +1127,9 @@ def test_api_key_revoked_is_rejected(client, db, org_user):
     _headers, _user, org_id = org_user
     secret = _mint_key(db, organization_id=org_id, revoked=True)
     rpc = _mcp_call(
-        client, _key_headers(secret), "tools/call",
+        client,
+        _key_headers(secret),
+        "tools/call",
         {"name": "list_roles", "arguments": {}},
     )
     result = rpc["result"]
@@ -800,7 +1148,9 @@ def test_api_key_expired_is_rejected(client, db, org_user):
         db, organization_id=org_id, expires_at=_utcnow() - timedelta(hours=1)
     )
     rpc = _mcp_call(
-        client, _key_headers(secret), "tools/call",
+        client,
+        _key_headers(secret),
+        "tools/call",
         {"name": "list_roles", "arguments": {}},
     )
     assert rpc["result"]["isError"] is True
@@ -813,14 +1163,20 @@ def test_api_key_scope_missing_denies_application_tools(client, db, org_user):
     _headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id, name="ScopeRole")
     app = _create_application(
-        db, organization_id=org_id, role=role, full_name="Scoped",
-        email="scoped@x.test", taali_score=80.0,
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Scoped",
+        email="scoped@x.test",
+        taali_score=80.0,
     )
     secret = _mint_key(db, organization_id=org_id, scopes=[SCOPE_ROLES_READ])
 
     # roles:read tool -> allowed
     rpc_roles = _mcp_call(
-        client, _key_headers(secret), "tools/call",
+        client,
+        _key_headers(secret),
+        "tools/call",
         {"name": "list_roles", "arguments": {}},
     )
     rows = _tool_payload(rpc_roles)
@@ -828,7 +1184,9 @@ def test_api_key_scope_missing_denies_application_tools(client, db, org_user):
 
     # applications:read tool -> denied on scope
     rpc_apps = _mcp_call(
-        client, _key_headers(secret), "tools/call",
+        client,
+        _key_headers(secret),
+        "tools/call",
         {"name": "get_application", "arguments": {"application_id": app.id}},
     )
     result = rpc_apps["result"]
@@ -871,9 +1229,7 @@ def test_api_key_assessment_scope_is_independent(client, db, org_user):
     assert "assessments:read" in text
 
 
-def test_api_key_recruiting_overview_requires_all_source_scopes(
-    client, db, org_user
-):
+def test_api_key_recruiting_overview_requires_all_source_scopes(client, db, org_user):
     """The aggregate cannot bypass any underlying domain's read grant."""
     from app.models.api_key import (
         SCOPE_APPLICATIONS_READ,
@@ -931,13 +1287,19 @@ def test_api_key_roles_only_strips_application_counts(client, db, org_user):
     _headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id, name="CountsRole")
     _create_application(
-        db, organization_id=org_id, role=role, full_name="Counted",
-        email="counted@x.test", taali_score=70.0,
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="Counted",
+        email="counted@x.test",
+        taali_score=70.0,
     )
     secret = _mint_key(db, organization_id=org_id, scopes=[SCOPE_ROLES_READ])
 
     rpc_list = _mcp_call(
-        client, _key_headers(secret), "tools/call",
+        client,
+        _key_headers(secret),
+        "tools/call",
         {"name": "list_roles", "arguments": {"include_stage_counts": True}},
     )
     for row in _tool_payload(rpc_list):
@@ -945,7 +1307,9 @@ def test_api_key_roles_only_strips_application_counts(client, db, org_user):
         assert "stage_counts" not in row
 
     rpc_role = _mcp_call(
-        client, _key_headers(secret), "tools/call",
+        client,
+        _key_headers(secret),
+        "tools/call",
         {"name": "get_role", "arguments": {"role_id": role.id}},
     )
     payload = _tool_payload(rpc_role)
@@ -960,21 +1324,29 @@ def test_api_key_scope_gates_resources(client, db, org_user):
     _headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id, name="ResRole")
     app = _create_application(
-        db, organization_id=org_id, role=role, full_name="R",
-        email="r2@x.test", taali_score=60.0,
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="R",
+        email="r2@x.test",
+        taali_score=60.0,
     )
     secret = _mint_key(db, organization_id=org_id, scopes=[SCOPE_ROLES_READ])
 
     # role resource -> allowed under roles:read
     rpc_role = _mcp_call(
-        client, _key_headers(secret), "resources/read",
+        client,
+        _key_headers(secret),
+        "resources/read",
         {"uri": f"tali://role/{role.id}"},
     )
     assert rpc_role["result"]["contents"][0]["mimeType"] == "text/markdown"
 
     # application resource -> requires applications:read -> denied
     rpc_app = _mcp_call(
-        client, _key_headers(secret), "resources/read",
+        client,
+        _key_headers(secret),
+        "resources/read",
         {"uri": f"tali://application/{app.id}"},
     )
     assert "error" in rpc_app
@@ -985,15 +1357,23 @@ def test_jwt_path_unchanged_has_full_read_access(client, db, org_user):
     headers, _user, org_id = org_user
     role = _create_role_via_db(db, organization_id=org_id, name="JwtRole")
     app = _create_application(
-        db, organization_id=org_id, role=role, full_name="J",
-        email="j@x.test", taali_score=91.0,
+        db,
+        organization_id=org_id,
+        role=role,
+        full_name="J",
+        email="j@x.test",
+        taali_score=91.0,
     )
     # roles tool
-    rpc_roles = _mcp_call(client, headers, "tools/call", {"name": "list_roles", "arguments": {}})
+    rpc_roles = _mcp_call(
+        client, headers, "tools/call", {"name": "list_roles", "arguments": {}}
+    )
     assert {r["name"] for r in _tool_payload(rpc_roles)} == {"JwtRole"}
     # applications tool — no scope check applied to JWT principals
     rpc_app = _mcp_call(
-        client, headers, "tools/call",
+        client,
+        headers,
+        "tools/call",
         {"name": "get_application", "arguments": {"application_id": app.id}},
     )
     assert _tool_payload(rpc_app)["application_id"] == app.id

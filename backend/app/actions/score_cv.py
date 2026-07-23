@@ -14,7 +14,11 @@ from sqlalchemy.orm import Session
 
 from ..domains.assessments_runtime.role_support import get_application
 from ..models.cv_score_job import CvScoreJob
+from ..models.role import Role
 from ..services.cv_score_orchestrator import enqueue_score
+from ..services.logical_role_application_authority import (
+    authorize_logical_role_application,
+)
 from .types import ACTOR_AGENT, Actor
 
 
@@ -24,10 +28,37 @@ def run(
     *,
     organization_id: int,
     application_id: int,
+    role_id: int | None = None,
     force: bool = False,
     bypass_pre_screen: bool = False,
 ) -> Optional[CvScoreJob]:
-    app = get_application(application_id, organization_id, db)
+    if role_id is None:
+        # Recruiter-facing legacy callers are already authorized by their route.
+        # Autonomous callers always pass role_id and cross the stricter logical-
+        # role boundary below.
+        app = get_application(application_id, organization_id, db)
+    else:
+        role = (
+            db.query(Role)
+            .filter(
+                Role.id == int(role_id),
+                Role.organization_id == int(organization_id),
+                Role.deleted_at.is_(None),
+            )
+            .one_or_none()
+        )
+        if role is None:
+            raise ValueError(f"role {role_id} not found")
+        context = authorize_logical_role_application(
+            db,
+            role=role,
+            application_id=int(application_id),
+        )
+        if context.is_related:
+            raise ValueError(
+                "Related-role scoring must use the role-local evaluation lifecycle"
+            )
+        app = context.source_application
     return enqueue_score(
         db,
         app,

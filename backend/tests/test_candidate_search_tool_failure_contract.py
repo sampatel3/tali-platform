@@ -57,6 +57,23 @@ def test_canonical_role_search_fails_closed_when_current_state_is_unavailable():
     )
 
 
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "search_role_candidates",
+        "get_role_candidate",
+        "list_candidate_actions",
+        "list_recent_agent_decisions",
+    ],
+)
+def test_every_canonical_candidate_fact_read_is_terminal_on_failure(tool_name):
+    assert is_candidate_search_tool(tool_name)
+    assert candidate_search_result_failed(
+        tool_name,
+        {"available": False, "error": "authoritative read unavailable"},
+    )
+
+
 def test_terminal_warning_code_is_classified_even_without_top_level_status():
     assert candidate_search_result_failed(
         "nl_search_candidates",

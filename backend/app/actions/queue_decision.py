@@ -23,6 +23,10 @@ from ..models.candidate_application_event import CandidateApplicationEvent
 from ..services.decision_input_fingerprint import (
     capture_input_fingerprint as _capture_input_fingerprint,
 )
+from ..services.agent_decision_admission import (
+    latest_active_decision,
+    lock_decision_application,
+)
 from .types import ACTOR_AGENT, Actor
 
 if TYPE_CHECKING:
@@ -485,6 +489,19 @@ def run(
                 ),
             )
 
+    # Every decision type shares the same logical role/candidate queue slot.
+    # Lock the supplied application as the current producer's serialization
+    # point; the database candidate-keyed partial unique index also closes races
+    # between owner and direct physical applications for the same subject.
+    locked_subject = lock_decision_application(
+        db,
+        organization_id=int(organization_id),
+        application_id=int(application_id),
+    )
+    if locked_subject is None:
+        raise HTTPException(status_code=422, detail="application is unavailable")
+    app = locked_subject
+
     from ..services.decision_policy_generation import (
         validate_queue_policy_generation,
     )
@@ -571,19 +588,15 @@ def run(
     # person twice in the queue (e.g. "advance" + "send_assessment" both
     # waiting). Existing pending wins; return it so the caller treats this
     # as a dedup, not a new emit.
-    # Count 'processing' as well as 'pending': an approved decision whose
-    # Workable writeback is in flight (or stuck after a failed dispatch) must
-    # still block a duplicate, else a stranded 'processing' row lets the next
-    # cycle mint a second decision for the same candidate.
-    existing_pending = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.role_id == int(role_id),
-            AgentDecision.application_id == application_id,
-            AgentDecision.status.in_(("pending", "processing")),
-        )
-        .order_by(AgentDecision.created_at.desc())
-        .first()
+    # Count every live queue state. A taught ``reverted_for_feedback`` card is
+    # still actionable, while ``processing`` represents an approved action
+    # whose provider writeback is in flight (or stuck after a failed dispatch).
+    # Either must block a duplicate recommendation for this candidate.
+    existing_pending = latest_active_decision(
+        db,
+        organization_id=int(organization_id),
+        role_id=int(role_id),
+        application_id=int(application_id),
     )
     if existing_pending is not None:
         existing_pending._just_created = False  # type: ignore[attr-defined]
@@ -679,6 +692,7 @@ def run(
         organization_id=organization_id,
         role_id=role_id,
         application_id=application_id,
+        candidate_id=int(app.candidate_id),
         agent_run_id=actor.agent_run_id,
         decision_type=decision_type,
         recommendation=recommendation or decision_type,
@@ -707,11 +721,21 @@ def run(
         nested.commit()
     except IntegrityError:
         nested.rollback()
-        existing = (
-            db.query(AgentDecision)
-            .filter(AgentDecision.idempotency_key == idempotency_key)
-            .first()
+        # The database invariant may have been won by a different decision
+        # type/idempotency key, so recover by the canonical logical subject
+        # before falling back to a same-request replay.
+        existing = latest_active_decision(
+            db,
+            organization_id=int(organization_id),
+            role_id=int(role_id),
+            application_id=int(application_id),
         )
+        if existing is None:
+            existing = (
+                db.query(AgentDecision)
+                .filter(AgentDecision.idempotency_key == idempotency_key)
+                .first()
+            )
         if existing is not None:
             # Surface the dedup-existing branch on the returned object so
             # callers can decide whether to count it against the per-cycle

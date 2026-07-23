@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from app.actions import create_application
 from app.actions.types import Actor
@@ -17,13 +19,14 @@ from app.candidate_search.role_scope import (
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
-from app.models.agent_decision import AgentDecision
+from app.models.agent_decision import AGENT_DECISION_ACTIVE_STATUSES, AgentDecision
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.mcp import handlers
+from app.mcp.payloads import application_summary
 from app.domains.assessments_runtime.applications_routes import (
     get_application_detail,
 )
@@ -31,6 +34,9 @@ from app.services.related_role_service import (
     RelatedRoleError,
     create_related_role,
     preview_related_role,
+)
+from app.services.related_role_direct_membership import (
+    create_direct_related_membership,
 )
 from app.services.sister_role_projection import project_sister_application
 from app.services.sister_role_service import (
@@ -660,6 +666,7 @@ def test_projection_keeps_local_state_and_returns_shared_ats_restrictions(db):
         source,
         role=related,
         evaluation=membership,
+        assessment_score=None,
     )
     projected = project_sister_application(
         {
@@ -687,6 +694,206 @@ def test_projection_keeps_local_state_and_returns_shared_ats_restrictions(db):
         "shared_ats_disqualified",
         "shared_ats_post_handover",
     }.issubset(projected["action_restrictions"]["codes"])
+
+
+def test_ats_transport_identity_is_enforced_on_orm_writes_and_owner_changes(db):
+    organization, owner, related = _roles(db, suffix="transport-write-boundary")
+    valid = _owner_application(
+        db,
+        organization=organization,
+        owner=owner,
+        suffix="transport-valid",
+    )
+    wrong_candidate = _owner_application(
+        db,
+        organization=organization,
+        owner=owner,
+        suffix="transport-wrong-candidate",
+    )
+    wrong_owner = Role(
+        organization_id=int(organization.id),
+        name="Wrong ATS owner",
+        source="workable",
+        workable_job_id=f"WRONG-OWNER-{id(db)}",
+    )
+    db.add(wrong_owner)
+    db.flush()
+    wrong_owner_application = CandidateApplication(
+        organization_id=int(organization.id),
+        candidate_id=int(valid.candidate_id),
+        role_id=int(wrong_owner.id),
+        pipeline_stage="applied",
+        pipeline_stage_source="sync",
+        application_outcome="open",
+    )
+    membership = SisterRoleEvaluation(
+        organization_id=int(organization.id),
+        role_id=int(related.id),
+        candidate_id=int(valid.candidate_id),
+        source_application_id=int(valid.id),
+        ats_application_id=int(valid.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="initial_snapshot",
+        spec_fingerprint="transport-write-boundary",
+        role_fit_score=87,
+    )
+    db.add_all([wrong_owner_application, membership])
+    db.commit()
+
+    db.add(
+        SisterRoleEvaluation(
+            organization_id=int(organization.id),
+            role_id=int(related.id),
+            candidate_id=int(wrong_candidate.candidate_id),
+            source_application_id=int(wrong_candidate.id),
+            ats_application_id=int(valid.id),
+            status="pending",
+            pipeline_stage="applied",
+            application_outcome="open",
+            membership_source="direct",
+            spec_fingerprint="invalid-transport-insert",
+        )
+    )
+    with pytest.raises(ValueError, match="declared ATS owner"):
+        db.flush()
+    db.rollback()
+
+    for invalid_application_id in (
+        int(wrong_candidate.id),
+        int(wrong_owner_application.id),
+    ):
+        membership = db.get(SisterRoleEvaluation, int(membership.id))
+        membership.ats_application_id = invalid_application_id
+        with pytest.raises(ValueError, match="declared ATS owner"):
+            db.flush()
+        db.rollback()
+
+    membership = db.get(SisterRoleEvaluation, int(membership.id))
+    assert membership.ats_application_id == valid.id
+    related.ats_owner_role_id = int(wrong_owner.id)
+    db.commit()
+    db.refresh(membership)
+    assert membership.ats_application_id is None
+    assert membership.ats_application is None
+
+
+def test_related_payloads_use_only_validated_ats_transport_fields(db):
+    organization, owner, related = _roles(db, suffix="transport-read-boundary")
+    transport = _owner_application(
+        db,
+        organization=organization,
+        owner=owner,
+        suffix="transport-read-valid",
+    )
+    transport.workable_stage = "ATS technical interview"
+    transport.bullhorn_status = "ATS submitted"
+    transport.external_stage_raw = "ats-raw"
+    transport.external_stage_normalized = "ats-normalized"
+    direct_source = CandidateApplication(
+        organization_id=int(organization.id),
+        candidate_id=int(transport.candidate_id),
+        role_id=int(related.id),
+        pipeline_stage="applied",
+        pipeline_stage_source="system",
+        application_outcome="open",
+        workable_stage="WRONG source stage",
+        bullhorn_status="WRONG source status",
+        external_stage_raw="wrong-source-raw",
+        external_stage_normalized="wrong-source-normalized",
+        cv_text="Role-local evidence",
+    )
+    db.add(direct_source)
+    db.flush()
+    membership = SisterRoleEvaluation(
+        organization_id=int(organization.id),
+        role_id=int(related.id),
+        candidate_id=int(transport.candidate_id),
+        source_application_id=int(direct_source.id),
+        ats_application_id=int(transport.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="direct",
+        spec_fingerprint="transport-read-boundary",
+        role_fit_score=93,
+    )
+    db.add(membership)
+    db.commit()
+
+    adapted = RelatedRoleSearchApplication(
+        direct_source,
+        role=related,
+        evaluation=membership,
+        assessment_score=None,
+    )
+    summary = application_summary(adapted)
+    projected = project_sister_application(
+        {
+            "workable_stage": direct_source.workable_stage,
+            "bullhorn_status": direct_source.bullhorn_status,
+            "external_stage_raw": direct_source.external_stage_raw,
+            "external_stage_normalized": direct_source.external_stage_normalized,
+        },
+        sister_role=related,
+        owner_role=owner,
+        evaluation=membership,
+        application=direct_source,
+    )
+    for payload in (summary, projected):
+        assert payload["workable_stage"] == "ATS technical interview"
+        assert payload["bullhorn_status"] == "ATS submitted"
+        assert payload["external_stage_raw"] == "ats-raw"
+        assert payload["external_stage_normalized"] == "ats-normalized"
+
+    # Simulate a corrupt legacy/direct-SQL row. Production migration triggers
+    # reject this write; canonical reads still fail closed if it is encountered
+    # in a metadata-created test schema or during a partial recovery.
+    db.execute(
+        text(
+            "UPDATE sister_role_evaluations "
+            "SET ats_application_id = :application_id WHERE id = :membership_id"
+        ),
+        {
+            "application_id": int(_owner_application(
+                db,
+                organization=organization,
+                owner=owner,
+                suffix="transport-read-wrong-candidate",
+            ).id),
+            "membership_id": int(membership.id),
+        },
+    )
+    db.commit()
+    db.expire_all()
+    membership = db.get(SisterRoleEvaluation, int(membership.id))
+    direct_source = db.get(CandidateApplication, int(direct_source.id))
+    related = db.get(Role, int(related.id))
+    adapted = RelatedRoleSearchApplication(
+        direct_source,
+        role=related,
+        evaluation=membership,
+        assessment_score=None,
+    )
+    summary = application_summary(adapted)
+    projected = project_sister_application(
+        {
+            "workable_stage": direct_source.workable_stage,
+            "bullhorn_status": direct_source.bullhorn_status,
+            "external_stage_raw": direct_source.external_stage_raw,
+            "external_stage_normalized": direct_source.external_stage_normalized,
+        },
+        sister_role=related,
+        owner_role=owner,
+        evaluation=membership,
+        application=direct_source,
+    )
+    for payload in (summary, projected):
+        assert payload["workable_stage"] is None
+        assert payload["bullhorn_status"] is None
+        assert payload["external_stage_raw"] is None
+        assert payload["external_stage_normalized"] is None
 
 
 def test_direct_related_application_creates_explicit_membership(db):
@@ -728,6 +935,245 @@ def test_direct_related_application_creates_explicit_membership(db):
     db.refresh(membership)
     assert membership.status == "pending"
     assert membership.cv_fingerprint is not None
+
+
+def test_direct_application_promotes_role_truth_and_archives_owner_shadow(db):
+    organization, owner, related = _roles(db, suffix="direct-promotes")
+    owner_application = _owner_application(
+        db,
+        organization=organization,
+        owner=owner,
+        suffix="direct-promotes",
+    )
+    owner_membership = SisterRoleEvaluation(
+        organization_id=int(organization.id),
+        role_id=int(related.id),
+        candidate_id=int(owner_application.candidate_id),
+        source_application_id=int(owner_application.id),
+        ats_application_id=int(owner_application.id),
+        status="done",
+        pipeline_stage="applied",
+        application_outcome="open",
+        membership_source="legacy_explicit",
+        spec_fingerprint="owner-shadow-spec",
+        role_fit_score=88,
+    )
+    db.add(owner_membership)
+    db.commit()
+
+    now = datetime.now(timezone.utc)
+    direct_application = CandidateApplication(
+        organization_id=int(organization.id),
+        candidate_id=int(owner_application.candidate_id),
+        role_id=int(related.id),
+        pipeline_stage="applied",
+        pipeline_stage_updated_at=now,
+        pipeline_stage_source="system",
+        application_outcome="open",
+        application_outcome_updated_at=now,
+        cv_text="Direct role evidence for production engineering.",
+    )
+    db.add(direct_application)
+    db.flush()
+    create_direct_related_membership(
+        db,
+        role=related,
+        application=direct_application,
+    )
+    db.commit()
+
+    rows = (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.role_id == int(related.id),
+            SisterRoleEvaluation.candidate_id == int(owner_application.candidate_id),
+        )
+        .order_by(SisterRoleEvaluation.id.asc())
+        .all()
+    )
+    assert len(rows) == 2
+    live = [row for row in rows if row.deleted_at is None]
+    shadows = [row for row in rows if row.deleted_at is not None]
+    assert len(live) == 1
+    assert len(shadows) == 1
+    assert live[0].source_application_id == direct_application.id
+    assert live[0].ats_application_id == owner_application.id
+    assert live[0].membership_source == "direct"
+    assert shadows[0].source_application_id == owner_application.id
+    assert shadows[0].membership_source == "legacy_compat_shadow"
+
+
+def test_direct_application_promotion_closes_prior_active_lifecycle(db):
+    organization, owner, related = _roles(db, suffix="direct-promotion-lifecycle")
+    owner_application = _owner_application(
+        db,
+        organization=organization,
+        owner=owner,
+        suffix="direct-promotion-lifecycle",
+    )
+    prior_membership = SisterRoleEvaluation(
+        organization_id=int(organization.id),
+        role_id=int(related.id),
+        candidate_id=int(owner_application.candidate_id),
+        source_application_id=int(owner_application.id),
+        ats_application_id=int(owner_application.id),
+        status="done",
+        pipeline_stage="review",
+        application_outcome="open",
+        membership_source="initial_snapshot",
+        spec_fingerprint="prior-promotion-spec",
+        role_fit_score=91,
+        summary="Prior owner-backed role lifecycle",
+    )
+    prior_assessment = Assessment(
+        organization_id=int(organization.id),
+        candidate_id=int(owner_application.candidate_id),
+        role_id=int(related.id),
+        application_id=int(owner_application.id),
+        token=f"direct-promotion-prior-assessment-{id(db)}",
+        status=AssessmentStatus.COMPLETED,
+        is_voided=False,
+    )
+    prior_decision = AgentDecision(
+        organization_id=int(organization.id),
+        role_id=int(related.id),
+        application_id=int(owner_application.id),
+        decision_type="advance_to_interview",
+        recommendation="advance",
+        status="processing",
+        reasoning="Prior owner-backed lifecycle recommendation",
+        model_version="prior-model",
+        prompt_version="prior-prompt",
+        idempotency_key=f"direct-promotion-prior-decision-{id(db)}",
+    )
+    db.add_all([prior_membership, prior_assessment, prior_decision])
+    db.commit()
+
+    now = datetime.now(timezone.utc)
+    direct_application = CandidateApplication(
+        organization_id=int(organization.id),
+        candidate_id=int(owner_application.candidate_id),
+        role_id=int(related.id),
+        pipeline_stage="applied",
+        pipeline_stage_updated_at=now,
+        pipeline_stage_source="system",
+        application_outcome="open",
+        application_outcome_updated_at=now,
+        cv_text="Fresh direct-role evidence for the new lifecycle.",
+    )
+    db.add(direct_application)
+    db.flush()
+    current_membership = create_direct_related_membership(
+        db,
+        role=related,
+        application=direct_application,
+    )
+    db.commit()
+
+    db.refresh(prior_membership)
+    db.refresh(prior_assessment)
+    db.refresh(prior_decision)
+    assert prior_membership.deleted_at is not None
+    assert prior_membership.membership_source == "legacy_compat_shadow"
+    assert prior_membership.history[-1]["role_fit_score"] == 91
+    assert current_membership.deleted_at is None
+    assert current_membership.source_application_id == direct_application.id
+    assert prior_assessment.is_voided is True
+    assert prior_assessment.void_reason == (
+        "Superseded when the candidate re-applied to this role"
+    )
+    assert prior_decision.status == "discarded"
+    assert prior_decision.resolved_at is not None
+    assert prior_decision.resolution_note == (
+        "superseded: candidate started a new role membership lifecycle"
+    )
+
+    current_assessment = Assessment(
+        organization_id=int(organization.id),
+        candidate_id=int(owner_application.candidate_id),
+        role_id=int(related.id),
+        application_id=int(direct_application.id),
+        token=f"direct-promotion-current-assessment-{id(db)}",
+        status=AssessmentStatus.PENDING,
+        is_voided=False,
+    )
+    current_decision = AgentDecision(
+        organization_id=int(organization.id),
+        role_id=int(related.id),
+        application_id=int(direct_application.id),
+        decision_type="send_assessment",
+        recommendation="send_assessment",
+        status="pending",
+        reasoning="New direct-role lifecycle recommendation",
+        model_version="current-model",
+        prompt_version="current-prompt",
+        idempotency_key=f"direct-promotion-current-decision-{id(db)}",
+    )
+    db.add_all([current_assessment, current_decision])
+    db.commit()
+
+    with pytest.raises(IntegrityError):
+        with db.begin_nested():
+            db.add(
+                AgentDecision(
+                    organization_id=int(organization.id),
+                    role_id=int(related.id),
+                    application_id=int(owner_application.id),
+                    decision_type="reject",
+                    recommendation="reject",
+                    status="pending",
+                    reasoning="Duplicate related-role card through ATS transport",
+                    model_version="current-model",
+                    prompt_version="current-prompt",
+                    idempotency_key=(
+                        f"direct-promotion-duplicate-decision-{id(db)}"
+                    ),
+                )
+            )
+            db.flush()
+
+    owner_role_decision = AgentDecision(
+        organization_id=int(organization.id),
+        role_id=int(owner.id),
+        application_id=int(owner_application.id),
+        decision_type="reject",
+        recommendation="reject",
+        status="pending",
+        reasoning="Independent owner-role recommendation",
+        model_version="current-model",
+        prompt_version="current-prompt",
+        idempotency_key=f"direct-promotion-owner-decision-{id(db)}",
+    )
+    db.add(owner_role_decision)
+    db.commit()
+
+    active_assessments = (
+        db.query(Assessment)
+        .filter(
+            Assessment.organization_id == int(organization.id),
+            Assessment.role_id == int(related.id),
+            Assessment.candidate_id == int(owner_application.candidate_id),
+            Assessment.is_voided.is_(False),
+        )
+        .all()
+    )
+    active_decisions = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.organization_id == int(organization.id),
+            AgentDecision.role_id == int(related.id),
+            AgentDecision.application_id.in_(
+                [int(owner_application.id), int(direct_application.id)]
+            ),
+            AgentDecision.status.in_(AGENT_DECISION_ACTIVE_STATUSES),
+        )
+        .all()
+    )
+    assert [int(row.id) for row in active_assessments] == [
+        int(current_assessment.id)
+    ]
+    assert [int(row.id) for row in active_decisions] == [int(current_decision.id)]
+    assert owner_role_decision.candidate_id == owner_application.candidate_id
 
 
 def test_direct_reapply_restores_membership_as_a_fresh_role_lifecycle(db):

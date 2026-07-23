@@ -12,6 +12,70 @@ from ..models.sister_role_evaluation import (
 )
 
 
+def _resolve_related_role_ats_application(
+    *,
+    sister_role: Role,
+    evaluation: SisterRoleEvaluation | None,
+    source_application: CandidateApplication | None,
+) -> tuple[CandidateApplication | None, str | None]:
+    """Resolve one transport and a fail-closed reason when unavailable.
+
+    ``ats_application_id`` is valid only for the membership's tenant and
+    candidate and for the logical role's currently declared ATS owner. The
+    source fallback is limited to rolling compatibility rows that have no
+    explicit transport id; it is subject to the exact same identity checks.
+    """
+
+    if evaluation is None:
+        return None, "ats_application_unlinked"
+    if int(evaluation.role_id) != int(sister_role.id):
+        return None, "ats_application_invalid"
+    if int(evaluation.organization_id) != int(sister_role.organization_id):
+        return None, "ats_application_invalid"
+    owner_role_id = sister_role.ats_owner_role_id
+    if owner_role_id is None:
+        return None, "ats_application_unlinked"
+    application = (
+        evaluation._ats_application_record
+        if evaluation.ats_application_id is not None
+        else source_application
+    )
+    if application is None:
+        return None, "ats_application_unlinked"
+    if int(application.organization_id) != int(evaluation.organization_id):
+        return None, "ats_application_invalid"
+    if int(application.candidate_id) != int(evaluation.candidate_id):
+        return None, "ats_application_invalid"
+    if int(application.role_id) != int(owner_role_id):
+        return None, "ats_application_wrong_owner"
+    if getattr(application, "deleted_at", None) is not None:
+        return None, "ats_application_deleted"
+    owner_role = sister_role.ats_owner_role
+    if (
+        owner_role is None
+        or int(owner_role.organization_id) != int(evaluation.organization_id)
+        or getattr(owner_role, "deleted_at", None) is not None
+    ):
+        return None, "ats_owner_role_unavailable"
+    return application, None
+
+
+def validated_related_role_ats_application(
+    *,
+    sister_role: Role,
+    evaluation: SisterRoleEvaluation | None,
+    source_application: CandidateApplication | None,
+) -> CandidateApplication | None:
+    """Return only a live, fully identity-validated ATS transport."""
+
+    application, _reason = _resolve_related_role_ats_application(
+        sister_role=sister_role,
+        evaluation=evaluation,
+        source_application=source_application,
+    )
+    return application
+
+
 def related_role_ats_state(
     *,
     sister_role: Role,
@@ -26,18 +90,11 @@ def related_role_ats_state(
     owner-stage/outcome projection.
     """
 
-    ats_application = (
-        evaluation.ats_application
-        if evaluation is not None and evaluation.ats_application_id is not None
-        else None
+    ats_application, unavailable_code = _resolve_related_role_ats_application(
+        sister_role=sister_role,
+        evaluation=evaluation,
+        source_application=source_application,
     )
-    if (
-        ats_application is None
-        and source_application is not None
-        and int(source_application.role_id or 0)
-        == int(sister_role.ats_owner_role_id or 0)
-    ):
-        ats_application = source_application
 
     if ats_application is None:
         ats_context = {
@@ -50,48 +107,7 @@ def related_role_ats_state(
             "application_outcome": None,
             "workable_disqualified": False,
         }
-        restriction_codes = ["ats_application_unlinked"]
-    elif getattr(ats_application, "deleted_at", None) is not None:
-        ats_context = {
-            "provider": "native",
-            "raw_stage": None,
-            "normalized_stage": None,
-            "needs_mapping": False,
-            "post_handover": False,
-            "writeback_linked": False,
-            "application_outcome": None,
-            "workable_disqualified": False,
-        }
-        restriction_codes = ["ats_application_deleted"]
-    elif int(ats_application.role_id or 0) != int(
-        sister_role.ats_owner_role_id or 0
-    ):
-        ats_context = {
-            "provider": "native",
-            "raw_stage": None,
-            "normalized_stage": None,
-            "needs_mapping": False,
-            "post_handover": False,
-            "writeback_linked": False,
-            "application_outcome": None,
-            "workable_disqualified": False,
-        }
-        restriction_codes = ["ats_application_wrong_owner"]
-    elif (
-        sister_role.ats_owner_role is None
-        or getattr(sister_role.ats_owner_role, "deleted_at", None) is not None
-    ):
-        ats_context = {
-            "provider": "native",
-            "raw_stage": None,
-            "normalized_stage": None,
-            "needs_mapping": False,
-            "post_handover": False,
-            "writeback_linked": False,
-            "application_outcome": None,
-            "workable_disqualified": False,
-        }
-        restriction_codes = ["ats_owner_role_unavailable"]
+        restriction_codes = [unavailable_code or "ats_application_unlinked"]
     else:
         # Lazy import avoids the pipeline_service -> sister_role_service ->
         # projection -> ats_context_service -> pipeline_service import cycle.
@@ -211,12 +227,10 @@ def project_sister_application(
         source_application=source_application,
     )
     ats_context = ats_state["ats_context"]
-    owner_is_available = bool(
-        owner_role is not None
-        and sister_role.ats_owner_role_id is not None
-        and int(owner_role.id) == int(sister_role.ats_owner_role_id)
-        and int(owner_role.organization_id) == int(sister_role.organization_id)
-        and owner_role.deleted_at is None
+    ats_application = validated_related_role_ats_application(
+        sister_role=sister_role,
+        evaluation=evaluation,
+        source_application=source_application,
     )
     if (
         str(ats_context.get("application_outcome") or "open") != "open"
@@ -231,8 +245,11 @@ def project_sister_application(
         {
             "role_id": sister_role.id,
             "role_name": sister_role.name,
-            "operational_role_id": owner_role.id if owner_is_available else None,
-            "operational_role_name": owner_role.name if owner_is_available else None,
+            # The optional owner is an ATS transport boundary, not the
+            # candidate's operational role. Transport restrictions are exposed
+            # only through ``ats_context`` / ``action_restrictions`` below.
+            "operational_role_id": None,
+            "operational_role_name": None,
             "sister_role_id": sister_role.id,
             # The source application's score is a judgment from another role.
             # Keep ATS linkage in ``ats_context`` but never expose that verdict
@@ -266,6 +283,30 @@ def project_sister_application(
             # becomes this role's membership, pipeline stage, or outcome.
             "ats_context": ats_context,
             "action_restrictions": ats_state["action_restrictions"],
+            # Provider fields belong to the validated ATS transport. A direct
+            # role-local source application may contain similarly named fields,
+            # but they are not this role's external state.
+            "workable_stage": (
+                ats_application.workable_stage if ats_application is not None else None
+            ),
+            "bullhorn_status": (
+                ats_application.bullhorn_status if ats_application is not None else None
+            ),
+            "external_stage_raw": (
+                ats_application.external_stage_raw
+                if ats_application is not None
+                else None
+            ),
+            "external_stage_normalized": (
+                ats_application.external_stage_normalized
+                if ats_application is not None
+                else None
+            ),
+            "workable_profile_url": (
+                ats_application.workable_profile_url
+                if ats_application is not None
+                else None
+            ),
             # Backward-compatible summary enum. The detailed restriction map
             # above is authoritative and local actions remain available.
             "related_role_availability": legacy_availability,
@@ -289,7 +330,9 @@ def project_sister_application(
             # Application-column judgments and history belong to the physical
             # source role. Related notes/actions live in role-attributed events;
             # related assessments and pending decisions are overlaid below.
-            "manual_decision": None,
+            "manual_decision": (
+                evaluation.manual_decision if evaluation is not None else None
+            ),
             "notes": None,
             "pre_screen_recommendation": None,
             "pre_screen_evidence": None,
@@ -349,4 +392,8 @@ def project_sister_application(
     return projected
 
 
-__all__ = ["project_sister_application", "related_role_ats_state"]
+__all__ = [
+    "project_sister_application",
+    "related_role_ats_state",
+    "validated_related_role_ats_application",
+]

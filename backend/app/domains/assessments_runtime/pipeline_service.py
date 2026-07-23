@@ -17,9 +17,7 @@ from ...services.related_role_application_runtime import sync_shared_advance
 from ...services.sister_role_service import reconcile_related_roles_after_outcome
 from .pipeline_event_service import (
     append_event as _append_event,
-    event_to_payload as _event_to_payload,
     existing_idempotent_event as _existing_idempotent_event,
-    list_application_events,
 )
 
 # An application is described by TWO independent axes:
@@ -689,7 +687,9 @@ def reconcile_post_handover_advanced(
             db.query(AgentDecision.id)
             .filter(
                 AgentDecision.application_id == int(app.id),
-                AgentDecision.status.in_(("pending", "processing")),
+                AgentDecision.status.in_(
+                    ("pending", "processing", "reverted_for_feedback")
+                ),
                 AgentDecision.decision_type.in_(
                     ("reject", "skip_assessment_reject")
                 ),

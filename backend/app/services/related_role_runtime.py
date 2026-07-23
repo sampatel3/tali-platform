@@ -103,7 +103,9 @@ def _pending_decision(
             AgentDecision.organization_id == int(role.organization_id),
             AgentDecision.role_id == int(role.id),
             AgentDecision.application_id == int(evaluation.source_application_id),
-            AgentDecision.status.in_(("pending", "processing")),
+            AgentDecision.status.in_(
+                ("pending", "processing", "reverted_for_feedback")
+            ),
         )
         .order_by(AgentDecision.id.desc())
         .first()

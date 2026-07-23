@@ -77,13 +77,14 @@ def add_event(
     to_stage: str | None = None,
     to_outcome: str | None = None,
     actor_id: int | None = 7,
+    role_id: int | None = None,
 ) -> CandidateApplicationEvent:
     application = db.get(CandidateApplication, int(application_id))
     assert application is not None
     ev = CandidateApplicationEvent(
         application_id=application_id,
         organization_id=organization_id,
-        role_id=int(application.role_id),
+        role_id=int(role_id if role_id is not None else application.role_id),
         event_type=event_type,
         actor_type=actor_type,
         actor_id=actor_id,

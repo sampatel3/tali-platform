@@ -189,6 +189,7 @@ def test_public_scrub_is_recursive_and_removes_links_pii_and_credentials():
             "access_token": "secret-token-value",
             "internalLink": "https://internal.test/report",
             "authorization": "Bearer abcdefghijklmnopqrstuvwxyz",
+            "generated_at": datetime(2026, 7, 22, 12, tzinfo=timezone.utc),
         },
     }
 
@@ -203,6 +204,7 @@ def test_public_scrub_is_recursive_and_removes_links_pii_and_credentials():
     assert "access_token" not in safe["metadata"]
     assert "internalLink" not in safe["metadata"]
     assert "authorization" not in safe["metadata"]
+    assert safe["metadata"]["generated_at"] == "2026-07-22T12:00:00+00:00"
     for secret in (
         "ada@example.com",
         "+971 50 123 4567",

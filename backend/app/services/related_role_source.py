@@ -148,8 +148,8 @@ def select_related_role_source_members(
             candidate_id=candidate_id,
             source_application=application,
             ats_application_id=(
-                int(evaluation.ats_application_id)
-                if owner is not None and evaluation.ats_application_id is not None
+                int(evaluation.ats_application.id)
+                if owner is not None and evaluation.ats_application is not None
                 else None
             ),
             pipeline_stage=str(evaluation.pipeline_stage or "applied"),

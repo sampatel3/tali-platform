@@ -158,10 +158,12 @@ def _event(**overrides):
     `notes`, `from_value`, etc. silently mocks past the production bug
     that this fixture is here to prevent."""
     cand = _candidate()
-    application = SimpleNamespace(candidate=cand, organization_id=1)
+    application = SimpleNamespace(candidate=cand, organization_id=1, role_id=10)
     base = dict(
         id=1,
+        application_id=20,
         application=application,
+        role_id=10,
         event_type="pipeline_stage_changed",
         from_stage=None,
         to_stage=None,
@@ -192,6 +194,28 @@ def test_event_episode_keeps_reason_when_present():
     assert "Comp expectations did not align." in ep.body
     # Outcome transition rendered semantically so the LLM can extract it.
     assert "open" in ep.body and "rejected" in ep.body
+
+
+def test_event_episode_preserves_logical_role_identity_over_transport_owner():
+    ep = episode_module.build_event_episode(
+        _event(
+            role_id=22,
+            application=SimpleNamespace(
+                candidate=_candidate(), organization_id=1, role_id=10
+            ),
+            reason="Advanced for this role only",
+        )
+    )
+
+    assert ep is not None
+    assert "Application taali_id=20, role taali_id=22." in ep.body
+    assert "role.22" in ep.source_description
+
+
+def test_event_episode_does_not_infer_legacy_role_from_transport_owner():
+    assert episode_module.build_event_episode(
+        _event(role_id=None, reason="Ambiguous legacy event")
+    ) is None
 
 
 def test_event_episode_renders_workable_stage_advance():

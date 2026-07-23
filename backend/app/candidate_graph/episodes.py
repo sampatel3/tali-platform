@@ -26,6 +26,7 @@ from ..models.candidate import Candidate
 from ..models.candidate_application_event import CandidateApplicationEvent
 from ..models.application_interview import ApplicationInterview
 from . import client as graph_client
+from .event_identity import logical_event_role_id
 
 logger = logging.getLogger("taali.candidate_graph.episodes")
 
@@ -302,21 +303,28 @@ def build_event_episode(event: CandidateApplicationEvent) -> Episode | None:
     org = int(event.application.organization_id or 0)
     if org <= 0:
         return None
+    role_id = logical_event_role_id(event)
+    if role_id is None:
+        return None
 
     note = (getattr(event, "reason", None) or "").strip()
     body_lines = [
         _candidate_subject_header(candidate),
+        f"Application taali_id={event.application_id}, role taali_id={role_id}.",
         f"Pipeline event: {event.event_type}",
     ]
+    has_state_change = False
     from_stage = getattr(event, "from_stage", None) or None
     to_stage = getattr(event, "to_stage", None) or None
     if (from_stage or to_stage) and from_stage != to_stage:
+        has_state_change = True
         body_lines.append(
             f"Pipeline stage: {from_stage or '(none)'} → {to_stage or '(none)'}"
         )
     from_outcome = getattr(event, "from_outcome", None) or None
     to_outcome = getattr(event, "to_outcome", None) or None
     if (from_outcome or to_outcome) and from_outcome != to_outcome:
+        has_state_change = True
         body_lines.append(
             f"Application outcome: {from_outcome or '(none)'} → {to_outcome or '(none)'}"
         )
@@ -324,14 +332,14 @@ def build_event_episode(event: CandidateApplicationEvent) -> Episode | None:
         body_lines.append("")
         body_lines.append(f"Note: {note[:1500]}")
 
-    # Skip if we ended up with just the header + event_type line and no
-    # note — pure no-op (e.g. "applied → applied" with no commentary).
-    if len(body_lines) <= 2 and not note:
+    # Skip pure no-ops (e.g. "applied → applied" with no commentary). Role
+    # identity is context, not itself a candidate fact worth a provider call.
+    if not has_state_change and not note:
         return None
     return Episode(
         name=f"event-{event.id}",
         body="\n".join(body_lines),
-        source_description=f"event.{event.event_type}",
+        source_description=f"event.{event.event_type}.role.{role_id}",
         reference_time=_coerce_datetime(event.created_at, fallback=_now_utc()),
         group_id=graph_client.group_id_for_org(org),
     )

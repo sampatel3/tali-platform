@@ -42,6 +42,8 @@ REQUIRED_CAPABILITIES = {
     "candidate.pool_state": {
         "search_role_candidates",
         "get_role_candidate",
+        "compare_role_applications",
+        "get_recruiting_overview",
     },
     "candidate.action_history": {"list_candidate_actions"},
     "candidate.decision_history": {"list_recent_agent_decisions"},
@@ -56,6 +58,10 @@ EXPECTED_CAPABILITY_BINDINGS = {
     "candidate.pool_state": {
         "rest": {
             "GET /api/v1/roles/{role_id}/applications",
+            "GET /public/v1/roles/{role_id}/applications",
+            "GET /public/v1/roles/{role_id}/metrics",
+            "GET /public/v1/applications/{application_id}?view_role_id={role_id}",
+            "POST /public/v1/applications/{application_id}/share-links",
             "GET /api/v1/applications?role_ids={role_ids}",
             "GET /api/v1/applications/{application_id}?view_role_id={role_id}",
             "GET /api/v1/roles/{role_id}/pipeline",
@@ -63,22 +69,58 @@ EXPECTED_CAPABILITY_BINDINGS = {
             "GET /api/v1/analytics/decisions-breakdown?role_id={role_id}",
         },
         **{
-            surface: {"search_role_candidates", "get_role_candidate"}
+            surface: {
+                "search_role_candidates",
+                "get_role_candidate",
+                "compare_role_applications",
+                "find_top_candidates",
+                "get_recruiting_overview",
+            }
             for surface in _CANDIDATE_TOOL_SURFACES
         },
+        "public_mcp": {
+            "search_applications",
+            "search_role_candidates",
+            "get_role_candidate",
+            "compare_role_applications",
+            "find_top_candidates",
+            "get_recruiting_overview",
+        },
+        "taali_chat": {
+            "search_applications",
+            "search_role_candidates",
+            "get_role_candidate",
+            "compare_role_applications",
+            "find_top_candidates",
+            "get_recruiting_overview",
+        },
+        "autonomous_agent": {
+            "search_role_candidates",
+            "get_role_candidate",
+            "compare_role_applications",
+            "find_top_candidates",
+            "get_recruiting_overview",
+            "survey_role_state",
+            "find_apps_in_state",
+            "get_cohort_signals",
+        },
         "frontend": {
+            "src/app/pageNavigation.test.js",
             "src/shared/layout/GlobalSearch.test.jsx",
             "src/features/jobs/JobPipelinePage.test.jsx",
             "src/test/CandidateBackLink.test.jsx",
         },
     },
     "candidate.action_history": {
-        "rest": {"GET /api/v1/applications/{application_id}/events"},
-        **{
-            surface: {"list_candidate_actions"}
-            for surface in _CANDIDATE_TOOL_SURFACES
+        "rest": {
+            "GET /api/v1/applications/{application_id}/events",
+            "GET /api/v1/roles/{role_id}/agent/status",
         },
-        "frontend": {"src/test/CandidateBackLink.test.jsx"},
+        **{surface: {"list_candidate_actions"} for surface in _CANDIDATE_TOOL_SURFACES},
+        "frontend": {
+            "src/features/candidates/CandidateAuditTimeline.test.jsx",
+            "src/test/CandidateBackLink.test.jsx",
+        },
     },
     "candidate.decision_history": {
         "rest": {"GET /api/v1/agent-decisions?role_id={role_id}"},
@@ -89,6 +131,7 @@ EXPECTED_CAPABILITY_BINDINGS = {
         "frontend": {
             "src/test/CandidateBackLink.test.jsx",
             "src/features/candidates/DecisionRail.test.jsx",
+            "src/features/home/RecentDecisions.test.jsx",
         },
     },
 }
@@ -265,18 +308,15 @@ def _validate_test_case(raw: Any, backend_root: Path, feature: str) -> list[str]
     if not isinstance(raw, str) or not raw.strip():
         return [f"{feature}: test_cases entries must be non-empty strings"]
     if raw != raw.strip() or raw.count("::") < 1:
-        return [
-            f"{feature}: grounded truth must name an exact pytest node: {raw!r}"
-        ]
+        return [f"{feature}: grounded truth must name an exact pytest node: {raw!r}"]
 
     path_text, *node_parts = raw.split("::")
     errors = _validate_test_path(path_text, backend_root, feature)
     if errors:
         return errors
-    if (
-        any(not part or "[" in part or "]" in part for part in node_parts)
-        or not node_parts[-1].startswith("test_")
-    ):
+    if any(
+        not part or "[" in part or "]" in part for part in node_parts
+    ) or not node_parts[-1].startswith("test_"):
         return [
             f"{feature}: grounded truth must use an unparameterized pytest node: "
             f"{raw!r}"
@@ -337,9 +377,7 @@ def _validate_capabilities(
                 surface for surface in surfaces if isinstance(surface, str)
             }
             if len(surface_names) != len(surfaces):
-                errors.append(
-                    f"{label}: required_surfaces must contain unique strings"
-                )
+                errors.append(f"{label}: required_surfaces must contain unique strings")
             missing_surfaces = sorted(ALLOWED_CAPABILITY_SURFACES - surface_names)
             unknown_surfaces = sorted(surface_names - ALLOWED_CAPABILITY_SURFACES)
             if missing_surfaces:
@@ -374,7 +412,10 @@ def _validate_capabilities(
                 if (
                     not isinstance(values, list)
                     or not values
-                    or any(not isinstance(value, str) or not value.strip() for value in values)
+                    or any(
+                        not isinstance(value, str) or not value.strip()
+                        for value in values
+                    )
                     or len(values) != len(set(values))
                 ):
                     errors.append(
@@ -466,16 +507,12 @@ def _validate_capabilities(
 
         regressions = entry.get("regression_test_cases")
         if not isinstance(regressions, list) or not regressions:
-            errors.append(
-                f"{label}: regression_test_cases must be a non-empty list"
-            )
+            errors.append(f"{label}: regression_test_cases must be a non-empty list")
             continue
         if len(regressions) != len(
             set(case for case in regressions if isinstance(case, str))
         ):
-            errors.append(
-                f"{label}: regression_test_cases must not contain duplicates"
-            )
+            errors.append(f"{label}: regression_test_cases must not contain duplicates")
         for case in regressions:
             errors.extend(
                 _validate_test_case(case, backend_root, f"{label} regression")
@@ -585,9 +622,7 @@ def validate_registry(
             not isinstance(name, str) or not name.strip()
             for name in required_capabilities
         ):
-            errors.append(
-                f"{feature}: required_capabilities must be a list of names"
-            )
+            errors.append(f"{feature}: required_capabilities must be a list of names")
             required_capability_names: set[str] = set()
         else:
             required_capability_names = set(required_capabilities)
@@ -595,9 +630,7 @@ def validate_registry(
                 errors.append(
                     f"{feature}: required_capabilities must not contain duplicates"
                 )
-            unknown_capabilities = sorted(
-                required_capability_names - capability_names
-            )
+            unknown_capabilities = sorted(required_capability_names - capability_names)
             if unknown_capabilities:
                 errors.append(
                     f"{feature}: unknown required capabilities: "
@@ -626,9 +659,7 @@ def validate_registry(
             if not isinstance(cases, list) or not cases:
                 errors.append(f"{feature}: test_cases must be a non-empty list")
                 continue
-            if len(cases) != len(
-                set(case for case in cases if isinstance(case, str))
-            ):
+            if len(cases) != len(set(case for case in cases if isinstance(case, str))):
                 errors.append(f"{feature}: test_cases must not contain duplicates")
             for case in cases:
                 errors.extend(_validate_test_case(case, backend_root, feature))
@@ -638,7 +669,10 @@ def validate_registry(
 
         semantic_exemption = entry.get("reviewed_semantic_exemption")
         if risk == "critical":
-            if not isinstance(semantic_exemption, str) or not semantic_exemption.strip():
+            if (
+                not isinstance(semantic_exemption, str)
+                or not semantic_exemption.strip()
+            ):
                 errors.append(
                     f"{feature}: critical features require grounded_truth or a "
                     "reviewed_semantic_exemption"

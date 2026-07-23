@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Bot, RefreshCw, User, Cpu, GitMerge } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
@@ -45,26 +45,53 @@ export const CandidateAuditTimeline = ({ applicationId, roleId = null }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
+  const requestSequenceRef = useRef(0);
+  const scopeKey = `${applicationId || ''}|${roleId || ''}`;
+  const scopeKeyRef = useRef(scopeKey);
+  scopeKeyRef.current = scopeKey;
+
+  // A related-role switch can reuse the physical application id. Remove the
+  // previous logical role's history before paint; request guards alone only
+  // stop late completions and would leave old events visible while B loads.
+  useLayoutEffect(() => {
+    requestSequenceRef.current += 1;
+    setEvents([]);
+    setError(null);
+    setExpandedId(null);
+    setLoading(Boolean(applicationId));
+  }, [applicationId, scopeKey]);
 
   const fetchEvents = useCallback(async () => {
     if (!applicationId) return;
+    const requestScope = scopeKey;
+    const requestSequence = requestSequenceRef.current + 1;
+    requestSequenceRef.current = requestSequence;
+    const isCurrentRequest = () => (
+      scopeKeyRef.current === requestScope
+      && requestSequenceRef.current === requestSequence
+    );
     setLoading(true);
     try {
       const res = await apiClient.roles.listApplicationEvents(applicationId, {
         limit: 100,
         ...(roleId ? { role_id: roleId } : {}),
       });
+      if (!isCurrentRequest()) return;
       setEvents(Array.isArray(res.data) ? res.data : []);
       setError(null);
     } catch (err) {
+      if (!isCurrentRequest()) return;
       setError(err?.response?.data?.detail || 'Failed to load audit timeline');
     } finally {
-      setLoading(false);
+      if (isCurrentRequest()) setLoading(false);
     }
-  }, [applicationId, roleId]);
+  }, [applicationId, roleId, scopeKey]);
 
   useEffect(() => {
-    fetchEvents();
+    void fetchEvents();
+    return () => {
+      requestSequenceRef.current += 1;
+    };
   }, [fetchEvents]);
 
   return (

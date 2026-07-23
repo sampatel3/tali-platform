@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..models.candidate_application import CandidateApplication
@@ -89,7 +89,10 @@ def related_role_pipeline_counts_bulk(
         .filter(
             SisterRoleEvaluation.role_id.in_(role_ids),
             SisterRoleEvaluation.deleted_at.is_(None),
-            Role.role_kind == ROLE_KIND_SISTER,
+            or_(
+                Role.role_kind == ROLE_KIND_SISTER,
+                Role.ats_owner_role_id.isnot(None),
+            ),
             Role.deleted_at.is_(None),
         )
         .group_by(
@@ -143,7 +146,10 @@ def pipeline_counts_for_role(
 
     if standard_counts is not None:
         return standard_counts
-    if str(role.role_kind or "") == ROLE_KIND_SISTER:
+    if (
+        str(role.role_kind or "") == ROLE_KIND_SISTER
+        or role.ats_owner_role_id is not None
+    ):
         return related_role_pipeline_counts(db, role)
     from ..domains.assessments_runtime.pipeline_service import role_pipeline_counts
 

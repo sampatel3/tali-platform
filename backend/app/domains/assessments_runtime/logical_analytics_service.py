@@ -9,7 +9,7 @@ Every aggregate in this module therefore counts one row per logical
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
@@ -186,7 +186,7 @@ def logical_advance_conversion_aggregates(
     ).join(
         AgentDecision,
         and_(
-            AgentDecision.application_id == CandidateApplication.id,
+            AgentDecision.candidate_id == CandidateApplication.candidate_id,
             AgentDecision.role_id == role_expr,
         ),
     ).filter(

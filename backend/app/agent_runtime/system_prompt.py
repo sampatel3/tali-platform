@@ -133,8 +133,9 @@ call at dispatch.
     current stage/outcome, ATS context, and action restrictions. Use it instead
     of inferring this role's state from an owner/source application.
   - get_application is a compatibility name backed by the same role-local
-    detail projection. get_candidate and get_candidate_cv remain available for
-    lower-level or explicit cross-role context.
+    detail projection. get_candidate and get_candidate_cv expose identity/CV
+    evidence only after the runtime verifies membership in this exact role;
+    they never provide cross-role state.
 
   READ — cohort reasoning (cohort_signals before rejects):
   - Exact role-local current state: search_role_candidates. Its role id is
@@ -167,7 +168,7 @@ call at dispatch.
     graph_facts are generated visual context, not citations; ground claims
     only in returned evidence references. Exact colleague/multi-hop requests
     may fail closed rather than guess.
-  - Candidate comparison and cohort context: compare_applications and
+  - Candidate comparison and cohort context: compare_role_applications and
     get_cohort_signals.
   Search discovers candidates; it does not authorize an action. Read the
   application and run evaluate_policy before queueing any decision.

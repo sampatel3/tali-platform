@@ -32,12 +32,13 @@ from ..actions._decision_side_effects import apply_decision_side_effects
 from ..actions.types import Actor
 from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..mcp import handlers as mcp_handlers
-from ..mcp.catalog import AUTONOMOUS_AGENT
+from ..mcp.catalog import AUTONOMOUS_AGENT, get_tool_spec
 from ..mcp.shared_reads import (
     dispatch_shared_read,
     shared_read_definitions,
     shared_read_specs_for,
 )
+from ..mcp.payloads import candidate_detail
 from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import NEEDS_INPUT_KINDS
 from ..models.agent_run import AgentRun
@@ -47,12 +48,19 @@ from ..models.organization import Organization
 from ..models.role import Role
 from ..services import cohort_signals_service
 from ..services.assessment_autosend_guard import check_auto_send
+from ..services.agent_decision_admission import latest_active_decision
 from ..services.agent_policy_settings import (
     automation_enabled_for_decision,
 )
 from ..services.auto_threshold_service import resolve_role_fit_threshold
 from ..services.decision_evidence_service import blocked_must_have_requirements
 from ..services.decision_presentation_service import normalize_candidate_summary
+from ..services.logical_role_application_authority import (
+    LogicalRoleApplicationAuthorizationError,
+    authorize_logical_role_application,
+    authorize_logical_role_applications,
+    authorize_logical_role_candidate,
+)
 from . import calibration, cohort_tools, decision_translation, policy_evaluator
 
 
@@ -60,6 +68,24 @@ from . import calibration, cohort_tools, decision_translation, policy_evaluator
 # touches every scored applicant for the role, so we don't want to do it
 # more than once per cycle in normal operation.
 COHORT_SIGNALS_TTL = timedelta(hours=1)
+_RELATED_SCORE_ACTIVE_STATUSES = frozenset({"pending", "running", "retry_wait"})
+
+
+def _related_score_is_reusable(evaluation: Any) -> bool:
+    """Whether a non-forced score request is already durably satisfied.
+
+    Input changes transition related-role evaluations out of ``done`` through
+    the lifecycle service before another score is requested. A completed row
+    with a score is therefore the role-local authority and must not be reset,
+    recharged, or have its live decisions invalidated by an idempotent tool
+    retry.
+    """
+
+    status = str(getattr(evaluation, "status", "") or "")
+    return bool(
+        status in _RELATED_SCORE_ACTIVE_STATUSES
+        or (status == "done" and getattr(evaluation, "role_fit_score", None) is not None)
+    )
 
 
 @dataclass
@@ -877,30 +903,26 @@ def _authorize_candidate_in_role(
     *,
     role: Role,
     candidate_id: int,
-) -> None:
-    scope = resolve_candidate_role_scope(
+):
+    return authorize_logical_role_candidate(
         db,
-        organization_id=int(role.organization_id),
-        role_id=int(role.id),
+        role=role,
+        candidate_id=int(candidate_id),
     )
-    query = db.query(CandidateApplication.id).filter(
-        CandidateApplication.organization_id == int(role.organization_id),
-        CandidateApplication.candidate_id == int(candidate_id),
-    )
-    if scope.scope_visible_roster(query).first() is None:
-        raise ValueError(
-            f"candidate {candidate_id} is not in role {int(role.id)}'s candidate pool"
-        )
 
 
 def _tool_get_candidate(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
-    _authorize_candidate_in_role(
+    context = _authorize_candidate_in_role(
         db,
         role=role,
         candidate_id=int(args["candidate_id"]),
     )
-    return mcp_handlers.get_candidate(
-        db, _read_ctx(role), candidate_id=int(args["candidate_id"])
+    # Candidate identity/CV evidence is shared, but role state and judgments are
+    # not.  The autonomous role-bound compatibility tool therefore returns one
+    # logical membership rather than MCP's recruiter-facing cross-role profile.
+    return candidate_detail(
+        context.candidate,
+        applications=[context.presented_application],
     )
 
 
@@ -1105,12 +1127,90 @@ def _tool_get_cohort_signals(db: Session, *, agent_run: AgentRun, role: Role, ar
 
 
 def _tool_score_cv(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
+    application_id = int(args["application_id"])
+    try:
+        context = authorize_logical_role_application(
+            db,
+            role=role,
+            application_id=application_id,
+        )
+    except LogicalRoleApplicationAuthorizationError as exc:
+        return {
+            "status": "wrong_role",
+            "application_id": application_id,
+            "role_id": int(role.id),
+            "detail": str(exc),
+        }
+
+    if context.is_related:
+        if (
+            not bool(args.get("force", False))
+            and context.related_evaluation is not None
+            and _related_score_is_reusable(context.related_evaluation)
+        ):
+            existing_status = str(context.related_evaluation.status or "")
+            return {
+                "job_id": None,
+                "status": existing_status,
+                "application_id": application_id,
+                "role_id": int(role.id),
+                "evaluation_ids": [int(context.related_evaluation.id)],
+                "scoring_scope": "related_role_evaluation",
+                "reason": (
+                    "A current role-local score already exists."
+                    if existing_status == "done"
+                    else "An active role-local score already exists."
+                ),
+            }
+        from ..services.related_role_rescreen_service import (
+            RelatedRoleRescreenUnavailableError,
+            rescreen_related_role_candidates,
+        )
+
+        try:
+            outcome = rescreen_related_role_candidates(
+                db,
+                role,
+                reason=(
+                    "autonomous_agent:forced_role_local_score"
+                    if bool(args.get("force", False))
+                    else "autonomous_agent:role_local_score"
+                ),
+                application_ids=[application_id],
+                require_all_memberships=True,
+            )
+        except RelatedRoleRescreenUnavailableError as exc:
+            return {
+                "status": "role_state_changed",
+                "application_id": application_id,
+                "role_id": int(role.id),
+                "detail": str(exc),
+            }
+        status = (
+            "queued"
+            if outcome.queued_count
+            else "waiting"
+            if outcome.waiting_count
+            else "unscorable"
+            if outcome.unscorable_count
+            else "skipped"
+        )
+        return {
+            "job_id": None,
+            "status": status,
+            "application_id": application_id,
+            "role_id": int(role.id),
+            "scoring_scope": "related_role_evaluation",
+            **outcome.as_dict(),
+        }
+
     actor = Actor.agent(int(agent_run.id))
     job = score_cv.run(
         db,
         actor,
         organization_id=int(role.organization_id),
-        application_id=int(args["application_id"]),
+        application_id=application_id,
+        role_id=int(role.id),
         force=bool(args.get("force", False)),
     )
     if job is None:
@@ -1125,23 +1225,20 @@ def _existing_decision_for_subject(
     application_id: int,
     decision_type: str,
 ) -> Any:
-    """Latest non-discarded AgentDecision for this (role, app, type).
+    """Current active AgentDecision for this logical role/application.
 
     Used by the send_assessment / resend_assessment_invite HITL gates so
-    repeated agent calls don't pile up duplicate cards in the recruiter's
-    queue. Returns the row or None.
+    repeated agent calls cannot pile up cards of any type in the recruiter's
+    queue. ``decision_type`` remains in the compatibility signature for callers
+    that describe their requested action, but the queue slot is intentionally
+    shared across all decision types.
     """
-    return (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.organization_id == int(role.organization_id),
-            AgentDecision.role_id == int(role.id),
-            AgentDecision.application_id == application_id,
-            AgentDecision.decision_type == decision_type,
-            AgentDecision.status != "discarded",
-        )
-        .order_by(AgentDecision.created_at.desc())
-        .first()
+    _ = decision_type
+    return latest_active_decision(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+        application_id=int(application_id),
     )
 
 
@@ -1423,9 +1520,10 @@ def _tool_resend_assessment_invite(
             application_id=application_id,
             decision_type="resend_assessment_invite",
         )
-        # Resend gates can stack across distinct assessment_ids for the
-        # same application, so the existing-row check also filters on
-        # evidence.assessment_id to keep them separate.
+        # An exact retry can return immediately. A different assessment falls
+        # through to the canonical queue boundary, which deliberately returns
+        # the application's existing active card: assessment identity affects
+        # historical idempotency, never the one-active-card invariant.
         if existing is not None and (existing.evidence or {}).get("assessment_id") == assessment_id:
             return {
                 "status": (
@@ -1452,11 +1550,9 @@ def _tool_resend_assessment_invite(
             role=role,
             args=queue_args,
             decision_type="resend_assessment_invite",
-            # Two assessments on the same application would otherwise
-            # collide on the base idempotency key {run}:{app}:{type}
-            # and the second resend would silently reuse the first
-            # decision row (Codex #176). Include assessment_id so each
-            # invite gets its own queue entry.
+            # Preserve assessment identity in the immutable request key so a
+            # later resend can be audited independently once the current card
+            # is resolved. Active cards still share the role/application slot.
             idempotency_key_suffix=f"assess{assessment_id}",
         )
         return {
@@ -2554,10 +2650,89 @@ def _queue_forced_policy_score_refresh(
         # under this helper's fresh Organization -> Role locks before changing
         # any durable score state on the skip-cache path.
         raise AutomaticProviderAuthorityError(authority_block)
+    try:
+        context = authorize_logical_role_application(
+            db,
+            role=role,
+            application_id=int(application_id),
+        )
+    except LogicalRoleApplicationAuthorizationError:
+        return {
+            "decision_type": "score_refresh_pending",
+            "status": "not_found",
+            "application_id": int(application_id),
+            "score_job_id": None,
+            "reasoning": "Application is unavailable for a durable score refresh.",
+        }
+
+    if context.is_related:
+        if (
+            context.related_evaluation is not None
+            and str(context.related_evaluation.status or "")
+            in _RELATED_SCORE_ACTIVE_STATUSES
+        ):
+            return {
+                "decision_type": "score_refresh_pending",
+                "status": str(context.related_evaluation.status),
+                "application_id": int(application_id),
+                "score_job_id": None,
+                "evaluation_ids": [int(context.related_evaluation.id)],
+                "scoring_scope": "related_role_evaluation",
+                "reasoning": (
+                    "A durable role-local score refresh is already queued or "
+                    "running. Wait for it to finish before taking any action."
+                ),
+            }
+        from ..services.related_role_rescreen_service import (
+            RelatedRoleRescreenUnavailableError,
+            rescreen_related_role_candidates,
+        )
+
+        try:
+            outcome = rescreen_related_role_candidates(
+                db,
+                role,
+                reason="autonomous_agent:forced_policy_role_local_score",
+                application_ids=[int(application_id)],
+                require_all_memberships=True,
+            )
+        except RelatedRoleRescreenUnavailableError as exc:
+            return {
+                "decision_type": "score_refresh_pending",
+                "status": "role_state_changed",
+                "application_id": int(application_id),
+                "score_job_id": None,
+                "reasoning": str(exc),
+            }
+        return {
+            "decision_type": "score_refresh_queued",
+            "status": (
+                "queued"
+                if outcome.queued_count
+                else "waiting"
+                if outcome.waiting_count
+                else "unscorable"
+                if outcome.unscorable_count
+                else "skipped"
+            ),
+            "application_id": int(application_id),
+            "score_job_id": None,
+            "evaluation_ids": list(outcome.evaluation_ids),
+            "scoring_scope": "related_role_evaluation",
+            "reasoning": (
+                "A durable role-local score refresh is queued or waiting. Wait "
+                "for it to finish before taking any action."
+            ),
+        }
+
+    # Preserve the forced-refresh transition's application lock after the
+    # role-membership authorization. Ordinary membership is the live physical
+    # row, so re-check it while acquiring the lock rather than trusting a stale
+    # pre-authorization object.
     app = (
         db.query(CandidateApplication)
         .filter(
-            CandidateApplication.id == int(application_id),
+            CandidateApplication.id == int(context.application_id),
             CandidateApplication.organization_id == int(role.organization_id),
             CandidateApplication.role_id == int(role.id),
             CandidateApplication.deleted_at.is_(None),
@@ -2572,7 +2747,7 @@ def _queue_forced_policy_score_refresh(
             "status": "not_found",
             "application_id": int(application_id),
             "score_job_id": None,
-            "reasoning": "Application is unavailable for a durable score refresh.",
+            "reasoning": "Application membership changed before score refresh.",
         }
 
     active = (
@@ -2905,16 +3080,110 @@ def _tool_batch_score_cv(
 ) -> Any:
     """Run score_cv across N applications in one tool call."""
     actor = Actor.agent(int(agent_run.id))
-    application_ids = [int(i) for i in (args.get("application_ids") or [])][:25]
+    application_ids = list(
+        dict.fromkeys(int(i) for i in (args.get("application_ids") or [])[:25])
+    )
     force = bool(args.get("force", False))
+    try:
+        contexts = authorize_logical_role_applications(
+            db,
+            role=role,
+            application_ids=application_ids,
+        )
+    except LogicalRoleApplicationAuthorizationError as exc:
+        return {
+            "status": "wrong_role",
+            "role_id": int(role.id),
+            "invalid_application_ids": list(exc.application_ids),
+            "results": [],
+            "total": 0,
+            "detail": str(exc),
+        }
+    if not contexts:
+        return {"status": "completed", "results": [], "total": 0}
+
+    if contexts[0].is_related:
+        from ..services.related_role_rescreen_service import (
+            RelatedRoleRescreenUnavailableError,
+            rescreen_related_role_candidates,
+        )
+
+        reusable_contexts = (
+            []
+            if force
+            else [
+                context
+                for context in contexts
+                if context.related_evaluation is not None
+                and _related_score_is_reusable(context.related_evaluation)
+            ]
+        )
+        reusable_ids = {context.application_id for context in reusable_contexts}
+        rescore_ids = [
+            context.application_id
+            for context in contexts
+            if context.application_id not in reusable_ids
+        ]
+        outcome = None
+        if rescore_ids:
+            try:
+                outcome = rescreen_related_role_candidates(
+                    db,
+                    role,
+                    reason=(
+                        "autonomous_agent:forced_role_local_batch_score"
+                        if force
+                        else "autonomous_agent:role_local_batch_score"
+                    ),
+                    application_ids=rescore_ids,
+                    require_all_memberships=True,
+                )
+            except RelatedRoleRescreenUnavailableError as exc:
+                return {
+                    "status": "role_state_changed",
+                    "role_id": int(role.id),
+                    "results": [],
+                    "total": 0,
+                    "detail": str(exc),
+                }
+        reset_ids = set(outcome.evaluation_ids if outcome is not None else ())
+        results: list[dict[str, Any]] = []
+        for context in contexts:
+            evaluation = context.related_evaluation
+            if context.application_id in reusable_ids and evaluation is not None:
+                status = str(evaluation.status)
+            elif evaluation is not None and int(evaluation.id) in reset_ids:
+                status = "queued_for_role_local_score"
+            else:
+                status = "skipped"
+            results.append(
+                {
+                    "application_id": context.application_id,
+                    "evaluation_id": (
+                        int(evaluation.id) if evaluation is not None else None
+                    ),
+                    "status": status,
+                }
+            )
+        return {
+            "status": "completed",
+            "role_id": int(role.id),
+            "scoring_scope": "related_role_evaluation",
+            "results": results,
+            "total": len(results),
+            "summary": outcome.as_dict() if outcome is not None else None,
+        }
+
     out: list[dict[str, Any]] = []
-    for app_id in application_ids:
+    for context in contexts:
+        app_id = context.application_id
         try:
             job = score_cv.run(
                 db,
                 actor,
                 organization_id=int(role.organization_id),
                 application_id=app_id,
+                role_id=int(role.id),
                 force=force,
             )
             if job is None:
@@ -2929,7 +3198,7 @@ def _tool_batch_score_cv(
                 )
         except Exception as exc:  # pragma: no cover — defensive
             out.append({"application_id": app_id, "status": "error", "error": str(exc)})
-    return {"results": out, "total": len(out)}
+    return {"status": "completed", "results": out, "total": len(out)}
 
 
 def _tool_ask_recruiter(
@@ -3138,9 +3407,30 @@ def dispatch(
     role: Role,
 ) -> Any:
     if name in _SHARED_AGENT_READ_NAMES:
+        raw_arguments = dict(arguments or {})
+        if name == "find_top_candidates":
+            # Rolling compatibility for calls generated from the former
+            # autonomous-only schema, which accepted and then ignored role_id.
+            # The canonical bound schema no longer exposes it; the running role
+            # remains the only authority for search scope and billing.
+            raw_arguments.pop("role_id", None)
+        if get_tool_spec(name).cost == "paid":
+            blocked = _governance_block_reason(
+                name,
+                raw_arguments,
+                agent_run=agent_run,
+                role=role,
+            )
+            if blocked is not None:
+                return {
+                    "status": "blocked_by_governance",
+                    "tool": name,
+                    "reason": blocked,
+                    "instruction": "Choose an allowed action or call agent_run_complete.",
+                }
         return dispatch_shared_read(
             name,
-            arguments,
+            raw_arguments,
             exposure=AUTONOMOUS_AGENT,
             db=db,
             principal=_read_ctx(role),

@@ -62,7 +62,9 @@ const RoleAgentSettingsTab = ({
   onSave,
   onScrollToReview,
   onSaveBudget,
+  savingBudget = false,
   onAutonomyChange,
+  savingAutonomy = false,
   thresholdMode,
   onThresholdModeChange,
   suggestedThreshold,
@@ -168,16 +170,28 @@ const RoleAgentSettingsTab = ({
   // local pending value paints immediately; the parent replaces it with the
   // authoritative response, or the freshly-refetched role after a real 409.
   const autonomySaveInFlightRef = React.useRef(false);
+  const autonomyChangeSequenceRef = React.useRef(0);
+  const settingsRoleIdRef = React.useRef(role?.id);
+  settingsRoleIdRef.current = role?.id;
   const [pendingAutonomy, setPendingAutonomy] = React.useState(null);
   const handleAutonomyToggle = async (key, value) => {
-    if (controlsReadOnly || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+    if (controlsReadOnly || savingAutonomy || autonomySaveInFlightRef.current || typeof onAutonomyChange !== 'function') return;
+    const actionRoleId = role?.id;
+    const requestSequence = autonomyChangeSequenceRef.current + 1;
+    autonomyChangeSequenceRef.current = requestSequence;
+    const isCurrentRequest = () => (
+      settingsRoleIdRef.current === actionRoleId
+      && autonomyChangeSequenceRef.current === requestSequence
+    );
     autonomySaveInFlightRef.current = true;
     setPendingAutonomy({ key, value: Boolean(value) });
     try {
       await onAutonomyChange(key, Boolean(value));
     } finally {
-      autonomySaveInFlightRef.current = false;
-      setPendingAutonomy(null);
+      if (isCurrentRequest()) {
+        autonomySaveInFlightRef.current = false;
+        setPendingAutonomy(null);
+      }
     }
   };
   const visibleAutonomyValue = (key, savedValue) => (
@@ -207,10 +221,15 @@ const RoleAgentSettingsTab = ({
   const [selectedAssessmentTaskIds, setSelectedAssessmentTaskIds] = React.useState(assignedTaskIdsFromProps);
   const [assessmentTaskSearch, setAssessmentTaskSearch] = React.useState('');
   const [assessmentChangePending, setAssessmentChangePending] = React.useState(false);
+  const assessmentChangeSequenceRef = React.useRef(0);
+  const assessmentRoleIdRef = React.useRef(role?.id);
+  assessmentRoleIdRef.current = role?.id;
 
   React.useEffect(() => {
+    assessmentChangeSequenceRef.current += 1;
     setSelectedAssessmentTaskIds(assignedTaskIdsFromProps);
     setAssessmentTaskSearch('');
+    setAssessmentChangePending(false);
     // The signature is deliberately stable when a parent reload returns new
     // task objects with the same IDs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -242,6 +261,13 @@ const RoleAgentSettingsTab = ({
   const assessmentBusy = savingAssessmentTask || assessmentChangePending;
   const handleAssessmentToggle = async (taskId) => {
     if (controlsReadOnly || assessmentBusy || typeof onAssignAssessmentTasks !== 'function') return;
+    const actionRoleId = role?.id;
+    const requestSequence = assessmentChangeSequenceRef.current + 1;
+    assessmentChangeSequenceRef.current = requestSequence;
+    const isCurrentRequest = () => (
+      assessmentRoleIdRef.current === actionRoleId
+      && assessmentChangeSequenceRef.current === requestSequence
+    );
     const id = Number(taskId);
     if (!Number.isFinite(id)) return;
     const previous = selectedAssessmentTaskIds;
@@ -255,9 +281,9 @@ const RoleAgentSettingsTab = ({
     } catch {
       // The parent owns the error toast. Restore the visible selection so the
       // manager never claims a failed change was saved.
-      setSelectedAssessmentTaskIds(previous);
+      if (isCurrentRequest()) setSelectedAssessmentTaskIds(previous);
     } finally {
-      setAssessmentChangePending(false);
+      if (isCurrentRequest()) setAssessmentChangePending(false);
     }
   };
 
@@ -267,6 +293,7 @@ const RoleAgentSettingsTab = ({
   const [budgetEditing, setBudgetEditing] = React.useState(false);
   const [budgetDraftDollars, setBudgetDraftDollars] = React.useState('');
   const [budgetSaving, setBudgetSaving] = React.useState(false);
+  const budgetChangeSequenceRef = React.useRef(0);
   const monthlyBudgetDollars = Math.round(monthlyBudgetCents / 100);
   const startBudgetEdit = () => {
     if (controlsReadOnly) return;
@@ -278,22 +305,39 @@ const RoleAgentSettingsTab = ({
     setBudgetDraftDollars('');
   };
   const submitBudgetEdit = async () => {
-    if (controlsReadOnly || !onSaveBudget) {
+    if (controlsReadOnly || savingBudget || !onSaveBudget) {
       setBudgetEditing(false);
       return;
     }
     const parsed = Number(budgetDraftDollars);
     if (!Number.isFinite(parsed) || parsed <= 0) return;
+    const actionRoleId = role?.id;
+    const requestSequence = budgetChangeSequenceRef.current + 1;
+    budgetChangeSequenceRef.current = requestSequence;
+    const isCurrentRequest = () => (
+      settingsRoleIdRef.current === actionRoleId
+      && budgetChangeSequenceRef.current === requestSequence
+    );
     setBudgetSaving(true);
     try {
       await onSaveBudget(parsed);
-      setBudgetEditing(false);
+      if (isCurrentRequest()) setBudgetEditing(false);
     } catch {
       // onSaveBudget already toasted; keep the editor open for a retry.
     } finally {
-      setBudgetSaving(false);
+      if (isCurrentRequest()) setBudgetSaving(false);
     }
   };
+
+  React.useEffect(() => {
+    autonomyChangeSequenceRef.current += 1;
+    budgetChangeSequenceRef.current += 1;
+    autonomySaveInFlightRef.current = false;
+    setPendingAutonomy(null);
+    setBudgetEditing(false);
+    setBudgetDraftDollars('');
+    setBudgetSaving(false);
+  }, [role?.id]);
 
   const hrefForSection = (sectionId) => {
     const params = new URLSearchParams(location.search);
@@ -715,7 +759,7 @@ const RoleAgentSettingsTab = ({
               </p>
             </div>
             <span className="mc-kicker is-mute" role="status" aria-live="polite">
-              {pendingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
+              {pendingAutonomy || savingAutonomy ? 'Saving…' : 'SAVES INSTANTLY'}
             </span>
           </div>
           {externalProvider && externalJobLive === false && (
@@ -794,7 +838,7 @@ const RoleAgentSettingsTab = ({
             <label
               key={rule.key}
               className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}
-              aria-busy={pendingAutonomy?.key === rule.key ? 'true' : undefined}
+              aria-busy={pendingAutonomy?.key === rule.key || savingAutonomy ? 'true' : undefined}
             >
               <button
                 type="button"
@@ -802,7 +846,7 @@ const RoleAgentSettingsTab = ({
                 onClick={() => {
                   if (!rule.disabled) requestAutonomyToggle(rule);
                 }}
-                disabled={Boolean(controlsReadOnly || rule.disabled || pendingAutonomy)}
+                disabled={Boolean(controlsReadOnly || rule.disabled || pendingAutonomy || savingAutonomy)}
                 aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
                 title={rule.disabledReason || undefined}
@@ -893,7 +937,7 @@ const RoleAgentSettingsTab = ({
                   type="button"
                   className="btn btn-outline btn-xs"
                   onClick={cancelBudgetEdit}
-                  disabled={budgetSaving}
+                  disabled={budgetSaving || savingBudget}
                 >
                   <X size={11} />
                   Cancel
@@ -905,13 +949,14 @@ const RoleAgentSettingsTab = ({
                   disabled={
                     controlsReadOnly
                     || budgetSaving
+                    || savingBudget
                     || budgetDraftDollars === ''
                     || !Number.isFinite(Number(budgetDraftDollars))
                     || Number(budgetDraftDollars) <= 0
                   }
                 >
                   <Check size={11} />
-                  {budgetSaving ? 'Saving…' : 'Save cap'}
+                  {budgetSaving || savingBudget ? 'Saving…' : 'Save cap'}
                 </button>
               </div>
             </div>

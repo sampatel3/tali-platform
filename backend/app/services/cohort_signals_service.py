@@ -23,10 +23,12 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from datetime import datetime, timezone
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from sqlalchemy.orm import Session, joinedload
 
+from ..candidate_search.application_role_scope import score_expression
+from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 
@@ -184,23 +186,37 @@ def compute_cohort_signals(db: Session, *, role_id: int, organization_id: int) -
     When ``pool_size < MIN_POOL_SIZE`` returns
     ``{"insufficient_data": true, "pool_size": N, ...}`` with empty signals.
     """
-    apps = (
+    role_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(organization_id),
+        role_id=int(role_id),
+    )
+    query = (
         db.query(CandidateApplication)
         .options(joinedload(CandidateApplication.candidate))
         .filter(
             CandidateApplication.organization_id == organization_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.taali_score_cache_100.isnot(None),
         )
-        .all()
     )
+    query = role_scope.scope_visible_roster(query)
+    logical_score = score_expression(role_scope, "taali_score_cache_100")
+    apps = query.filter(logical_score.isnot(None)).all()
+    evaluations = role_scope.evaluation_map(
+        db,
+        application_ids=[int(application.id) for application in apps],
+    )
+    adapter = role_scope.row_adapter(evaluations)
     pool: list[tuple[float, Candidate]] = []
-    for app in apps:
-        cand = app.candidate
+    for source_application in apps:
+        application = (
+            adapter(source_application)
+            if adapter is not None
+            else source_application
+        )
+        cand = source_application.candidate
         if cand is None:
             continue
-        score = app.taali_score_cache_100
+        score = application.taali_score_cache_100
         if score is None:
             continue
         pool.append((float(score), cand))

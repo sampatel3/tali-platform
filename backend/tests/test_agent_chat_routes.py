@@ -437,7 +437,8 @@ def test_send_message_grounding_free_truncated_reply_gets_continue_note(client, 
         ),
     ]
     with patch(
-        "app.agent_chat.engine.get_client_for_org", return_value=_FakeClient(scripted)
+        "app.agent_chat.engine.routed_messages_client",
+        return_value=_FakeClient(scripted),
     ):
         resp = client.post(
             f"/api/v1/agent-chat/conversations/{role.id}/messages",

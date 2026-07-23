@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, desc, func, or_
-from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy import desc, func, or_
+from sqlalchemy.orm import Session, selectinload
 
 from ...agent_runtime import budget_guard
 from ...platform.database import get_db
@@ -19,7 +19,6 @@ from ...components.scoring.assessment_metrics import (
     completed_assessment_filter as _completed_assessment_filter,
     is_completed as _is_completed,
     percentile_rank as _percentile_rank,
-    status_value as _status_value,
     score_100 as _score_100,
     score_10 as _score_10,
     extract_category_scores as _extract_category_scores,

@@ -452,9 +452,9 @@ class ApplicationResponse(BaseModel):
         "unscorable",
         "excluded",
     ]] = None
-    # Present when this row is projected into a sister role. ``id`` remains the
-    # canonical source application id so every stage/outcome action routes to
-    # the ATS-owning application rather than a cloned pipeline record.
+    # Legacy nullable transport fields retained for response compatibility.
+    # Related-role projections leave them null; ATS restrictions are exposed
+    # through action_restrictions/ats_context and resolved server-side.
     operational_role_id: Optional[int] = None
     operational_role_name: Optional[str] = None
     sister_role_id: Optional[int] = None

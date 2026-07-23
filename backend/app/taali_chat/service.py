@@ -1,15 +1,15 @@
-"""Core chat-turn orchestrator: streams Anthropic responses + dispatches tools.
+"""Core chat-turn orchestrator: streams routed AI responses and dispatches tools.
 
 One call to ``run_chat_turn`` runs the full agent loop for one user
 message:
 
   1. Load (or create) the conversation.
   2. Build the message history from persisted ``TaaliChatMessage`` rows.
-  3. Stream Anthropic's response, yielding AI-SDK protocol frames.
-  4. When Claude requests a tool, dispatch to the in-process MCP handler,
+  3. Stream the selected provider's response, yielding AI-SDK protocol frames.
+  4. When the model requests a tool, dispatch to the canonical MCP handler,
      emit a ``tool_call_result`` frame, then continue the loop.
   5. Persist the assistant turn (and any user message we appended).
-  6. Record one ``UsageEvent`` per Anthropic call for the billing meter.
+  6. Record one ``UsageEvent`` per routed model call for the billing meter.
 
 Multi-turn tool-calling is bounded by ``MAX_TOOL_ROUNDS`` so a buggy or
 adversarial tool loop can't drain credits.
@@ -24,7 +24,6 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from dataclasses import dataclass
 from typing import Any, Iterator
 
 from sqlalchemy.orm import Session
@@ -39,23 +38,29 @@ from ..components.ai_routing import (
     routing_scope,
 )
 from ..models.organization import Organization
-from ..models.taali_chat_conversation import TaaliChatConversation
 from ..models.taali_chat_message import (
     ROLE_ASSISTANT,
     ROLE_USER,
-    TaaliChatMessage,
 )
 from ..models.user import User
 from ..mcp.provenance import (
     grounding_required_message,
-    missing_required_capabilities,
-    required_capabilities_for_message,
 )
-from ..mcp.shared_reads import capabilities_for_successful_read
+from ..mcp.required_reads import (
+    ROLE_SCOPE_REQUIRED_MESSAGE,
+    RequiredReadController,
+)
+from ..mcp.shared_reads import GroundingLedger
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event as record_event
 from ..services.usage_metering_service import InsufficientCreditsError, reserve
 from . import streaming
+from .conversation_store import (
+    ChatTurnInput,
+    ensure_conversation as _ensure_conversation,
+    load_history as _load_history,
+    persist_message as _persist_message,
+)
 from .route_setup import prepare_chat_route
 from .stream_round import _RunningUsage, _stream_one_round
 from .system_prompt import build_system_blocks
@@ -73,120 +78,6 @@ logger = logging.getLogger("taali.taali_chat")
 MAX_TOOL_ROUNDS = 8
 MAX_IDENTICAL_TOOL_ROUNDS = 2
 MAX_CONSECUTIVE_ERROR_ROUNDS = 2
-
-
-@dataclass
-class ChatTurnInput:
-    """Inputs for one user → assistant exchange."""
-
-    user_message: str
-    conversation_id: int | None = None  # None = create new conversation
-    # Optional role scope. Used only when creating a new conversation.
-    # Once a conversation exists, its role_id is fixed (recorded on the
-    # TaaliChatConversation row) — passing a different role_id on a
-    # follow-up turn is ignored.
-    role_id: int | None = None
-
-
-# ---------------------------------------------------------------------------
-# Conversation persistence helpers
-# ---------------------------------------------------------------------------
-
-
-def _ensure_conversation(
-    db: Session,
-    *,
-    user: User,
-    conversation_id: int | None,
-    first_message: str,
-    role_id: int | None = None,
-) -> TaaliChatConversation:
-    if conversation_id is not None:
-        conversation = (
-            db.query(TaaliChatConversation)
-            .filter(
-                TaaliChatConversation.id == conversation_id,
-                TaaliChatConversation.organization_id == user.organization_id,
-                TaaliChatConversation.user_id == user.id,
-                TaaliChatConversation.archived_at.is_(None),
-            )
-            .first()
-        )
-        if conversation is None:
-            raise ValueError(f"conversation {conversation_id} not found")
-        return conversation
-
-    # New conversation: validate role_id is org-scoped before persisting,
-    # so a recruiter can't open a chat scoped to another org's role even
-    # if they spoof the id.
-    safe_role_id: int | None = None
-    if role_id is not None:
-        from ..models.role import Role
-
-        owns = (
-            db.query(Role.id)
-            .filter(
-                Role.id == int(role_id),
-                Role.organization_id == user.organization_id,
-                Role.deleted_at.is_(None),
-            )
-            .first()
-        )
-        if owns is not None:
-            safe_role_id = int(role_id)
-
-    title = first_message.strip().split("\n", 1)[0][:80] or "New conversation"
-    conversation = TaaliChatConversation(
-        organization_id=user.organization_id,
-        user_id=user.id,
-        role_id=safe_role_id,
-        title=title,
-    )
-    db.add(conversation)
-    db.flush()
-    return conversation
-
-
-def _load_history(
-    db: Session, *, conversation: TaaliChatConversation
-) -> list[dict[str, Any]]:
-    """Pull persisted messages in Anthropic message format. Sanitised so a
-    tool_use orphaned by an interrupted turn can't 400 the whole conversation."""
-    from ..llm.tool_pairs import sanitize_tool_pairs
-
-    rows = (
-        db.query(TaaliChatMessage)
-        .filter(TaaliChatMessage.conversation_id == conversation.id)
-        .order_by(TaaliChatMessage.created_at.asc(), TaaliChatMessage.id.asc())
-        .all()
-    )
-    return sanitize_tool_pairs(
-        [{"role": row.role, "content": row.content} for row in rows]
-    )
-
-
-def _persist_message(
-    db: Session,
-    *,
-    conversation: TaaliChatConversation,
-    role: str,
-    content: list[dict[str, Any]],
-    model: str | None = None,
-    stop_reason: str | None = None,
-    token_usage: dict[str, int] | None = None,
-) -> TaaliChatMessage:
-    msg = TaaliChatMessage(
-        conversation_id=conversation.id,
-        organization_id=conversation.organization_id,
-        role=role,
-        content=content,
-        model=model,
-        stop_reason=stop_reason,
-        token_usage=token_usage,
-    )
-    db.add(msg)
-    db.flush()
-    return msg
 
 
 # ---------------------------------------------------------------------------
@@ -294,8 +185,12 @@ def _run_chat_turn(
     consecutive_error_rounds = 0
     route: RouteExecution | None = None
     workflow_succeeded = False
-    required_capabilities = required_capabilities_for_message(text)
-    grounded_capabilities: set[str] = set()
+    grounding_ledger = GroundingLedger(text)
+    required_reads = RequiredReadController(
+        grounding_ledger,
+        role_bound=conversation_role_id is not None,
+        current_user_id=user_id,
+    )
 
     # Anthropic-side message log: starts as the persisted history (which
     # already includes the just-added user message).
@@ -304,6 +199,32 @@ def _run_chat_turn(
     # Compose system blocks once per turn — the base SYSTEM_PROMPT plus
     # an optional role-context block when the conversation is role-scoped.
     system_blocks = build_system_blocks(db, conversation=conversation)
+    if required_reads.requires_role_scope:
+        yield streaming.progress(round_index=0)
+        yield streaming.start_step(
+            message_id=f"msg-{conversation_db_id}-{uuid.uuid4().hex[:8]}"
+        )
+        yield streaming.text_delta(ROLE_SCOPE_REQUIRED_MESSAGE)
+        _persist_message(
+            db,
+            conversation=conversation,
+            role=ROLE_ASSISTANT,
+            content=[{"type": "text", "text": ROLE_SCOPE_REQUIRED_MESSAGE}],
+            stop_reason="role_scope_required",
+        )
+        conversation.updated_at = datetime.now(timezone.utc)
+        db.flush()
+        finish_route_with_transaction(db, None, succeeded=True)
+        empty_usage = {"promptTokens": 0, "completionTokens": 0}
+        yield streaming.finish_step(
+            stop_reason="role_scope_required",
+            usage=empty_usage,
+        )
+        yield streaming.finish_message(
+            stop_reason="role_scope_required",
+            usage=empty_usage,
+        )
+        return
 
     for round_index in range(MAX_TOOL_ROUNDS):
         # The first round was gated before any conversation state was written.
@@ -333,6 +254,7 @@ def _run_chat_turn(
         yield streaming.start_step(
             message_id=f"msg-{conversation_db_id}-{uuid.uuid4().hex[:8]}"
         )
+        required_read = required_reads.next_plan()
         try:
             if route is None:
                 route = prepare_chat_route(
@@ -342,6 +264,9 @@ def _run_chat_turn(
                     user_id=user_id,
                     role_id=conversation_role_id,
                     conversation_id=conversation_db_id,
+                    tool_choice=(
+                        required_read.tool_choice if required_read is not None else None
+                    ),
                 )
                 route_holder.append(route)
                 client = routed_messages_client(route)
@@ -358,6 +283,15 @@ def _run_chat_turn(
                     "entity_id": str(conversation_db_id),
                     "metadata": {"feature": "taali_chat", "round": round_index},
                 },
+                tool_choice=(
+                    required_read.tool_choice if required_read is not None else None
+                ),
+                forced_tool_name=(
+                    required_read.tool_name if required_read is not None else None
+                ),
+                forced_tool_input=(
+                    required_read.arguments if required_read is not None else None
+                ),
                 # Buffer model prose until the terminal block can be classified
                 # against both the recruiter's request and the model's actual
                 # claims. Tool-call frames still stream normally. This prevents
@@ -380,6 +314,11 @@ def _run_chat_turn(
         running_usage.cache_creation_tokens += round_usage.cache_creation_tokens
         final_stop_reason = stop_reason
 
+        assistant_blocks = required_reads.bind_assistant_blocks(
+            required_read,
+            assistant_blocks,
+        )
+
         messages.append({"role": "assistant", "content": assistant_blocks})
 
         if stop_reason != "tool_use":
@@ -388,16 +327,10 @@ def _run_chat_turn(
                 for block in assistant_blocks
                 if isinstance(block, dict) and block.get("type") == "text"
             )
-            claim_capabilities = required_capabilities_for_message(assistant_text)
-            missing_grounding = missing_required_capabilities(
-                required_capabilities | claim_capabilities,
-                grounded_capabilities,
-            )
+            missing_grounding = grounding_ledger.missing_for_answer(assistant_text)
             if missing_grounding:
                 safe_message = grounding_required_message(missing_grounding)
-                assistant_blocks = [
-                    {"type": "text", "text": safe_message}
-                ]
+                assistant_blocks = [{"type": "text", "text": safe_message}]
                 stop_reason = "grounding_required"
                 final_stop_reason = stop_reason
                 yield streaming.text_delta(safe_message)
@@ -459,17 +392,33 @@ def _run_chat_turn(
             str(block.get("id") or ""): str(block.get("name") or "")
             for block in tool_blocks
         }
+        tool_arguments_by_id = {
+            str(block.get("id") or ""): dict(block.get("input") or {})
+            for block in tool_blocks
+        }
         for result in tool_results:
             if not bool(result.get("is_error")):
                 try:
                     payload = json.loads(str(result["content"]))
                 except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                     payload = None
-                grounded_capabilities.update(
-                    capabilities_for_successful_read(
-                        tool_names_by_id.get(str(result.get("tool_use_id") or ""), ""),
-                        payload,
-                    )
+                observed_name = tool_names_by_id.get(
+                    str(result.get("tool_use_id") or ""), ""
+                )
+                observed_arguments = tool_arguments_by_id.get(
+                    str(result.get("tool_use_id") or ""),
+                    {},
+                )
+                grounding_ledger.observe(
+                    observed_name,
+                    payload,
+                    arguments=observed_arguments,
+                )
+                required_reads.observe(
+                    required_read,
+                    tool_name=observed_name,
+                    result=payload,
+                    arguments=observed_arguments,
                 )
             yield streaming.tool_result(
                 tool_call_id=str(result["tool_use_id"]),

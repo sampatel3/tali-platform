@@ -970,7 +970,7 @@ def test_set_job_status_rejects_legacy_source_only_ats_role(client, db):
     assert db.query(Role).filter(Role.id == role.id).one().job_status is None
 
 
-def test_set_job_status_rejects_related_scoring_view_lifecycle_mutation(client, db):
+def test_set_job_status_keeps_related_role_lifecycle_independent(client, db):
     headers, _ = auth_headers(client)
     owner = client.post(
         "/api/v1/roles", json={"name": "Owner Role"}, headers=headers
@@ -998,11 +998,11 @@ def test_set_job_status_rejects_related_scoring_view_lifecycle_mutation(client, 
             headers=headers,
         )
 
-        assert response.status_code == 409, response.text
-        assert "related scoring view" in response.json()["detail"]
+        assert response.status_code == 200, response.text
+        assert response.json()["job_status"] == JOB_STATUS_CANCELLED
     db.expire_all()
     assert all(
-        role.job_status is None
+        role.job_status == JOB_STATUS_CANCELLED
         for role in db.query(Role).filter(Role.id.in_(related_ids)).all()
     )
 

@@ -321,7 +321,9 @@ def decide_role_cohort(
                 .filter(
                     AgentDecision.role_id == int(role.id),
                     AgentDecision.application_id == CandidateApplication.id,
-                    AgentDecision.status.in_(("pending", "processing")),
+                    AgentDecision.status.in_(
+                        ("pending", "processing", "reverted_for_feedback")
+                    ),
                 )
                 .exists()
             ),

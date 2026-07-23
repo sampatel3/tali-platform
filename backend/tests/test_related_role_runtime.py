@@ -245,26 +245,23 @@ def test_passive_shared_input_reset_holds_visible_cards_and_blocks_cycle(db):
     evaluation.spec_fingerprint = text_fingerprint(role.job_spec_text)
     evaluation.cv_fingerprint = text_fingerprint(application.cv_text)
     application.cv_text = f"{application.cv_text} Added current CV evidence."
-    decisions = []
-    for status in ("pending", "reverted_for_feedback"):
-        decision = AgentDecision(
-            organization_id=role.organization_id,
-            role_id=role.id,
-            application_id=application.id,
-            agent_run_id=run.id,
-            decision_type="send_assessment",
-            recommendation="send_assessment",
-            status=status,
-            reasoning="Old related-role score",
-            evidence={},
-            model_version="test",
-            prompt_version="test",
-            idempotency_key=(
-                f"related-input-reset:{status}:{role.id}:{application.id}"
-            ),
-        )
-        db.add(decision)
-        decisions.append(decision)
+    decision = AgentDecision(
+        organization_id=role.organization_id,
+        role_id=role.id,
+        application_id=application.id,
+        agent_run_id=run.id,
+        decision_type="send_assessment",
+        recommendation="send_assessment",
+        status="reverted_for_feedback",
+        reasoning="Old related-role score",
+        evidence={},
+        model_version="test",
+        prompt_version="test",
+        idempotency_key=(
+            f"related-input-reset:reverted:{role.id}:{application.id}"
+        ),
+    )
+    db.add(decision)
     db.commit()
 
     from app.services.sister_role_evaluation_lifecycle import (
@@ -283,11 +280,10 @@ def test_passive_shared_input_reset_holds_visible_cards_and_blocks_cycle(db):
     saved = db.get(SisterRoleEvaluation, evaluation.id)
     assert saved.status == "stale_held"
     assert saved.last_error_code == "shared_inputs_changed"
-    assert db.get(AgentDecision, decisions[0].id).status == "pending"
-    assert db.get(AgentDecision, decisions[1].id).status == "reverted_for_feedback"
+    assert db.get(AgentDecision, decision.id).status == "reverted_for_feedback"
     report = related_decision_staleness(
         db,
-        db.get(AgentDecision, decisions[0].id),
+        db.get(AgentDecision, decision.id),
         saved,
         application=application,
         role=role,
@@ -309,7 +305,7 @@ def test_passive_shared_input_reset_holds_visible_cards_and_blocks_cycle(db):
             AgentDecision.status.in_(("pending", "reverted_for_feedback")),
         )
         .count()
-        == 2
+        == 1
     )
 
 

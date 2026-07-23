@@ -23,6 +23,7 @@ def prepare_chat_route(
     user_id: int,
     role_id: int | None,
     conversation_id: int,
+    tool_choice: dict[str, Any] | None = None,
 ) -> RouteExecution:
     """Plan and durably start the task route before transport resolution."""
 
@@ -32,6 +33,7 @@ def prepare_chat_route(
             system=system_blocks,
             messages=messages,
             tools=TAALI_CHAT_TOOLS,
+            tool_choice=tool_choice,
             max_tokens=MAX_TOKENS_PER_TURN,
         ),
         attribution=RoutingAttribution(

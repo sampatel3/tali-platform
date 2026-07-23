@@ -20,6 +20,8 @@ import pytest
 from app.candidate_search import grounded_evidence as ge
 from app.candidate_search import top_candidates as tc
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
+from app.mcp.catalog import CANDIDATE_QUALITATIVE_EXACT_EMPTY
+from app.mcp.shared_reads import capabilities_for_successful_read
 
 
 def test_grounding_deadline_fits_inside_chat_stream_idle_budget():
@@ -868,7 +870,8 @@ def _fake_app(app_id, *, taali=None, name="Cand"):
     return SimpleNamespace(
         id=app_id, candidate_id=app_id, role_id=10, candidate=cand, role=role,
         pipeline_stage="applied", application_outcome="open",
-        pipeline_stage_updated_at=None, workable_stage=None, external_stage_normalized=None,
+        pipeline_stage_updated_at=None, workable_stage=None,
+        external_stage_raw=None, external_stage_normalized=None,
         taali_score_cache_100=taali, pre_screen_score_100=None, rank_score=None,
         cv_match_score=None, workable_score=None, auto_reject_state=None,
         created_at=None, cv_match_details=None,
@@ -1534,6 +1537,72 @@ def test_find_top_candidates_fails_closed_when_default_route_factory_fails(
     assert out["evidence_succeeded"] == 0
     assert out["excluded"]["unverified_total"] == 1
     assert any(w["code"] == "evidence_incomplete" for w in out["warnings"])
+
+
+def test_complete_negative_evidence_can_ground_an_exact_qualitative_zero(
+    monkeypatch,
+):
+    from app.candidate_search import runner as runner_mod
+
+    monkeypatch.setattr(
+        runner_mod,
+        "run_search",
+        lambda **_kw: SearchOutput(
+            application_ids=[1, 2],
+            parsed_filter=ParsedFilter(
+                soft_criteria=["PySpark experience"],
+                free_text="PySpark experience",
+            ),
+            warnings=[],
+            capped=False,
+            exhaustive=True,
+            is_exact_empty=False,
+        ),
+    )
+    monkeypatch.setattr(tc, "_pool_count", lambda _base: 2)
+    apps = [
+        _fake_app(1, taali=90, name="No PySpark One"),
+        _fake_app(2, taali=80, name="No PySpark Two"),
+    ]
+    monkeypatch.setattr(tc, "_load_candidates", lambda *_args, **_kwargs: apps)
+    monkeypatch.setattr(
+        tc,
+        "_ground_window",
+        lambda rows, **_kwargs: [
+            (
+                app,
+                [
+                    ge.CriterionVerdict(
+                        "PySpark experience",
+                        status="missing",
+                        grounded=False,
+                    )
+                ],
+            )
+            for app in rows
+        ],
+    )
+
+    result = tc.find_top_candidates(
+        db=MagicMock(),
+        organization_id=1,
+        query="PySpark experience",
+        base_query=MagicMock(),
+        authoritative_pool_size=2,
+        limit=10,
+    )
+
+    assert result["search_status"] == "no_verified_matches"
+    assert result["deep_checked"] == 2
+    assert result["evidence_succeeded"] == 2
+    assert result["qualified_total"] == 0
+    assert result["capped"] is False
+    assert CANDIDATE_QUALITATIVE_EXACT_EMPTY in capabilities_for_successful_read(
+        "find_top_candidates",
+        result,
+        arguments={"query": "PySpark experience"},
+        request_text="Do we have candidates with PySpark experience?",
+    )
 
 
 def test_find_top_candidates_does_not_present_parser_fallback_as_verified_search(

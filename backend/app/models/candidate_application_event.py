@@ -21,9 +21,8 @@ class CandidateApplicationEvent(Base):
     __table_args__ = (
         UniqueConstraint(
             "application_id",
-            "role_id",
             "idempotency_key",
-            name="uq_application_event_role_idempotency_key",
+            name="uq_application_event_idempotency_key",
         ),
         Index(
             "ix_application_events_org_role_created",
@@ -37,9 +36,15 @@ class CandidateApplicationEvent(Base):
     application_id = Column(Integer, ForeignKey("candidate_applications.id"), index=True, nullable=False)
     organization_id = Column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)
     # The logical product role that owns this action.  This can differ from the
-    # application row's persistence role for a related-role membership, so
-    # history readers must never infer it from CandidateApplication.role_id.
-    role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=False)
+    # application row's persistence role for a related-role membership. Rows
+    # predating migration 186 remain NULL because the ledger is append-only;
+    # history readers resolve those rows from immutable legacy provenance.
+    role_id = Column(
+        Integer,
+        ForeignKey("roles.id", name="fk_candidate_application_events_role_id"),
+        index=True,
+        nullable=True,
+    )
     # Optional link to the recommendation/resolution that caused the action.
     # Direct recruiter and provider-sync actions intentionally leave it null.
     agent_decision_id = Column(

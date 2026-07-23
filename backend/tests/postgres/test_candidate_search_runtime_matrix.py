@@ -61,6 +61,8 @@ from app.domains.assessments_runtime.search_canary_auth import (
 from app.llm import StructuredResult
 from app.main import app
 from app.mcp import handlers
+from app.mcp.catalog import CANDIDATE_QUALITATIVE_EVIDENCE
+from app.mcp.shared_reads import capabilities_for_successful_read
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
@@ -952,6 +954,12 @@ def test_related_role_top_candidates_uses_explicit_membership_and_grounded_truth
     assert all("client" not in call for call in boundaries.evidence_calls)
     assert all(
         call["route_client_factory"] is None for call in boundaries.evidence_calls
+    )
+    assert CANDIDATE_QUALITATIVE_EVIDENCE in capabilities_for_successful_read(
+        "find_top_candidates",
+        result,
+        arguments={"query": query},
+        request_text=query,
     )
     assert len(boundaries.graph_calls) == 1
     assert boundaries.graph_calls[0]["query"] == query

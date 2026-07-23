@@ -68,12 +68,22 @@ def _membership(
     outcome_updated_at=None,
     deleted_at=None,
 ):
+    # A direct application in the related role is a complete logical
+    # membership but is not automatically the shared ATS transport. Only an
+    # application in the role's declared ATS owner may populate that optional
+    # link; otherwise the membership remains deliberately transport-free.
+    ats_application_id = (
+        app.id
+        if role.ats_owner_role_id is not None
+        and int(app.role_id) == int(role.ats_owner_role_id)
+        else None
+    )
     row = SisterRoleEvaluation(
         organization_id=org.id,
         role_id=role.id,
         candidate_id=app.candidate_id,
         source_application_id=app.id,
-        ats_application_id=app.id,
+        ats_application_id=ats_application_id,
         status="done",
         pipeline_stage=stage,
         application_outcome=outcome,

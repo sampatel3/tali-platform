@@ -428,6 +428,7 @@ def test_related_role_share_persists_and_serializes_logical_role_context(client,
     assert persisted.view_role_id == int(related.id)
     listing = client.get(
         f"/api/v1/applications/{application.id}/share-links",
+        params={"view_role_id": int(related.id)},
         headers=headers,
     )
     assert listing.status_code == 200, listing.text
@@ -479,6 +480,67 @@ def test_related_role_share_persists_and_serializes_logical_role_context(client,
     )
 
 
+def test_related_role_share_lifecycle_survives_deleted_evidence(client, db):
+    """A live logical membership—not its evidence-row lifecycle—owns links."""
+
+    headers, email = auth_headers(client)
+    _owner, related, application, _evaluation = _make_related_share_membership(
+        db,
+        user_email=email,
+    )
+    application.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    created = client.post(
+        f"/api/v1/applications/{application.id}/share-links",
+        json={
+            "mode": "recruiter",
+            "expiry": "7d",
+            "view_role_id": int(related.id),
+        },
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    link = created.json()
+    assert link["view_role_id"] == int(related.id)
+
+    # The legacy physical context cannot resurrect the deleted evidence row.
+    unscoped = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        headers=headers,
+    )
+    assert unscoped.status_code == 404
+
+    listing = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert listing.status_code == 200, listing.text
+    assert [row["id"] for row in listing.json()["links"]] == [link["id"]]
+
+    public_view = client.get(f"/share/{link['token']}")
+    assert public_view.status_code == 200, public_view.text
+    assert public_view.json()["application"]["role_id"] == int(related.id)
+
+    revoked = client.delete(
+        f"/api/v1/share-links/{link['id']}",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["revoked"] is True
+
+    after_revoke = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert after_revoke.status_code == 200, after_revoke.text
+    assert after_revoke.json()["links"][0]["revoked"] is True
+    assert client.get(f"/share/{link['token']}").status_code == 410
+
+
 def test_related_role_share_requires_a_live_exact_membership(client, db):
     headers, email = auth_headers(client)
     _owner, related, application, evaluation = _make_related_share_membership(
@@ -508,6 +570,13 @@ def test_related_role_share_requires_a_live_exact_membership(client, db):
     )
     assert wrong_role.status_code == 404
 
+    wrong_role_listing = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        params={"view_role_id": int(unrelated.id)},
+        headers=headers,
+    )
+    assert wrong_role_listing.status_code == 404
+
     valid = client.post(
         f"/api/v1/applications/{application.id}/share-links",
         json={
@@ -518,11 +587,46 @@ def test_related_role_share_requires_a_live_exact_membership(client, db):
         headers=headers,
     )
     assert valid.status_code == 200, valid.text
+
+    wrong_role_revoke = client.delete(
+        f"/api/v1/share-links/{valid.json()['id']}",
+        params={"view_role_id": int(unrelated.id)},
+        headers=headers,
+    )
+    assert wrong_role_revoke.status_code == 404
+
     evaluation.deleted_at = datetime.now(timezone.utc)
     db.commit()
 
+    removed_listing = client.get(
+        f"/api/v1/applications/{application.id}/share-links",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert removed_listing.status_code == 404
+
     unavailable = client.get(f"/share/{valid.json()['token']}")
     assert unavailable.status_code == 404
+
+    removed_revoke = client.delete(
+        f"/api/v1/share-links/{valid.json()['id']}",
+        params={"view_role_id": int(related.id)},
+        headers=headers,
+    )
+    assert removed_revoke.status_code == 404
+
+    removed_create = client.post(
+        f"/api/v1/applications/{application.id}/share-links",
+        json={
+            "mode": "client",
+            "expiry": "7d",
+            "view_role_id": int(related.id),
+        },
+        headers=headers,
+    )
+    assert removed_create.status_code == 404
+
     db.expire_all()
     persisted = db.get(ShareLink, int(valid.json()["id"]))
     assert persisted.view_count == 0
+    assert persisted.revoked_at is None
