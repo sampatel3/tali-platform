@@ -2,6 +2,7 @@ import React from 'react';
 
 import { LegalLayout } from './LegalLayout';
 import { PageLink } from '../../shared/ui/PageLink';
+import { WORKSPACE_SIGNAL_SUMMARY } from '../../shared/assessment/sessionDisclosure';
 
 // NOTE: Pre-counsel draft — review pending before publication. The operative
 // facts (roles, data categories, transfer mechanisms, retention guidance) are
@@ -54,8 +55,14 @@ export const PrivacyPage = () => (
       <li>CV-to-role scoring results, with the evidence citations behind them;</li>
       <li>
         work-sample assessment session records — the prompts sent to the AI assistant, the
-        AI responses, file changes, validation runs, and attempts blocked by workspace
-        controls. We do <strong>not</strong> record screen, camera, or microphone;
+        AI responses, file changes, and validation runs;
+      </li>
+      <li>
+        advisory workspace signals recorded during an assessment session &mdash;{' '}
+        {WORKSPACE_SIGNAL_SUMMARY}. These are best-effort browser signals rather than
+        proof of any behaviour, and they are recorded on every assessment session unless
+        the candidate has an approved clipboard accommodation. We do <strong>not</strong>{' '}
+        record screen, camera, or microphone;
       </li>
       <li>interview transcripts, where the customer connects a transcription integration;</li>
       <li>hiring decisions and the full decision history.</li>

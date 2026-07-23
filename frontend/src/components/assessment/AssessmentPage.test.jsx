@@ -331,6 +331,23 @@ describe('AssessmentPage live agentic runtime', () => {
     expect(mockSubmit.mock.calls[0][3]).toMatchObject({ tab_switch_count: 1 });
   });
 
+  it('tells the candidate the workspace records advisory signals with proctoring off', async () => {
+    render(<AssessmentPage token="disclosure-token" startData={{
+      assessment_id: 17,
+      token: 'disclosure-token',
+      time_remaining: 1800,
+      task: { name: 'Debug task', starter_code: '', duration_minutes: 30 },
+    }} />);
+
+    // The workspace-control layer emits copy_attempt/visibility_hidden/etc even
+    // with proctoring off, so the footer must not claim transcript-only.
+    const disclosure = await screen.findByTestId('assessment-recording-disclosure');
+    expect(disclosure).toHaveTextContent(/leaving the tab or exiting fullscreen/i);
+    expect(disclosure).toHaveTextContent(/do not record your screen, camera, or microphone/i);
+    expect(screen.getByText('Transcript + workspace signals')).toBeInTheDocument();
+    expect(screen.queryByText('Session transcript only')).not.toBeInTheDocument();
+  });
+
   it('keeps keyboard focus inside the submit confirmation and closes on Escape', async () => {
     render(<AssessmentPage token="dialog-token" startData={{
       assessment_id: 11,

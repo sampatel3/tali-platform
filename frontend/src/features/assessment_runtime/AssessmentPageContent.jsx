@@ -20,6 +20,12 @@ import {
   scrubCandidateInviteTokenFromUrl,
 } from '../../shared/assessment/candidateProofBinding';
 import {
+  NO_AV_RECORDING_SENTENCE,
+  WORKSPACE_SIGNAL_SENTENCE,
+  WORK_RECORD_SENTENCE,
+  recordingFlagLabel,
+} from '../../shared/assessment/sessionDisclosure';
+import {
   AssessmentWorkspaceSecurityProvider,
   WorkspacePrintBlocker,
   WorkspaceSecurityBanner,
@@ -1737,7 +1743,9 @@ export default function AssessmentPage({
   }, [claudePending, hasUnsavedEdits, savingRepoFile, submitting]);
   const privacyFlags = useMemo(() => {
     const flags = [];
-    flags.push(proctoringEnabled ? 'Activity signals enabled' : 'Session transcript only');
+    // The workspace-control layer records advisory signals on every real
+    // assessment, so this flag has to account for it — not just proctoring.
+    flags.push(recordingFlagLabel({ proctoringEnabled, workspaceProtectionEnabled }));
     if (isTimerPaused) {
       flags.push('Session paused');
     } else if (isClaudeBudgetExhausted) {
@@ -1746,7 +1754,7 @@ export default function AssessmentPage({
       flags.push('Claude budget OK');
     }
     return flags;
-  }, [isClaudeBudgetExhausted, isTimerPaused, proctoringEnabled]);
+  }, [isClaudeBudgetExhausted, isTimerPaused, proctoringEnabled, workspaceProtectionEnabled]);
   const progressLabel = useMemo(() => {
     if (executing) return 'Running the latest check';
     if (output) return 'Latest output captured in the workspace dock';
@@ -1994,8 +2002,10 @@ export default function AssessmentPage({
           </section>
 
           <footer className="mt-4 mb-6 flex flex-col gap-3 px-1 text-[0.71875rem] text-[var(--mute)] md:flex-row md:items-center md:justify-between">
-            <div>
-              We record workspace actions and Claude chat for this assessment; we do not record your screen, camera, or microphone. <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
+            <div data-testid="assessment-recording-disclosure">
+              {WORK_RECORD_SENTENCE}{' '}
+              {workspaceProtectionEnabled ? `${WORKSPACE_SIGNAL_SENTENCE} ` : ''}
+              {NO_AV_RECORDING_SENTENCE} <a href={reportIssueHref} className="text-[var(--purple)]">Need help?</a>
             </div>
             <div className="flex flex-wrap items-center gap-4">
               <span className="inline-flex items-center gap-2 font-mono" data-testid="assessment-save-state">
