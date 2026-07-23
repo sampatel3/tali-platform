@@ -1907,6 +1907,19 @@ class MeteredAnthropicClient:
 
     # Pass-through for any attribute we don't override (rare).
     def __getattr__(self, name: str) -> Any:
+        if name == "beta":
+            # ``client.beta.messages.create(...)`` would slip past the meter
+            # entirely — no usage_event AND no claude_call_log row — because
+            # only ``.messages`` is wrapped. That is the exact signature of
+            # untraceable spend in reconciliation, so fail loud rather than
+            # silently bill an org nothing. Intentional unmetered beta calls
+            # must reach for ``.inner.beta`` explicitly.
+            raise RuntimeError(
+                "MeteredAnthropicClient does not expose `.beta`: beta calls "
+                "bypass metering (no usage_event / claude_call_log row). Use "
+                "`.messages` for metered calls, or `.inner.beta` if an "
+                "unmetered beta call is genuinely intended."
+            )
         return getattr(self._inner, name)
 
 
