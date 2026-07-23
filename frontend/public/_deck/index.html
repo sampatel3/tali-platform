@@ -741,8 +741,12 @@
   .surf-out span::before { content: "→"; position: absolute; left: 0; top: 0; color: var(--purple); font-weight: 700; }
   .surf-out b { color: var(--ink); font-weight: 600; }
   /* Iframes can't render in a PDF/print export, so each preview also carries
-     a captured fallback — hidden on screen and swapped in for print. */
+     a captured fallback — hidden on screen and swapped in for print. The
+     assessment demo is a deliberate exception: it shows the static capture on
+     screen too (read-only showcase — the live workspace is not meant to be
+     poked at from the deck). */
   .surf-shot { display: none; }
+  [data-slide="surf-assess"] .surf-shot { display: block; flex: 1; width: 100%; min-height: 0; object-fit: cover; object-position: top center; }
   @media print {
     /* Force the deck's dark slabs + colour accents to print even when the
        browser's "Background graphics" toggle is off — they're essential. */
@@ -1649,9 +1653,8 @@
     </div>
     <div class="surf">
       <div class="surf-frame">
-        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/assess · candidate workspace</span><span class="surf-badge">Product demo · representative data</span></div>
-        <iframe src="/assessment/live?demo=1&amp;showcase=1" title="Taali product demo — AI-native assessment" sandbox="allow-scripts allow-same-origin" referrerpolicy="no-referrer"></iframe>
-        <img class="surf-shot" src="img/surf-assess.png" alt="Taali AI-native assessment product demo — representative data" />
+        <div class="surf-chrome"><span class="dots"><i></i><i></i><i></i></span><span class="surf-url"><span class="lock">●</span>taali.ai/assess · candidate workspace</span><span class="surf-badge">Product demo · read-only preview</span></div>
+        <img class="surf-shot" src="img/surf-assess.png" alt="Taali AI-native assessment — candidate workspace with Claude chat, repo and code editor" />
       </div>
       <div class="surf-out">
         <span><b>AI in the workflow:</b> a real editor and a safe test environment sit alongside the assistant.</span>
