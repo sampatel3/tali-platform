@@ -23,6 +23,16 @@
 
 ---
 
+## 0b. Implementation status — Horizon 1 shipped (2026-07-23, same branch)
+
+The H1 "before next pilot" items in §5 were implemented alongside this assessment; §4/§6 describe the state *before* that work:
+
+- **Public pages live**: `/privacy`, `/terms` (pre-counsel drafts, bracketed decisions visible), `/subprocessors` (10 subprocessors, per-subprocessor transfer mechanism, DPF statuses verified 2026-07-23 — all certified except E2B → SCCs). RegisterPage links fixed; landing footer links added; sitemap updated.
+- **Compliance pack**: `docs/compliance/` — DPA template, vendor DPIA, customer DPIA template, ROPA, candidate privacy-notice template, controller/processor matrix, candidate contest process (ack 3 working days / resolve 30 days), retention schedule policy (scheduler itself remains H2), pack INDEX with counsel checklist. All DRAFT-marked for counsel.
+- **Code**: dormant `sentiment_trajectory` field removed from scoring schemas with an Art 5(1)(f) fencing comment (verified dormant repo-wide); Art 50 transparency audit written (`docs/compliance/ART50_AI_TRANSPARENCY_AUDIT.md`) — one gap found and fixed (assessment welcome page now says "Claude, an AI assistant"); all other candidate-facing surfaces already disclose AI involvement.
+- **Deck**: slide 08 now carries the §6-recommended wording ("Operated in line with UK and EU data-protection requirements, under each customer's instructions") with the compliance-pack list and subprocessor-page link — accurate because it ships together with the artifacts above.
+- **Still open**: everything in H2/H3 (meaningful-HITL evidence pack, erasure sweep v2 + retention scheduler, bias pipeline, AI Act provider file, hosting region), plus every `⚖ COUNSEL` item — the pack is drafted, not lawyer-approved.
+
 ## 1. What Taali is, in regulator's terms
 
 | Product fact | Regulatory characterization |

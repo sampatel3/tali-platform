@@ -56,6 +56,12 @@ export const pathForPage = (page, options = {}) => {
       return '/developers';
     case 'blog':
       return '/blog';
+    case 'privacy':
+      return '/privacy';
+    case 'terms':
+      return '/terms';
+    case 'subprocessors':
+      return '/subprocessors';
     case 'blog-post':
       return options.slug ? `/blog/${options.slug}` : '/blog';
     case 'candidate-report': {

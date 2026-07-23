@@ -155,3 +155,12 @@ export const TokenGate = lazy(() => import('../features/_dev/TokenGate'));
 export const DeckIframe = lazy(() => import('../features/_dev/DeckIframe'));
 export const BlogIndexPage = lazy(() => import('../features/blog/BlogIndexPage'));
 export const BlogPostPage = lazy(() => import('../features/blog/BlogPostPage'));
+export const PrivacyPage = lazy(() =>
+  import('../features/legal/PrivacyPage').then((m) => ({ default: m.PrivacyPage }))
+);
+export const TermsPage = lazy(() =>
+  import('../features/legal/TermsPage').then((m) => ({ default: m.TermsPage }))
+);
+export const SubprocessorsPage = lazy(() =>
+  import('../features/legal/SubprocessorsPage').then((m) => ({ default: m.SubprocessorsPage }))
+);

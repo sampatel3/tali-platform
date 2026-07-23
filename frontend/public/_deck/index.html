@@ -203,6 +203,13 @@
   }
   .offer-cell.credits { background: var(--bg-2); border: 1px solid var(--line); }
   .offer-cell.pilot { background: var(--ink); color: #fff; }
+  .offer-cell.governance {
+    grid-column: 1 / -1; flex-direction: row; align-items: baseline; gap: 18px;
+    padding: 14px 26px; background: var(--bg-2); border: 1px solid var(--line);
+  }
+  .offer-cell.governance .oc-tag { white-space: nowrap; }
+  .offer-cell.governance .oc-body { font-size: 14.5px; line-height: 1.4; }
+  .offer-cell.governance a { color: var(--purple); text-decoration: none; font-weight: 600; }
   .offer-cell .oc-tag {
     font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase;
     color: var(--purple); font-weight: 700;
@@ -1422,6 +1429,7 @@
     <div class="offer-foot">
       <div class="offer-cell credits"><span class="oc-tag">// How you pay</span><span class="oc-body"><b>Credits — pay only for what you use.</b> One usage-based model across your roles and workflows. No large upfront commitment; set a budget for each role.</span></div>
       <div class="offer-cell pilot"><span class="oc-tag">// How to start — free</span><span class="oc-body"><b>A no-cost proof-of-value pilot</b> on a few live roles — for your own team, a client mandate, or both — or walk the product first at <a href="https://www.taali.ai/demo">taali.ai/demo</a>. &nbsp;<a href="mailto:hello@taali.ai">hello@taali.ai →</a></span></div>
+      <div class="offer-cell governance"><span class="oc-tag">// Data protection</span><span class="oc-body"><b>Operated in line with UK and EU data-protection requirements, under each customer's instructions.</b> Human review with recorded overrides · evidence-linked decision history · candidate transparency and contest route · retention and erasure workflows. Compliance pack at onboarding — DPA, DPIA support, candidate notices, subprocessor list: <a href="https://www.taali.ai/subprocessors">taali.ai/subprocessors</a>.</span></div>
     </div>
     <div class="slide-foot"><span>08 / 08 · How we work with you</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
@@ -1544,7 +1552,7 @@
   "This is the detailed product view. Taali can run as the native ATS or connect the same workflow to Workable and Bullhorn. The live product covers role intake and publishing, first-pass screening, candidate-integrity checks, evidence-linked fit, authorised-pool search, a configuration-dependent Graphiti and Neo4j candidate evidence graph, AI-native work samples, human decision controls, secure sharing and operating analytics. Integrity signals show recruiters what to verify; they are not a claim that Taali proves fraud. The next six months stay focused on three reach upgrades: external talent discovery, wider job-board distribution, and reusable talent pools with re-engagement.",
   "Taali's difference is structural: the role agent, AI-native work sample and evidence-linked decision record operate in one loop. The comparison is category-level and individual providers vary, but most buyers currently assemble these capabilities across separate ATS, assessment and automation products.",
   "DeepLight is the operating proof: more than 100 roles, 58,000 applications, 16,000 agent decisions, 70 assessments, 24 offers and 18 hires have run through the workflow. These are operating figures, not a claim that Taali alone caused each outcome. The model is also moving into consultancy and staffing pilots in the UAE and Europe.",
-  "The same platform supports two business models. Recruitment, staffing and consultancy firms gain screening capacity and a stronger client handoff; in-house teams gain capacity while retaining one controlled evidence bar. The commercial model is usage-based credits, beginning with a no-cost proof-of-value pilot on a few live roles.",
+  "The same platform supports two business models. Recruitment, staffing and consultancy firms gain screening capacity and a stronger client handoff; in-house teams gain capacity while retaining one controlled evidence bar. The commercial model is usage-based credits, beginning with a no-cost proof-of-value pilot on a few live roles. On data protection: Taali is operated in line with UK and EU data-protection requirements under each customer's instructions — every decision carries human review with recorded overrides and an evidence-linked history, candidates get transparency and a contest route, and each customer receives a compliance pack at onboarding: DPA, DPIA support, candidate notice templates and the public subprocessor list. The EU AI Act's high-risk recruitment obligations land in December 2027, and Taali's logging and human-oversight design are built to them today.",
   "Product demo: the Home Hub starts at the all-roles view, leads with the pipeline and review queue, and opens a role-scoped agent chat when a mandate is selected. All data shown is representative.",
   "Product demo: the Jobs board shows one governed agent per role, with requirements, budget, autonomy and activity together. The role opens directly into the pipeline the team works each morning.",
   "Product demo: natural-language search works across the customer's authorised native, uploaded and ATS-synced candidate pool, and qualitative matches carry CV citations. Automated external talent discovery is not represented as live.",
