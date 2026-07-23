@@ -408,7 +408,17 @@ class MeteredAsyncAnthropic:
         return self._inner
 
     def __getattr__(self, name: str) -> Any:
-        # Pass-through for anything else (e.g. .beta resources, .with_options).
+        if name == "beta":
+            # See MeteredAnthropicClient.__getattr__: beta.messages.create
+            # bypasses metering entirely (no usage_event / claude_call_log).
+            # Fail loud; intentional unmetered beta calls use ``.inner.beta``.
+            raise RuntimeError(
+                "MeteredAsyncAnthropic does not expose `.beta`: beta calls "
+                "bypass metering (no usage_event / claude_call_log row). Use "
+                "`.messages` for metered calls, or `.inner.beta` if an "
+                "unmetered beta call is genuinely intended."
+            )
+        # Pass-through for anything else (e.g. .with_options).
         return getattr(self._inner, name)
 
 

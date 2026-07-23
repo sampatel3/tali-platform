@@ -167,18 +167,18 @@ def reconcile_recent(
         logger.warning("Anthropic usage report fetch failed: %s", exc)
         return {"error": f"usage_fetch_failed: {exc}"}
 
+    # "cost report unavailable" must never be conflated with "$0": a swallowed
+    # failure defaults anthropic_cost to 0, and the trailing-window upsert would
+    # then clobber previously-priced rows to 0. cost_available gates the write.
+    cost_available = True
     try:
         cost_rows = list(
-            fetch_cost_buckets(
-                starting_at=starting_at,
-                ending_at=ending_at,
-            )
+            fetch_cost_buckets(starting_at=starting_at, ending_at=ending_at)
         )
     except AnthropicUsageError as exc:
-        # Costs are nice-to-have — without them the reconciliation row
-        # still tracks token drift. Log + continue with empty cost map.
         logger.warning("Anthropic cost report fetch failed: %s", exc)
         cost_rows = []
+        cost_available = False
 
     # Sum costs by (date, workspace_id, model) so we can attach a
     # cost number to each (date, workspace, model) usage bucket. The
@@ -320,13 +320,15 @@ def reconcile_recent(
             internal=internal["input"] + internal["output"],
             external=tokens["input"] + tokens["output"],
         )
-        cost_drift = _percent_drift(
-            internal=internal["cost_usd_micro"],
-            external=anthropic_cost,
-        )
+        # Unavailable cost ⇒ drift unknown, not 0 (a phantom 0 fabricates -100%).
+        cost_drift = None
+        if cost_available:
+            cost_drift = _percent_drift(
+                internal=internal["cost_usd_micro"], external=anthropic_cost
+            )
 
         # Collect a drift alert for material rows that breach the threshold.
-        if _is_alertable_drift(cost_drift, anthropic_cost):
+        if cost_available and _is_alertable_drift(cost_drift, anthropic_cost):
             drift_alerts.append({
                 "usage_date": usage_day.isoformat(),
                 "model": model or "",
@@ -401,7 +403,9 @@ def reconcile_recent(
             existing.anthropic_output_tokens = tokens["output"]
             existing.anthropic_cache_read_tokens = tokens["cache_read"]
             existing.anthropic_cache_creation_tokens = tokens["cache_creation"]
-            existing.anthropic_cost_usd_micro = anthropic_cost
+            # Preserve prior cost when the fetch failed — see cost_available.
+            if cost_available:
+                existing.anthropic_cost_usd_micro = anthropic_cost
             existing.internal_input_tokens = internal["input"]
             existing.internal_output_tokens = internal["output"]
             existing.internal_cache_read_tokens = internal["cache_read"]
@@ -409,7 +413,8 @@ def reconcile_recent(
             existing.internal_cost_usd_micro = internal["cost_usd_micro"]
             existing.internal_event_count = internal["event_count"]
             existing.tokens_drift_pct = tokens_drift
-            existing.cost_drift_pct = cost_drift
+            if cost_available:
+                existing.cost_drift_pct = cost_drift
             existing.reconciled_at = datetime.now(timezone.utc)
             existing.details = details
         rows_written += 1
@@ -484,6 +489,7 @@ def reconcile_recent(
     return {
         "rows_written": rows_written,
         "rows_skipped": rows_skipped,
+        "cost_report_unavailable": not cost_available,
         "window_start": starting_at.isoformat(),
         "window_end": ending_at.isoformat(),
         "drift_alerts": len(drift_alerts),
