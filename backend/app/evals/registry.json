@@ -83,8 +83,13 @@
         "tests/evals/test_search_surface_parity.py::test_grounded_qualitative_degraded_zero_is_never_exact_on_any_surface",
         "tests/test_api_requisition_job_bridge.py::test_set_job_status_keeps_related_role_lifecycle_independent",
         "tests/test_related_role_membership_contract.py::test_direct_application_promotion_closes_prior_active_lifecycle",
+        "tests/test_related_role_membership_contract.py::test_explicit_seed_restores_legacy_rolling_compatibility_shadow",
+        "tests/postgres/test_candidate_capability_migrations.py::test_migration_185_retries_after_committed_additive_phase",
+        "tests/postgres/test_candidate_capability_migrations.py::test_migration_185_promotes_pre_snapshot_legacy_shadow",
+        "tests/postgres/test_candidate_capability_migrations.py::test_migration_185_keeps_post_snapshot_legacy_shadow_archived",
         "tests/postgres/test_candidate_capability_migrations.py::test_populated_role_membership_and_action_migrations_are_rolling_safe",
         "tests/platform/test_production_search_canary_contract.py::test_candidate_search_bootstrap_rebuilds_disposable_schema_before_stamping",
+        "tests/platform/test_production_search_canary_contract.py::test_membership_migration_releases_additive_ddl_before_data_repair",
         "tests/test_pipeline_analytics.py::test_pipeline_funnel_uses_logical_related_membership_truth",
         "tests/test_pipeline_analytics.py::test_time_to_fill_uses_each_logical_memberships_own_timestamps",
         "tests/test_mcp_candidate_capabilities.py::test_identity_search_cannot_ground_a_qualitative_claim",
@@ -230,6 +235,7 @@
         "tests/decision_policy/test_retroactive_eval.py::test_retroactive_feedback_follows_candidate_after_membership_source_changes",
         "tests/decision_policy/test_nightly_policy_fit.py::test_nightly_labels_same_candidate_from_each_logical_roles_local_outcome",
         "tests/decision_policy/test_nightly_policy_fit.py::test_nightly_labels_follow_role_candidate_after_membership_source_changes",
+        "tests/postgres/test_candidate_capability_migrations.py::test_migration_188_guard_closes_pre_index_writer_race",
         "tests/test_taali_chat_role_scoped.py::test_decision_history_follows_candidate_when_related_source_changes"
       ]
     }

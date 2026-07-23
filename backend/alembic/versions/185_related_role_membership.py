@@ -62,6 +62,7 @@ def _create_candidate_compatibility_trigger() -> None:
             ats_candidate_id INTEGER;
             ats_organization_id INTEGER;
             ats_role_id INTEGER;
+            skip_live_identity_check BOOLEAN := FALSE;
         BEGIN
             IF TG_OP = 'DELETE' THEN
                 -- Pre-185 rows have no candidate_id. Resolve it before deciding
@@ -154,14 +155,19 @@ def _create_candidate_compatibility_trigger() -> None:
             END IF;
 
             -- The pre-185 INSERT shape is an inferred ATS-owner fan-out, not an
-            -- explicit membership decision. Accepting it after the one-time
-            -- migration snapshot would silently grow an independent role's
-            -- pool whenever an old worker sees a new owner application.
+            -- explicit membership decision. Keep the old writer healthy during
+            -- a rolling deployment, but archive its row immediately so it
+            -- cannot silently grow the independent logical-role pool or enter
+            -- the scoring queue. Current code can later restore/rebind this
+            -- audit shadow through the explicit membership workflow.
             IF TG_OP = 'INSERT' AND NEW.candidate_id IS NULL THEN
-                RAISE EXCEPTION
-                    'legacy inferred membership insert rejected for role %',
-                    NEW.role_id
-                    USING ERRCODE = '23514';
+                NEW.candidate_id := resolved_candidate_id;
+                NEW.deleted_at := COALESCE(NEW.deleted_at, CURRENT_TIMESTAMP);
+                NEW.membership_source := 'legacy_compat_shadow';
+                NEW.status := 'excluded';
+                NEW.error_message :=
+                    'Ignored legacy inferred membership during rolling migration';
+                NEW.last_error_code := 'legacy_inferred_membership_ignored';
             END IF;
 
             IF NEW.candidate_id IS NULL THEN
@@ -228,16 +234,28 @@ def _create_candidate_compatibility_trigger() -> None:
                 END IF;
             END IF;
 
+            -- Existing pre-185 duplicates are resolved by the migration after
+            -- candidate hydration. Do not reject that one-time UPDATE merely
+            -- because another legacy row has not been hydrated/archived yet.
+            IF TG_OP = 'UPDATE' AND OLD.candidate_id IS NULL THEN
+                skip_live_identity_check := TRUE;
+            END IF;
+
             -- Serialize the only identity that represents live membership.
             -- The advisory lock closes the short rolling-deploy window before
             -- revision 187 can build its partial unique index: two old/new
             -- writers must not both observe an empty (role, candidate) slot.
-            IF NEW.deleted_at IS NULL THEN
+            IF NEW.deleted_at IS NULL AND NOT skip_live_identity_check THEN
                 PERFORM pg_advisory_xact_lock(NEW.role_id, NEW.candidate_id);
                 PERFORM 1
                 FROM sister_role_evaluations AS existing
+                JOIN candidate_applications AS existing_source
+                  ON existing_source.id = existing.source_application_id
                 WHERE existing.role_id = NEW.role_id
-                  AND existing.candidate_id = NEW.candidate_id
+                  AND COALESCE(
+                        existing.candidate_id,
+                        existing_source.candidate_id
+                      ) = NEW.candidate_id
                   AND existing.deleted_at IS NULL
                   AND existing.id IS DISTINCT FROM NEW.id;
                 IF FOUND THEN
@@ -252,6 +270,10 @@ def _create_candidate_compatibility_trigger() -> None:
         END;
         $$
         """
+    )
+    op.execute(
+        f"DROP TRIGGER IF EXISTS {_CANDIDATE_TRIGGER} "
+        "ON sister_role_evaluations"
     )
     op.execute(
         f"""
@@ -305,6 +327,9 @@ def _create_ats_owner_change_trigger() -> None:
         """
     )
     op.execute(
+        f"DROP TRIGGER IF EXISTS {_ATS_OWNER_TRIGGER} ON roles"
+    )
+    op.execute(
         f"""
         CREATE TRIGGER {_ATS_OWNER_TRIGGER}
         AFTER UPDATE OF ats_owner_role_id ON roles
@@ -322,25 +347,64 @@ def _drop_candidate_compatibility_trigger() -> None:
     op.execute(f"DROP FUNCTION IF EXISTS {_CANDIDATE_FUNCTION}()")
 
 
-def upgrade() -> None:
-    op.add_column(
-        "share_links",
-        sa.Column("view_role_id", sa.Integer(), nullable=True),
-    )
-    op.create_foreign_key(
-        "fk_share_links_view_role_id",
-        "share_links",
-        "roles",
-        ["view_role_id"],
-        ["id"],
-        ondelete="CASCADE",
-    )
-    op.create_index(
-        "ix_share_links_view_role_id",
-        "share_links",
-        ["view_role_id"],
+def _add_constraint_if_missing(
+    table: str,
+    name: str,
+    definition: str,
+) -> None:
+    """Add one PostgreSQL constraint without breaking an unstamped retry."""
+
+    op.execute(
+        f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = '{name}'
+                  AND conrelid = '{table}'::regclass
+            ) THEN
+                ALTER TABLE {table}
+                ADD CONSTRAINT {name} {definition};
+            END IF;
+        END;
+        $$
+        """
     )
 
+
+def _commit_additive_schema_phase() -> None:
+    """Expose compatibility DDL before the populated-table backfill starts."""
+
+    # Alembic otherwise holds every ACCESS EXCLUSIVE lock from the first ALTER
+    # TABLE until revision 187 enters its first concurrent-index autocommit
+    # block. Commit the retry-safe additive phase now: old workers immediately
+    # see the compatibility trigger, and ordinary production traffic is not
+    # blocked for the duration of the data repair.
+    with op.get_context().autocommit_block():
+        pass
+
+
+def _legacy_implicit_snapshot_boundary(phase: str) -> None:
+    """Name the atomic snapshot boundaries for concurrency contract tests."""
+
+    if phase not in {"before", "after"}:
+        raise ValueError(f"unknown legacy snapshot boundary: {phase}")
+
+
+def upgrade() -> None:
+    # Fail instead of waiting indefinitely for a busy production table. The
+    # deployment can retry without leaving a half-applied additive phase.
+    op.execute("SET LOCAL lock_timeout = '5s'")
+    op.execute(
+        "ALTER TABLE share_links "
+        "ADD COLUMN IF NOT EXISTS view_role_id INTEGER"
+    )
+    _add_constraint_if_missing(
+        "share_links",
+        "fk_share_links_view_role_id",
+        "FOREIGN KEY (view_role_id) REFERENCES roles(id) ON DELETE CASCADE",
+    )
     # ATS ownership is optional transport metadata, not lifecycle ownership.
     # Deleting the transport role must preserve every independent related role.
     _drop_ats_owner_foreign_key()
@@ -353,22 +417,15 @@ def upgrade() -> None:
         ondelete="SET NULL",
     )
 
-    op.add_column(
-        "roles",
-        sa.Column("related_source_role_id", sa.Integer(), nullable=True),
+    op.execute(
+        "ALTER TABLE roles "
+        "ADD COLUMN IF NOT EXISTS related_source_role_id INTEGER"
     )
-    op.create_foreign_key(
+    _add_constraint_if_missing(
+        "roles",
         "fk_roles_related_source_role_id",
-        "roles",
-        "roles",
-        ["related_source_role_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
-    op.create_index(
-        "ix_roles_related_source_role_id",
-        "roles",
-        ["related_source_role_id"],
+        "FOREIGN KEY (related_source_role_id) "
+        "REFERENCES roles(id) ON DELETE SET NULL",
     )
     # Historical code could persist an ATS-owner marker without updating the
     # discriminator. Normalize those rows before any membership backfill so
@@ -391,99 +448,53 @@ def upgrade() -> None:
           AND related_source_role_id IS NULL
         """
     )
-    op.execute(
-        """
-        ALTER TABLE roles
-        ADD CONSTRAINT ck_roles_related_identity_kind
-        CHECK (
+    _add_constraint_if_missing(
+        "roles",
+        "ck_roles_related_identity_kind",
+        """CHECK (
             (ats_owner_role_id IS NULL AND related_source_role_id IS NULL)
             OR role_kind = 'sister'
-        ) NOT VALID
-        """
+        ) NOT VALID""",
     )
     op.execute(
-        "ALTER TABLE roles VALIDATE CONSTRAINT ck_roles_related_identity_kind"
-    )
-
-    op.add_column(
-        "sister_role_evaluations",
-        sa.Column("candidate_id", sa.Integer(), nullable=True),
-    )
-    op.add_column(
-        "sister_role_evaluations",
-        sa.Column("ats_application_id", sa.Integer(), nullable=True),
-    )
-    op.add_column(
-        "sister_role_evaluations",
-        sa.Column(
-            "application_outcome",
-            sa.String(length=32),
-            nullable=False,
-            server_default="open",
-        ),
-    )
-    op.add_column(
-        "sister_role_evaluations",
-        sa.Column(
-            "application_outcome_updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.func.now(),
-        ),
-    )
-    op.add_column(
-        "sister_role_evaluations",
-        sa.Column(
-            "application_outcome_source",
-            sa.String(length=16),
-            nullable=False,
-            server_default="system",
-        ),
-    )
-    op.add_column(
-        "sister_role_evaluations",
-        sa.Column(
-            "membership_source",
-            sa.String(length=32),
-            nullable=False,
-            server_default="initial_snapshot",
-        ),
-    )
-    op.add_column(
-        "sister_role_evaluations",
-        sa.Column(
-            "version",
-            sa.Integer(),
-            nullable=False,
-            server_default="1",
-        ),
-    )
-    op.add_column(
-        "sister_role_evaluations",
-        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.add_column(
-        "sister_role_evaluations",
-        sa.Column("manual_decision", sa.JSON(), nullable=True),
+        """
+        ALTER TABLE sister_role_evaluations
+            ADD COLUMN IF NOT EXISTS candidate_id INTEGER,
+            ADD COLUMN IF NOT EXISTS ats_application_id INTEGER,
+            ADD COLUMN IF NOT EXISTS application_outcome VARCHAR(32)
+                NOT NULL DEFAULT 'open',
+            ADD COLUMN IF NOT EXISTS application_outcome_updated_at TIMESTAMPTZ
+                NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            ADD COLUMN IF NOT EXISTS application_outcome_source VARCHAR(16)
+                NOT NULL DEFAULT 'system',
+            ADD COLUMN IF NOT EXISTS membership_source VARCHAR(32)
+                NOT NULL DEFAULT 'initial_snapshot',
+            ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1,
+            ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ,
+            ADD COLUMN IF NOT EXISTS manual_decision JSON
+        """
     )
 
     # NOT VALID avoids a full validation scan while holding the stronger lock
     # required to add a foreign key. Validation below permits normal DML.
-    op.execute(
-        """
-        ALTER TABLE sister_role_evaluations
-        ADD CONSTRAINT fk_sister_evaluations_candidate_id
-        FOREIGN KEY (candidate_id) REFERENCES candidates(id)
-        ON DELETE CASCADE NOT VALID
-        """
+    _add_constraint_if_missing(
+        "sister_role_evaluations",
+        "fk_sister_evaluations_candidate_id",
+        "FOREIGN KEY (candidate_id) REFERENCES candidates(id) "
+        "ON DELETE CASCADE NOT VALID",
     )
+    _add_constraint_if_missing(
+        "sister_role_evaluations",
+        "fk_sister_evaluations_ats_application_id",
+        "FOREIGN KEY (ats_application_id) "
+        "REFERENCES candidate_applications(id) ON DELETE SET NULL NOT VALID",
+    )
+    _create_candidate_compatibility_trigger()
+    _create_ats_owner_change_trigger()
+    _commit_additive_schema_phase()
+    op.execute("SET LOCAL lock_timeout = '5s'")
     op.execute(
-        """
-        ALTER TABLE sister_role_evaluations
-        ADD CONSTRAINT fk_sister_evaluations_ats_application_id
-        FOREIGN KEY (ats_application_id) REFERENCES candidate_applications(id)
-        ON DELETE SET NULL NOT VALID
-        """
+        "ALTER TABLE roles VALIDATE CONSTRAINT ck_roles_related_identity_kind"
     )
     # Existing evaluation rows are already explicit memberships. Populate only
     # additive identity/lifecycle columns during this compatibility release.
@@ -522,18 +533,25 @@ def upgrade() -> None:
                 ELSE CURRENT_TIMESTAMP
             END,
             application_outcome_source = 'system',
-            membership_source = 'legacy_explicit'
+            membership_source = 'legacy_explicit',
+            version = COALESCE(sre.version, 1) + 1
         FROM candidate_applications AS app, roles AS role, candidates AS candidate
         WHERE app.id = sre.source_application_id
           AND role.id = sre.role_id
           AND candidate.id = app.candidate_id
+          AND sre.candidate_id IS NULL
         """
     )
 
     # Old readers treated every owner application as an implicit member even
     # when its scoring row had not been created. Materialize that current pool
     # exactly once so the cutover does not make candidates disappear. Future
-    # owner applications are not fanned out automatically.
+    # owner applications are not fanned out automatically. Candidate/role is
+    # unique on candidate_applications, so each snapshot identity has one
+    # deterministic owner application. If an old writer inserted that exact
+    # row after the compatibility trigger committed, the conflict update
+    # atomically converts its archived audit shadow into the snapshot member.
+    _legacy_implicit_snapshot_boundary("before")
     op.execute(
         """
         INSERT INTO sister_role_evaluations (
@@ -597,18 +615,66 @@ def upgrade() -> None:
         LEFT JOIN sister_role_evaluations AS existing
           ON existing.role_id = role.id
          AND existing.candidate_id = app.candidate_id
+         AND existing.membership_source IS DISTINCT FROM 'legacy_compat_shadow'
         WHERE role.role_kind = 'sister'
           AND role.deleted_at IS NULL
           AND existing.id IS NULL
-        ON CONFLICT (role_id, source_application_id) DO NOTHING
+        ON CONFLICT (role_id, source_application_id) DO UPDATE
+        SET organization_id = EXCLUDED.organization_id,
+            candidate_id = EXCLUDED.candidate_id,
+            ats_application_id = EXCLUDED.ats_application_id,
+            status = EXCLUDED.status,
+            pipeline_stage = EXCLUDED.pipeline_stage,
+            pipeline_stage_updated_at = EXCLUDED.pipeline_stage_updated_at,
+            pipeline_stage_source = EXCLUDED.pipeline_stage_source,
+            application_outcome = EXCLUDED.application_outcome,
+            application_outcome_updated_at =
+                EXCLUDED.application_outcome_updated_at,
+            application_outcome_source = EXCLUDED.application_outcome_source,
+            membership_source = EXCLUDED.membership_source,
+            spec_fingerprint = EXCLUDED.spec_fingerprint,
+            cv_fingerprint = EXCLUDED.cv_fingerprint,
+            role_fit_score = NULL,
+            summary = NULL,
+            details = NULL,
+            history = NULL,
+            model_version = NULL,
+            prompt_version = NULL,
+            trace_id = NULL,
+            cache_hit = FALSE,
+            error_message = EXCLUDED.error_message,
+            attempts = 0,
+            next_attempt_at = NULL,
+            dispatch_attempted_at = NULL,
+            last_error_code = NULL,
+            queued_at = EXCLUDED.queued_at,
+            started_at = NULL,
+            scored_at = NULL,
+            updated_at = CURRENT_TIMESTAMP,
+            version = COALESCE(sister_role_evaluations.version, 1) + 1,
+            deleted_at = NULL,
+            manual_decision = NULL
+        WHERE sister_role_evaluations.membership_source =
+                  'legacy_compat_shadow'
+          AND sister_role_evaluations.deleted_at IS NOT NULL
+          AND sister_role_evaluations.organization_id =
+                  EXCLUDED.organization_id
+          AND sister_role_evaluations.candidate_id = EXCLUDED.candidate_id
         """
     )
+    _legacy_implicit_snapshot_boundary("after")
 
     # A direct application is the related role's own lifecycle record and must
     # win over an ATS-owner-backed compatibility row. Preserve all other rows as
     # immutable audit shadows; old workers may still update the owner-keyed row,
     # but current readers only admit the direct live membership.
+    # Rows created by the rolling-deploy compatibility trigger are not existing
+    # memberships: exclude them from both ranking passes so an insert after the
+    # additive commit can never become the sole winner and be unarchived.
 
+    # Archive losing legacy duplicates first. The compatibility trigger is
+    # already visible to live writers, so restoring the winner in a second
+    # statement cannot momentarily collide with another live membership.
     op.execute(
         """
         WITH ranked_memberships AS (
@@ -626,21 +692,43 @@ def upgrade() -> None:
             FROM sister_role_evaluations AS sre
             JOIN candidate_applications AS source_app
               ON source_app.id = sre.source_application_id
-            JOIN roles AS role ON role.id = sre.role_id
+            WHERE sre.membership_source IS DISTINCT FROM 'legacy_compat_shadow'
         )
         UPDATE sister_role_evaluations AS sre
-        SET deleted_at = CASE
-                WHEN ranked.membership_rank = 1 THEN NULL
-                ELSE COALESCE(sre.deleted_at, CURRENT_TIMESTAMP)
-            END,
+        SET deleted_at = COALESCE(sre.deleted_at, CURRENT_TIMESTAMP),
+            membership_source = 'legacy_compat_shadow'
+        FROM ranked_memberships AS ranked
+        WHERE ranked.id = sre.id
+          AND ranked.membership_rank > 1
+        """
+    )
+    op.execute(
+        """
+        WITH ranked_memberships AS (
+            SELECT
+                sre.id,
+                ROW_NUMBER() OVER (
+                    PARTITION BY sre.role_id, sre.candidate_id
+                    ORDER BY
+                        (source_app.role_id = sre.role_id) DESC,
+                        (sre.role_fit_score IS NOT NULL) DESC,
+                        COALESCE(sre.scored_at, sre.updated_at, sre.created_at) DESC
+                            NULLS LAST,
+                        sre.id ASC
+                ) AS membership_rank
+            FROM sister_role_evaluations AS sre
+            JOIN candidate_applications AS source_app
+              ON source_app.id = sre.source_application_id
+            WHERE sre.membership_source IS DISTINCT FROM 'legacy_compat_shadow'
+        )
+        UPDATE sister_role_evaluations AS sre
+        SET deleted_at = NULL,
             membership_source = CASE
-                WHEN ranked.membership_rank > 1 THEN 'legacy_compat_shadow'
                 WHEN source_app.role_id = sre.role_id THEN 'direct'
                 ELSE sre.membership_source
             END,
             ats_application_id = CASE
-                WHEN ranked.membership_rank = 1
-                 AND source_app.role_id = sre.role_id THEN (
+                WHEN source_app.role_id = sre.role_id THEN (
                     SELECT owner_app.id
                     FROM roles AS membership_role
                     JOIN candidate_applications AS owner_app
@@ -657,6 +745,7 @@ def upgrade() -> None:
         FROM ranked_memberships AS ranked,
              candidate_applications AS source_app
         WHERE ranked.id = sre.id
+          AND ranked.membership_rank = 1
           AND source_app.id = sre.source_application_id
         """
     )
@@ -727,7 +816,8 @@ def upgrade() -> None:
                     THEN 'Explicit re-evaluation is required after membership migration'
                 ELSE 'No CV text available'
             END,
-            last_error_code = NULL
+            last_error_code = NULL,
+            version = COALESCE(sre.version, 1) + 1
         FROM roles AS role,
              candidate_applications AS source_app,
              candidates AS candidate
@@ -744,19 +834,11 @@ def upgrade() -> None:
         """
     )
 
-    # Install mixed-version write protection after this migration has finished
-    # deriving the initial role-local lifecycle.  Installing it before the
-    # backfill would make the trigger correctly reject the migration's own
-    # version-less state updates as if they came from an old worker.  PostgreSQL
-    # exposes the whole migration atomically, so older processes still see the
-    # trigger before they can write against the expanded schema.
-    _create_candidate_compatibility_trigger()
-    _create_ats_owner_change_trigger()
-
     # The compatibility trigger validates explicit current-writer identity
-    # before database constraints run. Legacy inferred fan-out inserts fail
-    # closed. Canonical role/candidate uniqueness remains serialized by the
-    # trigger until revision 187 installs the partial unique index.
+    # before database constraints run. Legacy inferred fan-out inserts are
+    # archived without entering the logical pool. Canonical role/candidate
+    # uniqueness remains serialized by the trigger until revision 187 installs
+    # the partial unique index.
     op.execute(
         """
         ALTER TABLE sister_role_evaluations

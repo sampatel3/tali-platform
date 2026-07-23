@@ -10,11 +10,12 @@ independent cards in different roles, but owner and direct application rows can
 never create two cards in the same role. Decision type deliberately does not
 participate in the slot.
 
-The data repair is committed before the concurrent build.  If a mixed-version
-worker races the build and creates a new duplicate, PostgreSQL fails the index
-without stamping the revision. A retry repairs the duplicate and replaces only
-an invalid or contract-incompatible prior build. Once valid, the index protects
-every writer, including older workers and direct SQL producers.
+The compatibility trigger is installed and committed before the data repair.
+It serializes every active-slot write while the populated table is repaired and
+the unique index is built, including writes from older workers that omit
+``candidate_id``. A retry repairs any pre-trigger duplicate and replaces only an
+invalid or contract-incompatible prior build. Once valid, the trigger and index
+jointly protect every writer, including older workers and direct SQL producers.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ _LEGACY_INDEX = "uq_agent_decisions_active_role_application"
 _CANDIDATE_INDEX = "ix_agent_decisions_candidate_id"
 _CANDIDATE_TRIGGER = "trg_agent_decisions_resolve_candidate"
 _CANDIDATE_FUNCTION = "resolve_agent_decision_candidate_id"
+_CANDIDATE_PRESENT_CHECK = "ck_agent_decisions_candidate_id_present"
 _ACTIVE_PREDICATE = "status IN ('pending', 'processing', 'reverted_for_feedback')"
 
 
@@ -115,7 +117,7 @@ def _create_non_unique_index_concurrently(name: str, sql: str) -> None:
 
 
 def _create_candidate_identity_trigger() -> None:
-    """Populate and validate canonical decision identity for every SQL writer."""
+    """Populate identity and protect the active slot for every SQL writer."""
 
     op.execute(
         f"""
@@ -128,6 +130,8 @@ def _create_candidate_identity_trigger() -> None:
             application_organization_id INTEGER;
             candidate_organization_id INTEGER;
             role_organization_id INTEGER;
+            current_decision_id BIGINT;
+            conflicting_decision_id BIGINT;
         BEGIN
             SELECT application.candidate_id,
                    application.organization_id,
@@ -175,6 +179,53 @@ def _create_candidate_identity_trigger() -> None:
                     NEW.role_id
                     USING ERRCODE = '23514';
             END IF;
+
+            IF NEW.status IN (
+                'pending', 'processing', 'reverted_for_feedback'
+            ) THEN
+                -- This lock closes the gap before the partial unique index is
+                -- available. It also makes two old writers, both of which omit
+                -- candidate_id, observe one another in commit order.
+                PERFORM pg_advisory_xact_lock(
+                    NEW.role_id,
+                    application_candidate_id
+                );
+                IF TG_OP = 'UPDATE' THEN
+                    current_decision_id := OLD.id;
+                END IF;
+                SELECT existing.id
+                INTO conflicting_decision_id
+                FROM agent_decisions AS existing
+                LEFT JOIN candidate_applications AS source_application
+                  ON source_application.id = existing.application_id
+                WHERE existing.organization_id = NEW.organization_id
+                  AND existing.role_id = NEW.role_id
+                  AND COALESCE(
+                        existing.candidate_id,
+                        source_application.candidate_id
+                      ) = application_candidate_id
+                  AND existing.status IN (
+                        'pending',
+                        'processing',
+                        'reverted_for_feedback'
+                      )
+                  AND (
+                        current_decision_id IS NULL
+                        OR existing.id <> current_decision_id
+                      )
+                LIMIT 1;
+                IF conflicting_decision_id IS NOT NULL THEN
+                    RAISE EXCEPTION
+                        'active decision % already occupies role % candidate %',
+                        conflicting_decision_id,
+                        NEW.role_id,
+                        application_candidate_id
+                        USING
+                            ERRCODE = '23505',
+                            CONSTRAINT =
+                                'uq_agent_decisions_active_org_role_candidate';
+                END IF;
+            END IF;
             RETURN NEW;
         END;
         $$
@@ -187,10 +238,76 @@ def _create_candidate_identity_trigger() -> None:
         f"""
         CREATE TRIGGER {_CANDIDATE_TRIGGER}
         BEFORE INSERT OR UPDATE OF
-            organization_id, role_id, application_id, candidate_id
+            organization_id, role_id, application_id, candidate_id, status
         ON agent_decisions
         FOR EACH ROW
         EXECUTE FUNCTION {_CANDIDATE_FUNCTION}()
+        """
+    )
+
+
+def _commit_pre_repair_guard() -> None:
+    """Make the rolling-writer guard visible before any populated-data work."""
+
+    # Alembic's autocommit block commits the transaction on entry. The harmless
+    # statement makes the boundary explicit and starts no long-lived work.
+    with op.get_context().autocommit_block():
+        op.execute("SELECT 1")
+
+
+def _repair_active_decision_slots() -> None:
+    """Discard duplicate active rows using source identity before backfill."""
+
+    # Preserve every audit row. Processing wins because its candidate-facing
+    # action is already in flight only within the current membership lifecycle;
+    # a direct/current source beats an obsolete owner transport first. A taught
+    # card then wins over an ordinary pending card because it carries explicit
+    # human feedback. All losing rows remain as discarded audit records.
+    op.execute(
+        """
+        WITH ranked AS (
+            SELECT decision.id,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY decision.organization_id,
+                                    decision.role_id,
+                                    application.candidate_id
+                       ORDER BY CASE
+                                    WHEN application.role_id = decision.role_id
+                                      OR membership.source_application_id =
+                                            decision.application_id
+                                    THEN 0
+                                    ELSE 1
+                                END,
+                                CASE decision.status
+                                    WHEN 'processing' THEN 0
+                                    WHEN 'reverted_for_feedback' THEN 1
+                                    ELSE 2
+                                END,
+                                decision.created_at DESC,
+                                decision.id DESC
+                   ) AS active_rank
+            FROM agent_decisions AS decision
+            JOIN candidate_applications AS application
+              ON application.id = decision.application_id
+            LEFT JOIN sister_role_evaluations AS membership
+              ON membership.organization_id = decision.organization_id
+             AND membership.role_id = decision.role_id
+             AND membership.candidate_id = application.candidate_id
+             AND membership.deleted_at IS NULL
+            WHERE decision.status IN (
+                'pending', 'processing', 'reverted_for_feedback'
+            )
+        )
+        UPDATE agent_decisions AS decision
+        SET status = 'discarded',
+            resolved_at = COALESCE(decision.resolved_at, CURRENT_TIMESTAMP),
+            resolution_note = COALESCE(
+                NULLIF(BTRIM(decision.resolution_note), ''),
+                'Superseded while enforcing one active decision per role candidate'
+            )
+        FROM ranked
+        WHERE decision.id = ranked.id
+          AND ranked.active_rank > 1
         """
     )
 
@@ -199,10 +316,18 @@ def upgrade() -> None:
     # This migration crosses an autocommit boundary for concurrent indexes. All
     # pre-index DDL is therefore deliberately retry-safe if Alembic did not stamp
     # the revision after an interrupted build.
+    op.execute("SET LOCAL lock_timeout = '5s'")
     op.execute(
         "ALTER TABLE agent_decisions "
         "ADD COLUMN IF NOT EXISTS candidate_id INTEGER"
     )
+    # ALTER TABLE prevents concurrent old statements while this transaction is
+    # open. Install the compatibility guard immediately, then commit both DDL
+    # changes before reading or repairing populated rows.
+    _create_candidate_identity_trigger()
+    _commit_pre_repair_guard()
+    op.execute("SET LOCAL lock_timeout = '5s'")
+    _repair_active_decision_slots()
     op.execute(
         """
         UPDATE agent_decisions AS decision
@@ -239,9 +364,36 @@ def upgrade() -> None:
         $$
         """
     )
-    _create_candidate_identity_trigger()
+    op.execute(
+        f"""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = '{_CANDIDATE_PRESENT_CHECK}'
+                  AND conrelid = 'agent_decisions'::regclass
+            ) THEN
+                ALTER TABLE agent_decisions
+                ADD CONSTRAINT {_CANDIDATE_PRESENT_CHECK}
+                CHECK (candidate_id IS NOT NULL) NOT VALID;
+            END IF;
+        END;
+        $$
+        """
+    )
+    op.execute(
+        "ALTER TABLE agent_decisions "
+        f"VALIDATE CONSTRAINT {_CANDIDATE_PRESENT_CHECK}"
+    )
+    # PostgreSQL can prove NOT NULL from the validated check without scanning
+    # the populated table while holding ACCESS EXCLUSIVE.
     op.execute(
         "ALTER TABLE agent_decisions ALTER COLUMN candidate_id SET NOT NULL"
+    )
+    op.execute(
+        "ALTER TABLE agent_decisions "
+        f"DROP CONSTRAINT {_CANDIDATE_PRESENT_CHECK}"
     )
     op.execute(
         """
@@ -264,59 +416,6 @@ def upgrade() -> None:
     op.execute(
         "ALTER TABLE agent_decisions "
         "VALIDATE CONSTRAINT fk_agent_decisions_candidate_id"
-    )
-
-    # Preserve every audit row. Processing wins because its candidate-facing
-    # action is already in flight only within the current membership lifecycle;
-    # a direct/current source beats an obsolete owner transport first. A taught
-    # card then wins over an ordinary pending card because it carries explicit
-    # human feedback. All losing rows remain as discarded audit records.
-    op.execute(
-        """
-        WITH ranked AS (
-            SELECT decision.id,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY decision.organization_id,
-                                    decision.role_id,
-                                    decision.candidate_id
-                       ORDER BY CASE
-                                    WHEN application.role_id = decision.role_id
-                                      OR membership.source_application_id =
-                                            decision.application_id
-                                    THEN 0
-                                    ELSE 1
-                                END,
-                                CASE decision.status
-                                    WHEN 'processing' THEN 0
-                                    WHEN 'reverted_for_feedback' THEN 1
-                                    ELSE 2
-                                END,
-                                decision.created_at DESC,
-                                decision.id DESC
-                   ) AS active_rank
-            FROM agent_decisions AS decision
-            JOIN candidate_applications AS application
-              ON application.id = decision.application_id
-            LEFT JOIN sister_role_evaluations AS membership
-              ON membership.organization_id = decision.organization_id
-             AND membership.role_id = decision.role_id
-             AND membership.candidate_id = decision.candidate_id
-             AND membership.deleted_at IS NULL
-            WHERE decision.status IN (
-                'pending', 'processing', 'reverted_for_feedback'
-            )
-        )
-        UPDATE agent_decisions AS decision
-        SET status = 'discarded',
-            resolved_at = COALESCE(decision.resolved_at, CURRENT_TIMESTAMP),
-            resolution_note = COALESCE(
-                NULLIF(BTRIM(decision.resolution_note), ''),
-                'Superseded while enforcing one active decision per role candidate'
-            )
-        FROM ranked
-        WHERE decision.id = ranked.id
-          AND ranked.active_rank > 1
-        """
     )
 
     _create_non_unique_index_concurrently(

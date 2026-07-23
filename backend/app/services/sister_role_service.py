@@ -101,6 +101,33 @@ def ensure_sister_evaluations(
                 else []
             )
         )
+        selected_candidate_ids = {
+            int(source_member.candidate_id) for source_member in selected_members
+        }
+        compatibility_shadows: dict[int, SisterRoleEvaluation] = {}
+        if selected_candidate_ids:
+            archived_rows = (
+                db.query(SisterRoleEvaluation)
+                .filter(
+                    SisterRoleEvaluation.organization_id
+                    == int(role.organization_id),
+                    SisterRoleEvaluation.role_id == int(role.id),
+                    SisterRoleEvaluation.candidate_id.in_(selected_candidate_ids),
+                    SisterRoleEvaluation.deleted_at.is_not(None),
+                    SisterRoleEvaluation.membership_source == "legacy_compat_shadow",
+                )
+                .order_by(
+                    SisterRoleEvaluation.updated_at.desc().nullslast(),
+                    SisterRoleEvaluation.id.desc(),
+                )
+                .with_for_update(of=SisterRoleEvaluation)
+                .all()
+            )
+            for archived in archived_rows:
+                compatibility_shadows.setdefault(
+                    int(archived.candidate_id),
+                    archived,
+                )
         for source_member in selected_members:
             candidate_id = int(source_member.candidate_id)
             if candidate_id in existing_candidate_ids:
@@ -118,34 +145,82 @@ def ensure_sister_evaluations(
                 if cv_text
                 else SISTER_EVAL_UNSCORABLE
             )
-            membership = SisterRoleEvaluation(
-                organization_id=int(role.organization_id),
-                role_id=int(role.id),
-                candidate_id=candidate_id,
-                source_application_id=int(application.id),
-                ats_application_id=source_member.ats_application_id,
-                status=next_status,
-                pipeline_stage=source_member.pipeline_stage,
-                pipeline_stage_updated_at=source_member.pipeline_stage_updated_at or now,
-                pipeline_stage_source=source_member.pipeline_stage_source,
-                application_outcome=source_member.application_outcome,
-                application_outcome_updated_at=(
+            error_message = (
+                "Source membership was not active at snapshot"
+                if not locally_active
+                else None
+                if cv_text
+                else "No CV text available"
+            )
+            membership = compatibility_shadows.pop(candidate_id, None)
+            if membership is None:
+                membership = SisterRoleEvaluation(
+                    organization_id=int(role.organization_id),
+                    role_id=int(role.id),
+                    candidate_id=candidate_id,
+                    source_application_id=int(application.id),
+                    ats_application_id=source_member.ats_application_id,
+                    status=next_status,
+                    pipeline_stage=source_member.pipeline_stage,
+                    pipeline_stage_updated_at=(
+                        source_member.pipeline_stage_updated_at or now
+                    ),
+                    pipeline_stage_source=source_member.pipeline_stage_source,
+                    application_outcome=source_member.application_outcome,
+                    application_outcome_updated_at=(
+                        source_member.application_outcome_updated_at or now
+                    ),
+                    application_outcome_source=(
+                        source_member.application_outcome_source
+                    ),
+                    membership_source="initial_snapshot",
+                    spec_fingerprint=spec_hash,
+                    cv_fingerprint=text_fingerprint(cv_text) if cv_text else None,
+                    queued_at=now,
+                    error_message=error_message,
+                )
+                db.add(membership)
+            else:
+                # A pre-185 worker may have inserted this row after the
+                # migration's one-time snapshot. It was archived by the
+                # compatibility trigger, so the explicit current workflow can
+                # safely reuse the physical row without a role/source unique
+                # conflict or an inferred pool expansion.
+                _archive_evaluation_result(membership)
+                membership.deleted_at = None
+                membership.candidate_id = candidate_id
+                membership.source_application_id = int(application.id)
+                membership.ats_application_id = source_member.ats_application_id
+                membership.status = next_status
+                membership.pipeline_stage = source_member.pipeline_stage
+                membership.pipeline_stage_updated_at = (
+                    source_member.pipeline_stage_updated_at or now
+                )
+                membership.pipeline_stage_source = (
+                    source_member.pipeline_stage_source
+                )
+                membership.application_outcome = source_member.application_outcome
+                membership.application_outcome_updated_at = (
                     source_member.application_outcome_updated_at or now
-                ),
-                application_outcome_source=source_member.application_outcome_source,
-                membership_source="initial_snapshot",
-                spec_fingerprint=spec_hash,
-                cv_fingerprint=text_fingerprint(cv_text) if cv_text else None,
-                queued_at=now,
-                error_message=(
-                    "Source membership was not active at snapshot"
+                )
+                membership.application_outcome_source = (
+                    source_member.application_outcome_source
+                )
+                membership.membership_source = "initial_snapshot"
+                membership.spec_fingerprint = spec_hash
+                membership.cv_fingerprint = (
+                    text_fingerprint(cv_text) if cv_text else None
+                )
+                membership.error_message = error_message
+                membership.last_error_code = (
+                    "source_membership_not_active"
                     if not locally_active
                     else None
                     if cv_text
-                    else "No CV text available"
-                ),
-            )
-            db.add(membership)
+                    else "missing_cv_text"
+                )
+                membership.queued_at = now
+                membership.version = int(membership.version or 1) + 1
             memberships.append(membership)
             existing_candidate_ids.add(candidate_id)
 

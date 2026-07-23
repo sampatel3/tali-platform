@@ -25,6 +25,16 @@ depends_on = None
 
 _INDEXES: tuple[tuple[str, str, str], ...] = (
     (
+        "ix_share_links_view_role_id",
+        "share_links",
+        "view_role_id",
+    ),
+    (
+        "ix_roles_related_source_role_id",
+        "roles",
+        "related_source_role_id",
+    ),
+    (
         "ix_sister_role_evaluations_candidate_id",
         "sister_role_evaluations",
         "candidate_id",

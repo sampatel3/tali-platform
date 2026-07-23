@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
+from threading import Event
 
 import sqlalchemy as sa
 import pytest
@@ -260,6 +263,663 @@ def _seed_populated_legacy_state(connection) -> None:
     )
 
 
+def _create_pre_188_race_schema(connection) -> None:
+    """Create only the populated schema contract revision 188 consumes."""
+
+    connection.exec_driver_sql(
+        """
+        CREATE TABLE organizations (
+            id INTEGER PRIMARY KEY
+        );
+        CREATE TABLE roles (
+            id INTEGER PRIMARY KEY,
+            organization_id INTEGER NOT NULL REFERENCES organizations(id)
+        );
+        CREATE TABLE candidates (
+            id INTEGER PRIMARY KEY,
+            organization_id INTEGER NOT NULL REFERENCES organizations(id)
+        );
+        CREATE TABLE candidate_applications (
+            id INTEGER PRIMARY KEY,
+            organization_id INTEGER NOT NULL REFERENCES organizations(id),
+            candidate_id INTEGER NOT NULL REFERENCES candidates(id),
+            role_id INTEGER NOT NULL REFERENCES roles(id)
+        );
+        CREATE TABLE sister_role_evaluations (
+            id INTEGER PRIMARY KEY,
+            organization_id INTEGER NOT NULL REFERENCES organizations(id),
+            role_id INTEGER NOT NULL REFERENCES roles(id),
+            candidate_id INTEGER NOT NULL REFERENCES candidates(id),
+            source_application_id INTEGER NOT NULL
+                REFERENCES candidate_applications(id),
+            deleted_at TIMESTAMPTZ NULL
+        );
+        CREATE TABLE agent_decisions (
+            id BIGINT PRIMARY KEY,
+            organization_id INTEGER NOT NULL REFERENCES organizations(id),
+            role_id INTEGER NOT NULL REFERENCES roles(id),
+            application_id INTEGER NOT NULL
+                REFERENCES candidate_applications(id),
+            status VARCHAR NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            resolved_at TIMESTAMPTZ NULL,
+            resolution_note TEXT NULL,
+            idempotency_key VARCHAR NOT NULL UNIQUE
+        );
+
+        INSERT INTO organizations (id) VALUES (1);
+        INSERT INTO roles (id, organization_id) VALUES (10, 1), (20, 1);
+        INSERT INTO candidates (id, organization_id) VALUES (100, 1), (101, 1);
+        INSERT INTO candidate_applications (
+            id, organization_id, candidate_id, role_id
+        ) VALUES
+            (1000, 1, 100, 10),
+            (1001, 1, 100, 10),
+            (1010, 1, 101, 10),
+            (1011, 1, 101, 10);
+        INSERT INTO sister_role_evaluations (
+            id, organization_id, role_id, candidate_id,
+            source_application_id
+        ) VALUES
+            (2000, 1, 20, 100, 1000),
+            (2001, 1, 20, 101, 1010);
+        INSERT INTO agent_decisions (
+            id, organization_id, role_id, application_id, status,
+            idempotency_key
+        ) VALUES
+            (500, 1, 20, 1000, 'pending', 'existing-active'),
+            (501, 1, 20, 1001, 'discarded', 'existing-inactive');
+        """
+    )
+
+
+@contextmanager
+def _connection_in_schema(engine, schema: str):
+    """Use a test schema without leaking session search_path into the pool."""
+
+    with engine.connect() as connection:
+        connection.exec_driver_sql(f'SET search_path TO "{schema}"')
+        connection.commit()
+        try:
+            yield connection
+        finally:
+            connection.rollback()
+            connection.exec_driver_sql("RESET search_path")
+            connection.commit()
+
+
+def test_migration_188_guard_closes_pre_index_writer_race(
+    postgres_search_engine,
+    monkeypatch,
+):
+    schema = f"decision_slot_race_{uuid.uuid4().hex}"
+    migration_188 = _load_migration(
+        "188_enforce_active_decision_slot.py",
+        f"decision_slot_race_{uuid.uuid4().hex}",
+    )
+    repair_entered = Event()
+    continue_repair = Event()
+    first_inserted = Event()
+    release_first = Event()
+    second_attempting = Event()
+
+    with postgres_search_engine.connect() as setup:
+        setup.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+        setup.commit()
+    with _connection_in_schema(postgres_search_engine, schema) as setup:
+        _create_pre_188_race_schema(setup)
+        setup.commit()
+
+    original_repair = migration_188._repair_active_decision_slots
+
+    def pause_before_repair() -> None:
+        repair_entered.set()
+        if not continue_repair.wait(timeout=10):
+            raise AssertionError("test did not release migration repair")
+        original_repair()
+
+    monkeypatch.setattr(
+        migration_188,
+        "_repair_active_decision_slots",
+        pause_before_repair,
+    )
+
+    migration_connection = postgres_search_engine.connect()
+    migration_connection.exec_driver_sql(f'SET search_path TO "{schema}"')
+    migration_connection.commit()
+    migration_context = MigrationContext.configure(migration_connection)
+    operations = Operations(migration_context)
+    monkeypatch.setattr(migration_188, "op", operations)
+
+    def run_migration() -> None:
+        with migration_context.begin_transaction():
+            migration_188.upgrade()
+
+    def insert_first_concurrent_writer() -> None:
+        with _connection_in_schema(postgres_search_engine, schema) as writer:
+            writer.exec_driver_sql(
+                """
+                INSERT INTO agent_decisions (
+                    id, organization_id, role_id, application_id, status,
+                    idempotency_key
+                ) VALUES (
+                    510, 1, 20, 1010, 'pending', 'concurrent-first'
+                )
+                """
+            )
+            first_inserted.set()
+            if not release_first.wait(timeout=10):
+                raise AssertionError("test did not release first writer")
+            writer.commit()
+
+    def insert_second_concurrent_writer() -> str:
+        if not first_inserted.wait(timeout=10):
+            raise AssertionError("first writer did not acquire its slot")
+        with _connection_in_schema(postgres_search_engine, schema) as writer:
+            try:
+                second_attempting.set()
+                writer.exec_driver_sql(
+                    """
+                    INSERT INTO agent_decisions (
+                        id, organization_id, role_id, application_id, status,
+                        idempotency_key
+                    ) VALUES (
+                        511, 1, 20, 1011, 'pending', 'concurrent-second'
+                    )
+                    """
+                )
+                writer.commit()
+            except sa.exc.IntegrityError:
+                writer.rollback()
+                return "rejected"
+        return "inserted"
+
+    try:
+        with ExitStack() as stack:
+            executor = stack.enter_context(ThreadPoolExecutor(max_workers=3))
+            # Release database workers before the executor waits for them if a
+            # regression assertion aborts the body early.
+            stack.callback(continue_repair.set)
+            stack.callback(release_first.set)
+            migration_future = executor.submit(run_migration)
+            assert repair_entered.wait(timeout=10)
+
+            with _connection_in_schema(
+                postgres_search_engine,
+                schema,
+            ) as observer:
+                # The trigger and candidate column are visible because their
+                # transaction committed before the repair was allowed to start.
+                assert observer.exec_driver_sql(
+                    """
+                    SELECT count(*)
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'agent_decisions'
+                      AND column_name = 'candidate_id'
+                    """
+                ).scalar_one() == 1
+                assert observer.exec_driver_sql(
+                    """
+                    SELECT count(*)
+                    FROM pg_trigger
+                    WHERE tgrelid = 'agent_decisions'::regclass
+                      AND tgname = 'trg_agent_decisions_resolve_candidate'
+                      AND NOT tgisinternal
+                    """
+                ).scalar_one() == 1
+                assert observer.exec_driver_sql(
+                    """
+                    SELECT to_regclass(
+                        'uq_agent_decisions_active_org_role_candidate'
+                    )
+                    """
+                ).scalar_one() is None
+
+                # A pre-188 writer omits candidate_id. The trigger resolves the
+                # source candidate and rejects both a new duplicate and an
+                # inactive-to-active status transition before the index exists.
+                for statement in (
+                    """
+                    INSERT INTO agent_decisions (
+                        id, organization_id, role_id, application_id, status,
+                        idempotency_key
+                    ) VALUES (
+                        502, 1, 20, 1001, 'pending', 'old-writer-duplicate'
+                    )
+                    """,
+                    """
+                    UPDATE agent_decisions
+                    SET status = 'processing'
+                    WHERE id = 501
+                    """,
+                ):
+                    with pytest.raises(sa.exc.IntegrityError):
+                        observer.exec_driver_sql(statement)
+                    observer.rollback()
+
+            first_future = executor.submit(insert_first_concurrent_writer)
+            assert first_inserted.wait(timeout=10)
+            second_future = executor.submit(insert_second_concurrent_writer)
+            assert second_attempting.wait(timeout=10)
+            with pytest.raises(FutureTimeoutError):
+                second_future.result(timeout=0.25)
+            release_first.set()
+            first_future.result(timeout=10)
+            assert second_future.result(timeout=10) == "rejected"
+
+            with _connection_in_schema(
+                postgres_search_engine,
+                schema,
+            ) as observer:
+                assert observer.exec_driver_sql(
+                    """
+                    SELECT id, candidate_id
+                    FROM agent_decisions
+                    WHERE role_id = 20
+                      AND status IN (
+                            'pending',
+                            'processing',
+                            'reverted_for_feedback'
+                      )
+                    ORDER BY id
+                    """
+                ).all() == [(500, None), (510, 101)]
+
+            continue_repair.set()
+            migration_future.result(timeout=20)
+    finally:
+        release_first.set()
+        continue_repair.set()
+        migration_connection.rollback()
+        migration_connection.exec_driver_sql("RESET search_path")
+        migration_connection.commit()
+        migration_connection.close()
+        with postgres_search_engine.connect() as cleanup:
+            cleanup.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            cleanup.exec_driver_sql("RESET search_path")
+            cleanup.commit()
+
+
+def test_migration_185_retries_after_committed_additive_phase(
+    postgres_search_engine,
+    monkeypatch,
+):
+    schema = f"membership_expand_retry_{uuid.uuid4().hex}"
+    migration_185 = _load_migration(
+        "185_related_role_membership.py",
+        f"membership_expand_retry_{uuid.uuid4().hex}",
+    )
+
+    class AdditivePhaseCommitted(RuntimeError):
+        pass
+
+    with postgres_search_engine.connect() as connection:
+        connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+        connection.exec_driver_sql(f'SET search_path TO "{schema}"')
+        _create_pre_185_schema(connection)
+        _seed_populated_legacy_state(connection)
+        connection.commit()
+        migration_context = MigrationContext.configure(connection)
+        operations = Operations(migration_context)
+        monkeypatch.setattr(migration_185, "op", operations)
+        original_boundary = migration_185._commit_additive_schema_phase
+
+        def stop_after_committed_expand() -> None:
+            original_boundary()
+            raise AdditivePhaseCommitted
+
+        monkeypatch.setattr(
+            migration_185,
+            "_commit_additive_schema_phase",
+            stop_after_committed_expand,
+        )
+        with pytest.raises(AdditivePhaseCommitted):
+            with migration_context.begin_transaction():
+                migration_185.upgrade()
+        connection.rollback()
+
+        # The additive schema and mixed-version guard are durable even though
+        # the revision was not stamped. Re-entry must not fail on duplicate
+        # columns, constraints, or triggers.
+        assert connection.exec_driver_sql(
+            """
+            SELECT count(*)
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'sister_role_evaluations'
+              AND column_name = 'candidate_id'
+            """
+        ).scalar_one() == 1
+        assert connection.exec_driver_sql(
+            """
+            SELECT count(*)
+            FROM pg_trigger
+            WHERE tgrelid = 'sister_role_evaluations'::regclass
+              AND tgname = 'trg_sister_evaluations_resolve_candidate'
+              AND NOT tgisinternal
+            """
+        ).scalar_one() == 1
+
+        monkeypatch.setattr(
+            migration_185,
+            "_commit_additive_schema_phase",
+            original_boundary,
+        )
+        with migration_context.begin_transaction():
+            migration_185.upgrade()
+
+        assert connection.exec_driver_sql(
+            """
+            SELECT count(*)
+            FROM sister_role_evaluations
+            WHERE role_id = 20
+              AND candidate_id = 100
+              AND deleted_at IS NULL
+            """
+        ).scalar_one() == 1
+        assert connection.exec_driver_sql(
+            """
+            SELECT is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'sister_role_evaluations'
+              AND column_name = 'candidate_id'
+            """
+        ).scalar_one() == "NO"
+
+        connection.exec_driver_sql(f'DROP SCHEMA "{schema}" CASCADE')
+        connection.exec_driver_sql("RESET search_path")
+        connection.commit()
+
+
+def test_migration_185_promotes_pre_snapshot_legacy_shadow(
+    postgres_search_engine,
+    monkeypatch,
+):
+    schema = f"membership_pre_snapshot_shadow_{uuid.uuid4().hex}"
+    migration_185 = _load_migration(
+        "185_related_role_membership.py",
+        f"membership_pre_snapshot_shadow_{uuid.uuid4().hex}",
+    )
+    snapshot_starting = Event()
+    continue_migration = Event()
+
+    with postgres_search_engine.connect() as setup:
+        setup.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+        setup.commit()
+    with _connection_in_schema(postgres_search_engine, schema) as setup:
+        _create_pre_185_schema(setup)
+        _seed_populated_legacy_state(setup)
+        setup.exec_driver_sql(
+            """
+            INSERT INTO candidates (id, organization_id, cv_text)
+            VALUES (101, 1, 'Concurrent legacy writer evidence');
+            INSERT INTO candidate_applications (
+                id, organization_id, candidate_id, role_id, cv_text,
+                pipeline_stage, pipeline_stage_updated_at, pipeline_stage_source,
+                application_outcome, application_outcome_updated_at, created_at
+            ) VALUES (
+                1002, 1, 101, 10, 'Concurrent legacy writer evidence',
+                'applied', now(), 'system', 'open', now(), now()
+            )
+            """
+        )
+        setup.commit()
+
+    def pause_at_snapshot_boundary(phase: str) -> None:
+        if phase != "before":
+            return
+        snapshot_starting.set()
+        if not continue_migration.wait(timeout=10):
+            raise AssertionError("test did not release legacy snapshot")
+
+    monkeypatch.setattr(
+        migration_185,
+        "_legacy_implicit_snapshot_boundary",
+        pause_at_snapshot_boundary,
+    )
+
+    migration_connection = postgres_search_engine.connect()
+    migration_connection.exec_driver_sql(f'SET search_path TO "{schema}"')
+    migration_connection.commit()
+    migration_context = MigrationContext.configure(migration_connection)
+    operations = Operations(migration_context)
+    monkeypatch.setattr(migration_185, "op", operations)
+
+    def run_migration() -> None:
+        with migration_context.begin_transaction():
+            migration_185.upgrade()
+
+    try:
+        with ExitStack() as stack:
+            executor = stack.enter_context(ThreadPoolExecutor(max_workers=1))
+            stack.callback(continue_migration.set)
+            migration_future = executor.submit(run_migration)
+            assert snapshot_starting.wait(timeout=10)
+
+            with _connection_in_schema(
+                postgres_search_engine,
+                schema,
+            ) as legacy_writer:
+                # This is the exact pre-185 insert shape. It races after the
+                # compatibility trigger commits but before snapshot/dedupe.
+                legacy_writer.exec_driver_sql(
+                    """
+                    INSERT INTO sister_role_evaluations (
+                        id, organization_id, role_id, source_application_id,
+                        status, pipeline_stage, pipeline_stage_updated_at,
+                        pipeline_stage_source, spec_fingerprint, cv_fingerprint,
+                        queued_at, created_at
+                    ) VALUES (
+                        2002, 1, 20, 1002, 'pending', 'applied', now(), 'system',
+                        repeat('d', 64), repeat('e', 64), now(), now()
+                    )
+                    """
+                )
+                legacy_writer.commit()
+                assert legacy_writer.exec_driver_sql(
+                    """
+                    SELECT candidate_id, status, membership_source,
+                           deleted_at IS NOT NULL, last_error_code
+                    FROM sister_role_evaluations
+                    WHERE id = 2002
+                    """
+                ).one() == (
+                    101,
+                    "excluded",
+                    "legacy_compat_shadow",
+                    True,
+                    "legacy_inferred_membership_ignored",
+                )
+
+            continue_migration.set()
+            migration_future.result(timeout=20)
+
+        with _connection_in_schema(
+            postgres_search_engine,
+            schema,
+        ) as observer:
+            assert observer.exec_driver_sql(
+                """
+                SELECT id, candidate_id, status, membership_source,
+                       deleted_at IS NULL, error_message, last_error_code,
+                       version
+                FROM sister_role_evaluations
+                WHERE id = 2002
+                """
+            ).one() == (
+                2002,
+                101,
+                "stale_held",
+                "legacy_implicit_snapshot",
+                True,
+                "Explicit re-evaluation is required after membership migration",
+                None,
+                2,
+            )
+            assert observer.exec_driver_sql(
+                """
+                SELECT count(*)
+                FROM sister_role_evaluations
+                WHERE role_id = 20
+                  AND candidate_id = 101
+                  AND deleted_at IS NULL
+                """
+            ).scalar_one() == 1
+    finally:
+        continue_migration.set()
+        migration_connection.rollback()
+        migration_connection.exec_driver_sql("RESET search_path")
+        migration_connection.commit()
+        migration_connection.close()
+        with postgres_search_engine.connect() as cleanup:
+            cleanup.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            cleanup.exec_driver_sql("RESET search_path")
+            cleanup.commit()
+
+
+def test_migration_185_keeps_post_snapshot_legacy_shadow_archived(
+    postgres_search_engine,
+    monkeypatch,
+):
+    schema = f"membership_post_snapshot_shadow_{uuid.uuid4().hex}"
+    migration_185 = _load_migration(
+        "185_related_role_membership.py",
+        f"membership_post_snapshot_shadow_{uuid.uuid4().hex}",
+    )
+    snapshot_complete = Event()
+    continue_migration = Event()
+
+    with postgres_search_engine.connect() as setup:
+        setup.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+        setup.commit()
+    with _connection_in_schema(postgres_search_engine, schema) as setup:
+        _create_pre_185_schema(setup)
+        _seed_populated_legacy_state(setup)
+        setup.commit()
+
+    def pause_at_snapshot_boundary(phase: str) -> None:
+        if phase != "after":
+            return
+        snapshot_complete.set()
+        if not continue_migration.wait(timeout=10):
+            raise AssertionError("test did not release membership dedupe")
+
+    monkeypatch.setattr(
+        migration_185,
+        "_legacy_implicit_snapshot_boundary",
+        pause_at_snapshot_boundary,
+    )
+
+    migration_connection = postgres_search_engine.connect()
+    migration_connection.exec_driver_sql(f'SET search_path TO "{schema}"')
+    migration_connection.commit()
+    migration_context = MigrationContext.configure(migration_connection)
+    operations = Operations(migration_context)
+    monkeypatch.setattr(migration_185, "op", operations)
+
+    def run_migration() -> None:
+        with migration_context.begin_transaction():
+            migration_185.upgrade()
+
+    try:
+        with ExitStack() as stack:
+            executor = stack.enter_context(ThreadPoolExecutor(max_workers=1))
+            stack.callback(continue_migration.set)
+            migration_future = executor.submit(run_migration)
+            assert snapshot_complete.wait(timeout=10)
+
+            with _connection_in_schema(
+                postgres_search_engine,
+                schema,
+            ) as legacy_writer:
+                # This owner application and inferred fan-out both arrive
+                # after the one-time pool snapshot has completed.
+                legacy_writer.exec_driver_sql(
+                    """
+                    INSERT INTO candidates (id, organization_id, cv_text)
+                    VALUES (101, 1, 'Post-snapshot legacy writer evidence');
+                    INSERT INTO candidate_applications (
+                        id, organization_id, candidate_id, role_id, cv_text,
+                        pipeline_stage, pipeline_stage_updated_at,
+                        pipeline_stage_source, application_outcome,
+                        application_outcome_updated_at, created_at
+                    ) VALUES (
+                        1002, 1, 101, 10,
+                        'Post-snapshot legacy writer evidence',
+                        'applied', now(), 'system', 'open', now(), now()
+                    );
+                    INSERT INTO sister_role_evaluations (
+                        id, organization_id, role_id, source_application_id,
+                        status, pipeline_stage, pipeline_stage_updated_at,
+                        pipeline_stage_source, spec_fingerprint, cv_fingerprint,
+                        queued_at, created_at
+                    ) VALUES (
+                        2002, 1, 20, 1002, 'pending', 'applied', now(), 'system',
+                        repeat('d', 64), repeat('e', 64), now(), now()
+                    )
+                    """
+                )
+                legacy_writer.commit()
+                assert legacy_writer.exec_driver_sql(
+                    """
+                    SELECT candidate_id, status, membership_source,
+                           deleted_at IS NOT NULL, last_error_code
+                    FROM sister_role_evaluations
+                    WHERE id = 2002
+                    """
+                ).one() == (
+                    101,
+                    "excluded",
+                    "legacy_compat_shadow",
+                    True,
+                    "legacy_inferred_membership_ignored",
+                )
+
+            continue_migration.set()
+            migration_future.result(timeout=20)
+
+        with _connection_in_schema(
+            postgres_search_engine,
+            schema,
+        ) as observer:
+            assert observer.exec_driver_sql(
+                """
+                SELECT candidate_id, status, membership_source,
+                       deleted_at IS NOT NULL, last_error_code, version
+                FROM sister_role_evaluations
+                WHERE id = 2002
+                """
+            ).one() == (
+                101,
+                "excluded",
+                "legacy_compat_shadow",
+                True,
+                "legacy_inferred_membership_ignored",
+                1,
+            )
+            assert observer.exec_driver_sql(
+                """
+                SELECT count(*)
+                FROM sister_role_evaluations
+                WHERE role_id = 20
+                  AND candidate_id = 101
+                  AND deleted_at IS NULL
+                """
+            ).scalar_one() == 0
+    finally:
+        continue_migration.set()
+        migration_connection.rollback()
+        migration_connection.exec_driver_sql("RESET search_path")
+        migration_connection.commit()
+        migration_connection.close()
+        with postgres_search_engine.connect() as cleanup:
+            cleanup.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            cleanup.exec_driver_sql("RESET search_path")
+            cleanup.commit()
+
+
 def test_populated_role_membership_and_action_migrations_are_rolling_safe(
     postgres_search_engine,
     monkeypatch,
@@ -360,7 +1020,9 @@ def test_populated_role_membership_and_action_migrations_are_rolling_safe(
 
         # This is the exact INSERT shape emitted by a pre-185 worker. It means
         # "fan this new ATS-owner application into every related role", which
-        # would expand a role after its one-time snapshot. It must fail closed.
+        # would expand a role after its one-time snapshot. The compatibility
+        # trigger must keep that old worker healthy while immediately archiving
+        # the row outside the logical pool and scoring queue.
         connection.exec_driver_sql(
             """
             INSERT INTO candidates (id, organization_id, cv_text)
@@ -375,39 +1037,48 @@ def test_populated_role_membership_and_action_migrations_are_rolling_safe(
             )
             """
         )
-        with pytest.raises(sa.exc.IntegrityError):
-            with connection.begin_nested():
-                connection.exec_driver_sql(
-                    """
-                    INSERT INTO sister_role_evaluations (
-                        id, organization_id, role_id, source_application_id,
-                        status, pipeline_stage, pipeline_stage_updated_at,
-                        pipeline_stage_source, spec_fingerprint, cv_fingerprint,
-                        queued_at, created_at
-                    ) VALUES (
-                        2002, 1, 20, 1002, 'pending', 'applied', now(), 'system',
-                        repeat('d', 64), repeat('e', 64), now(), now()
-                    )
-                    """
-                )
-        assert connection.exec_driver_sql(
-            "SELECT count(*) FROM sister_role_evaluations WHERE id = 2002"
-        ).scalar_one() == 0
-
-        # A current writer makes membership identity explicit. That path is
-        # allowed, remains role-local, and is protected against stale owner
-        # projections during the rolling deployment.
         connection.exec_driver_sql(
             """
             INSERT INTO sister_role_evaluations (
-                id, organization_id, role_id, candidate_id,
-                source_application_id, status, pipeline_stage,
-                pipeline_stage_updated_at, pipeline_stage_source,
-                spec_fingerprint, cv_fingerprint, queued_at, created_at
+                id, organization_id, role_id, source_application_id,
+                status, pipeline_stage, pipeline_stage_updated_at,
+                pipeline_stage_source, spec_fingerprint, cv_fingerprint,
+                queued_at, created_at
             ) VALUES (
-                2002, 1, 20, 101, 1002, 'pending', 'applied', now(), 'system',
+                2002, 1, 20, 1002, 'pending', 'applied', now(), 'system',
                 repeat('d', 64), repeat('e', 64), now(), now()
             )
+            """
+        )
+        assert connection.exec_driver_sql(
+            """
+            SELECT candidate_id, status, membership_source,
+                   deleted_at IS NOT NULL, last_error_code
+            FROM sister_role_evaluations
+            WHERE id = 2002
+            """
+        ).one() == (
+            101,
+            "excluded",
+            "legacy_compat_shadow",
+            True,
+            "legacy_inferred_membership_ignored",
+        )
+
+        # A current writer makes membership identity explicit. That path is
+        # allowed to restore the archived compatibility row, remains role-local,
+        # and is protected against stale owner projections during the rollout.
+        connection.exec_driver_sql(
+            """
+            UPDATE sister_role_evaluations
+            SET candidate_id = 101,
+                deleted_at = NULL,
+                membership_source = 'direct',
+                status = 'pending',
+                error_message = NULL,
+                last_error_code = NULL,
+                version = version + 1
+            WHERE id = 2002
             """
         )
         assert connection.exec_driver_sql(

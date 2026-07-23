@@ -212,6 +212,57 @@ def test_seed_is_one_time_and_refresh_never_adds_or_deletes_membership(db):
     )
 
 
+def test_explicit_seed_restores_legacy_rolling_compatibility_shadow(db):
+    organization, owner, related = _roles(db, suffix="rolling-shadow")
+    application = _owner_application(
+        db,
+        organization=organization,
+        owner=owner,
+        suffix="rolling-shadow",
+    )
+    shadow = SisterRoleEvaluation(
+        organization_id=int(organization.id),
+        role_id=int(related.id),
+        candidate_id=int(application.candidate_id),
+        source_application_id=int(application.id),
+        ats_application_id=None,
+        status="excluded",
+        pipeline_stage="applied",
+        application_outcome="open",
+        membership_source="legacy_compat_shadow",
+        spec_fingerprint="legacy-shadow",
+        cv_fingerprint="legacy-shadow",
+        last_error_code="legacy_inferred_membership_ignored",
+        error_message="Ignored legacy inferred membership during rolling migration",
+        deleted_at=datetime.now(timezone.utc),
+    )
+    db.add(shadow)
+    db.commit()
+    shadow_id = int(shadow.id)
+
+    counts = ensure_sister_evaluations(db, related, seed_missing=True)
+    db.commit()
+
+    restored = db.get(SisterRoleEvaluation, shadow_id)
+    assert counts["total"] == 1
+    assert restored is not None
+    assert restored.deleted_at is None
+    assert restored.membership_source == "initial_snapshot"
+    assert restored.status == "pending"
+    assert restored.last_error_code is None
+    assert restored.source_application_id == int(application.id)
+    assert restored.ats_application_id == int(application.id)
+    assert (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.role_id == int(related.id),
+            SisterRoleEvaluation.candidate_id == int(application.candidate_id),
+        )
+        .count()
+        == 1
+    )
+
+
 def test_related_from_related_snapshots_only_its_logical_roster_and_local_state(db):
     """The source role, not its ATS owner's broader pool, is the oracle."""
 
