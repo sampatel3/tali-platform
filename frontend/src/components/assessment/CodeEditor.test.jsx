@@ -1,10 +1,10 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import CodeEditor from './CodeEditor';
 
-const { fakeEditor, fakeModel } = vi.hoisted(() => {
+const { fakeEditor, fakeModel, monacoMock } = vi.hoisted(() => {
   const model = {
     getLineCount: vi.fn(() => 2),
     getLineMaxColumn: vi.fn(() => 13),
@@ -24,17 +24,38 @@ const { fakeEditor, fakeModel } = vi.hoisted(() => {
     focus: vi.fn(),
     getValue: vi.fn(() => 'const x = 1;'),
   };
-  return { fakeEditor: editor, fakeModel: model };
+  // Flipped to false to simulate a Monaco runtime that loads but never mounts.
+  return { fakeEditor: editor, fakeModel: model, monacoMock: { mounts: true } };
 });
+
+// The real module pulls the bundled Monaco runtime in, which needs browser
+// APIs jsdom does not implement. The editor itself is mocked below, so the
+// loader wiring has nothing to do here.
+vi.mock('./monacoSetup', () => ({ default: {} }));
 
 vi.mock('@monaco-editor/react', () => ({
   default: ({ onMount }) => {
     React.useEffect(() => {
-      onMount(fakeEditor);
+      if (monacoMock.mounts) onMount(fakeEditor);
     }, [onMount]);
     return <textarea data-testid="mock-monaco-editor" aria-label="Code editor" />;
   },
 }));
+
+class CatchBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  render() {
+    return this.state.failed ? <p>plain text fallback</p> : this.props.children;
+  }
+}
 
 describe('CodeEditor protected workspace clipboard', () => {
   let workspaceSecurity;
@@ -95,5 +116,56 @@ describe('CodeEditor protected workspace clipboard', () => {
       forceMoveMarkers: true,
     })]);
     expect(fakeEditor.pushUndoStop).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('CodeEditor load failure', () => {
+  beforeEach(() => {
+    monacoMock.mounts = true;
+  });
+
+  afterEach(() => {
+    monacoMock.mounts = true;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('escalates to the workspace fallback instead of loading forever', () => {
+    // A candidate sits on "Loading editor..." with no way forward if the
+    // runtime never mounts, so the component gives up and lets the workspace
+    // boundary swap in the plain-textarea editor.
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    monacoMock.mounts = false;
+
+    render(
+      <CatchBoundary>
+        <CodeEditor value="x = 1" onChange={vi.fn()} />
+      </CatchBoundary>,
+    );
+
+    expect(screen.queryByText('plain text fallback')).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(15000);
+    });
+
+    expect(screen.getByText('plain text fallback')).toBeTruthy();
+  });
+
+  it('leaves a mounted editor alone once the timeout would have fired', () => {
+    vi.useFakeTimers();
+
+    render(
+      <CatchBoundary>
+        <CodeEditor value="x = 1" onChange={vi.fn()} />
+      </CatchBoundary>,
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(60000);
+    });
+
+    expect(screen.getByTestId('mock-monaco-editor')).toBeTruthy();
   });
 });

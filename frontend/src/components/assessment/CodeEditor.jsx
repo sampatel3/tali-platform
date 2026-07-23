@@ -2,6 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
 import { FileText, Play, Save } from 'lucide-react';
 
+// Points the Monaco loader at our bundled copy. Must be imported before the
+// editor mounts; see monacoSetup.js for why we do not use the CDN default.
+import './monacoSetup';
+
+// Monaco ships in the same lazy chunk as this component, so by the time we
+// render it is already in memory and mounting takes a tick. If onMount has not
+// fired well past that, something is wrong at a layer we cannot see — rethrow
+// into the workspace error boundary, which swaps in the plain-textarea editor.
+// A candidate mid-assessment gets a usable editor and a retry rather than an
+// indefinite "Loading editor...".
+const MOUNT_TIMEOUT_MS = 15000;
+
 export default function CodeEditor({
   initialCode = '',
   value: controlledValue,
@@ -20,6 +32,8 @@ export default function CodeEditor({
   const [internalCode, setInternalCode] = useState(initialCode);
   const code = isControlled ? controlledValue : internalCode;
   const editorRef = useRef(null);
+  const [mounted, setMounted] = useState(false);
+  const [mountTimedOut, setMountTimedOut] = useState(false);
 
   useEffect(() => {
     if (isControlled && controlledValue !== code) {
@@ -27,8 +41,19 @@ export default function CodeEditor({
     }
   }, [isControlled, controlledValue, code]);
 
+  useEffect(() => {
+    if (mounted) return undefined;
+    const timer = setTimeout(() => setMountTimedOut(true), MOUNT_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [mounted]);
+
+  if (mountTimedOut) {
+    throw new Error('Monaco editor failed to mount');
+  }
+
   const handleEditorDidMount = (editor) => {
     editorRef.current = editor;
+    setMounted(true);
   };
 
   const protectedSelection = () => {
