@@ -175,7 +175,8 @@ describe('CandidateWelcomePage', () => {
     // off, so the consent screen has to say so — briefly, and with the reason.
     expect(disclosure).toHaveTextContent(/keep the assessment fair/i);
     expect(disclosure).toHaveTextContent(/when the tab loses focus/i);
-    expect(disclosure).toHaveTextContent(/not the content of what you type or copy/i);
+    expect(disclosure).toHaveTextContent(/the file you were in/i);
+    expect(disclosure).toHaveTextContent(/never the content of what you type or copy/i);
     expect(disclosure).toHaveTextContent(/do not record your screen, camera, or microphone/i);
   });
 

@@ -11,6 +11,7 @@ import {
   WORKSPACE_SIGNAL_CAVEAT,
   WORKSPACE_SIGNAL_EVENTS,
   WORKSPACE_SIGNAL_GROUPS,
+  WORKSPACE_SIGNAL_PAYLOAD_FIELDS,
   WORKSPACE_SIGNAL_SENTENCE,
   WORKSPACE_SIGNAL_SUMMARY,
   WORKSPACE_SIGNALS_FLAG,
@@ -130,10 +131,33 @@ describe('assessment session disclosure', () => {
 
   it('states what the metrics are for and that they carry no content', () => {
     expect(WORKSPACE_SIGNAL_SENTENCE).toMatch(/keep the assessment fair/);
-    expect(WORKSPACE_SIGNAL_CAVEAT).toMatch(/not the content of what you type or copy/);
-    // The server stores a surface name and a bounded count, never the text.
-    expect(integrityRoutes).toContain('payload["source"] = data.source');
-    expect(integrityRoutes).toContain('payload["length"] = data.length');
-    expect(integrityRoutes).not.toMatch(/payload\["(text|content|clipboard)"\]/);
+    expect(WORKSPACE_SIGNAL_CAVEAT).toMatch(/never the content of what you type or copy/);
+  });
+
+  it('accounts for every field the server persists on an advisory event', () => {
+    // The caveat is an affirmative "each one records X" claim, so X has to be
+    // the whole set. The first version said "counts and timestamps" while the
+    // server also stored file_path — the same claims-to-be-exhaustive defect
+    // this module exists to prevent, one level down.
+    const advisoryBlock = integrityRoutes
+      .split('if event_type in _ADVISORY_INTEGRITY_EVENT_TYPES:')[1]
+      .split('append_assessment_timeline_event')[0];
+    const persisted = Array.from(
+      advisoryBlock.matchAll(/payload\["([a-z0-9_]+)"\]\s*=/g),
+      (match) => match[1],
+    ).filter((field) => field !== 'advisory');
+
+    expect(sorted(persisted)).toEqual(sorted(WORKSPACE_SIGNAL_PAYLOAD_FIELDS));
+
+    // ...and each declared field is actually described to the candidate.
+    const described = {
+      source: /where in the workspace/,
+      length: /how many characters/,
+      file_path: /the file you were in/,
+    };
+    for (const field of WORKSPACE_SIGNAL_PAYLOAD_FIELDS) {
+      expect(described[field], `${field} has no candidate-facing description`).toBeTruthy();
+      expect(WORKSPACE_SIGNAL_CAVEAT).toMatch(described[field]);
+    }
   });
 });

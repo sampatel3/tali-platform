@@ -25,11 +25,13 @@ const joinWithAnd = (items, separator = ', ') => {
   return `${parts.slice(0, -1).join(separator)}${separator}and ${parts[parts.length - 1]}`;
 };
 
-// Layer 1 — what we record about the candidate's work.
+// Layer 1 — what we record about the candidate's work. Covers the engagement
+// beacons too (`runtime_loaded`, `file_opened`): opening a file is not changing
+// one, so the copy has to say "open and change", not just "changes".
 export const WORK_RECORD_ITEMS = Object.freeze([
   'your prompts',
   "Claude's responses",
-  'your file changes',
+  'the files you open and change',
   'validation runs',
 ]);
 
@@ -74,9 +76,17 @@ export const WORK_RECORD_SENTENCE = `We record your work in this session: ${join
 // who is about to sit an assessment.
 export const WORKSPACE_SIGNAL_SENTENCE = `To keep the assessment fair we also log activity metrics from this tab — ${WORKSPACE_SIGNAL_SUMMARY}.`;
 
-// Bounded to a surface name and a character count on the server
-// (candidate_integrity_routes.py); the copied text never leaves the browser.
-export const WORKSPACE_SIGNAL_CAVEAT = 'These are counts and timestamps — not the content of what you type or copy.';
+// Every field the server persists for one of these events
+// (candidate_integrity_routes.py) — the caveat below has to account for all of
+// them, or it is the same "claims to be exhaustive but isn't" defect this
+// module exists to prevent. `advisory` is an internal marker, not candidate data.
+export const WORKSPACE_SIGNAL_PAYLOAD_FIELDS = Object.freeze([
+  'source',
+  'length',
+  'file_path',
+]);
+
+export const WORKSPACE_SIGNAL_CAVEAT = 'Each one records where in the workspace it happened, how many characters were involved, and the file you were in — never the content of what you type or copy.';
 
 export const NO_AV_RECORDING_SENTENCE = 'We do not record your screen, camera, or microphone.';
 
