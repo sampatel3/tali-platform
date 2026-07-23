@@ -150,11 +150,11 @@ def read_role_candidate_page(
         db,
         application_ids=[int(application.id) for application in source_applications],
     )
-    assessment_scores = scope.assessment_score_map(
+    assessment_truth = scope.assessment_truth_map(
         db,
         applications=list(source_applications),
     )
-    adapter = scope.row_adapter(evaluations, assessment_scores)
+    adapter = scope.row_adapter(evaluations, assessment_truth=assessment_truth)
     applications = tuple(
         adapter(application) if adapter is not None else application
         for application in source_applications

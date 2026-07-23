@@ -25,6 +25,11 @@ from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.decision_feedback import DecisionFeedback
 from ...models.role import Role
 from ...models.user import User
+from ...services.decision_membership import (
+    LiveLogicalDecisionScope,
+    resolve_live_logical_decision_scope,
+)
+from ...services.logical_event_membership import apply_live_logical_event_scope
 
 
 # ---------------------------------------------------------------------------
@@ -84,15 +89,29 @@ def pending_filter(now: datetime):
     )
 
 
-def role_pending_decisions_by_type(db, *, organization_id: int, role_id: int, now: datetime | None = None) -> dict[str, int]:
+def role_pending_decisions_by_type(
+    db,
+    *,
+    organization_id: int,
+    role_id: int,
+    now: datetime | None = None,
+    decision_scope: LiveLogicalDecisionScope | None = None,
+) -> dict[str, int]:
     """Pending agent decisions for one role, grouped by decision_type — the
     uncapped source for the funnel's "awaiting your decision" chips. (The
     fetched-decisions list is row-capped, so high-volume roles under-count.)"""
     now = now or datetime.now(timezone.utc)
+    decision_scope = decision_scope or resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(organization_id),
+    )
     rows = (
-        db.query(AgentDecision.decision_type, func.count(AgentDecision.id))
+        decision_scope.query(
+            db,
+            AgentDecision.decision_type,
+            func.count(AgentDecision.id),
+        )
         .filter(
-            AgentDecision.organization_id == organization_id,
             AgentDecision.role_id == role_id,
             pending_filter(now),
         )
@@ -102,16 +121,31 @@ def role_pending_decisions_by_type(db, *, organization_id: int, role_id: int, no
     return {str(dt): int(c) for dt, c in rows}
 
 
-def role_pending_decisions_by_type_bulk(db, *, organization_id: int, role_ids: list[int], now: datetime | None = None) -> dict[int, dict[str, int]]:
+def role_pending_decisions_by_type_bulk(
+    db,
+    *,
+    organization_id: int,
+    role_ids: list[int],
+    now: datetime | None = None,
+    decision_scope: LiveLogicalDecisionScope | None = None,
+) -> dict[int, dict[str, int]]:
     """Batched ``role_pending_decisions_by_type`` for many roles in one query."""
     counts: dict[int, dict[str, int]] = {int(rid): {} for rid in role_ids}
     if not role_ids:
         return counts
     now = now or datetime.now(timezone.utc)
+    decision_scope = decision_scope or resolve_live_logical_decision_scope(
+        db,
+        organization_id=int(organization_id),
+    )
     rows = (
-        db.query(AgentDecision.role_id, AgentDecision.decision_type, func.count(AgentDecision.id))
+        decision_scope.query(
+            db,
+            AgentDecision.role_id,
+            AgentDecision.decision_type,
+            func.count(AgentDecision.id),
+        )
         .filter(
-            AgentDecision.organization_id == organization_id,
             AgentDecision.role_id.in_(role_ids),
             pending_filter(now),
         )
@@ -428,20 +462,34 @@ def org_header_extras(
     # Most recent agent/recruiter activity org-wide, with candidate + role name,
     # pre-annotated with a ``summary`` sentence so the bar's tick renders as a
     # sentence without any per-role fan-out.
-    activity_row = (
+    activity_query = apply_live_logical_event_scope(
+        db,
         db.query(CandidateApplicationEvent, Candidate, Role.name)
         .join(
             CandidateApplication,
             CandidateApplication.id == CandidateApplicationEvent.application_id,
         )
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .join(
+            Candidate,
+            Candidate.id == CandidateApplication.candidate_id,
+        )
         # The event owns the logical product role.  The application join is
         # evidence/candidate transport only and may point at an ATS owner role.
-        .outerjoin(Role, Role.id == CandidateApplicationEvent.role_id)
-        .filter(
-            CandidateApplicationEvent.organization_id == organization_id,
-            CandidateApplicationEvent.actor_type.in_(("agent", "recruiter")),
+        .outerjoin(
+            Role,
+            and_(
+                Role.id == CandidateApplicationEvent.role_id,
+                Role.organization_id == int(organization_id),
+                Role.deleted_at.is_(None),
+            ),
         )
+        .filter(
+            CandidateApplicationEvent.actor_type.in_(("agent", "recruiter")),
+        ),
+        organization_id=int(organization_id),
+    )
+    activity_row = (
+        activity_query
         .order_by(desc(CandidateApplicationEvent.created_at))
         .limit(1)
         .first()

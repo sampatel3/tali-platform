@@ -55,6 +55,7 @@ def recover_stuck_score_jobs(
 
     from sqlalchemy import and_, or_
 
+    from ..models.candidate import Candidate
     from ..models.candidate_application import CandidateApplication
     from ..models.cv_score_job import (
         CvScoreJob,
@@ -173,7 +174,16 @@ def recover_stuck_score_jobs(
         for application_id in sorted(app_authority):
             app = (
                 db.query(CandidateApplication)
-                .filter(CandidateApplication.id == application_id)
+                .join(
+                    Candidate,
+                    Candidate.id == CandidateApplication.candidate_id,
+                )
+                .filter(
+                    CandidateApplication.id == application_id,
+                    Candidate.organization_id
+                    == CandidateApplication.organization_id,
+                    Candidate.deleted_at.is_(None),
+                )
                 .first()
             )
             if app is None:
@@ -319,6 +329,22 @@ def score_application_job(
                 application_id, job_id,
             )
             return {"status": "no_job", "application_id": application_id}
+
+        candidate = application.candidate
+        if (
+            candidate is None
+            or candidate.deleted_at is not None
+            or int(candidate.organization_id) != int(application.organization_id)
+        ):
+            if job.status in {SCORE_JOB_PENDING, SCORE_JOB_STALE}:
+                job.status = SCORE_JOB_ERROR
+                job.error_message = "candidate_deleted_before_scoring"
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
+            return {
+                "status": "candidate_deleted",
+                "application_id": application_id,
+            }
 
         if job.status not in {SCORE_JOB_PENDING, SCORE_JOB_STALE}:
             # Another worker already picked this up — bail out.
@@ -955,7 +981,6 @@ def batch_score_role(
     """
     from sqlalchemy.orm import joinedload
 
-    from ..models.candidate import Candidate
     from ..models.candidate_application import CandidateApplication
     from ..models.organization import Organization
     from ..models.role import Role
@@ -980,9 +1005,19 @@ def batch_score_role(
             filter_contexts_applied_after,
             is_related_role,
             logical_role_contexts,
+            ordinary_score_targets_query,
             parse_applied_after,
             related_score_targets,
         )
+
+        try:
+            cutoff = parse_applied_after(applied_after)
+        except ValueError:
+            return {
+                "status": "invalid_applied_after",
+                "role_id": role_id,
+                "applied_after": applied_after,
+            }
 
         if is_related_role(role):
             from ..domains.assessments_runtime.applications_routes import (
@@ -994,14 +1029,6 @@ def batch_score_role(
                 rescreen_related_role_candidates,
             )
 
-            try:
-                cutoff = parse_applied_after(applied_after)
-            except ValueError:
-                return {
-                    "status": "invalid_applied_after",
-                    "role_id": role_id,
-                    "applied_after": applied_after,
-                }
             contexts = filter_contexts_applied_after(
                 logical_role_contexts(db, role=role),
                 cutoff=cutoff,
@@ -1081,28 +1108,15 @@ def batch_score_role(
                 "summary": outcome.as_dict(),
             }
 
-        query = (
-            db.query(CandidateApplication)
-            .options(joinedload(CandidateApplication.candidate))
-            .filter(
-                CandidateApplication.role_id == role_id,
-                CandidateApplication.organization_id == role.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-            )
+        query = ordinary_score_targets_query(
+            db,
+            organization_id=int(role.organization_id),
+            role_id=int(role_id),
+            include_scored=include_scored,
+            applied_after=cutoff,
+        ).options(
+            joinedload(CandidateApplication.candidate),
         )
-        if not include_scored:
-            query = query.filter(CandidateApplication.cv_match_score.is_(None))
-
-        if applied_after:
-            from datetime import timezone as _tz
-            cutoff = datetime.fromisoformat(applied_after)
-            if cutoff.tzinfo is None:
-                cutoff = cutoff.replace(tzinfo=_tz.utc)
-            query = (
-                query
-                .join(Candidate, CandidateApplication.candidate_id == Candidate.id)
-                .filter(Candidate.workable_created_at >= cutoff)
-            )
 
         apps = query.all()
 
@@ -1124,6 +1138,12 @@ def batch_score_role(
         fetched = 0
         fetch_failures = 0
         for app in apps:
+            if (
+                app.candidate is None
+                or app.candidate.deleted_at is not None
+                or int(app.candidate.organization_id) != int(role.organization_id)
+            ):
+                continue
             # Cooperative cancel between candidates so the recruiter
             # can stop a 600-candidate batch without restarting the worker.
             if is_batch_score_cancelled(role_id):
@@ -1180,6 +1200,12 @@ def batch_score_role(
         enqueued = 0
         pre_screened_out = 0
         for app in apps:
+            if (
+                app.candidate is None
+                or app.candidate.deleted_at is not None
+                or int(app.candidate.organization_id) != int(role.organization_id)
+            ):
+                continue
             if is_batch_score_cancelled(role_id):
                 logger.info(
                     "batch_score_role cancelled during enqueue phase for role_id=%s "

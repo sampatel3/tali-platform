@@ -182,6 +182,7 @@ def _add_conflicting_profile_assessments(
                 status=AssessmentStatus.COMPLETED,
                 completed_at=now,
                 assessment_score=34,
+                taali_score=61,
                 is_voided=False,
             ),
         ]
@@ -343,6 +344,7 @@ def test_every_agent_surface_uses_related_role_owned_assessment_truth(
                 status=AssessmentStatus.COMPLETED,
                 completed_at=now,
                 assessment_score=82,
+                taali_score=85,
                 is_voided=False,
             ),
             Assessment(
@@ -353,6 +355,7 @@ def test_every_agent_surface_uses_related_role_owned_assessment_truth(
                 status=AssessmentStatus.COMPLETED,
                 completed_at=now,
                 assessment_score=55,
+                taali_score=64,
                 is_voided=False,
             ),
         ]

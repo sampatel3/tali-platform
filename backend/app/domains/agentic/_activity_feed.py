@@ -35,6 +35,8 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
+from ...services.decision_membership import apply_live_logical_decision_scope
+from ...services.logical_event_membership import apply_live_logical_event_scope
 
 
 class AgentActivityEntry(BaseModel):
@@ -132,23 +134,30 @@ def build_activity_feed(
     fetch_n = limit
 
     runs_q = db.query(AgentRun).filter(AgentRun.organization_id == organization_id)
-    decisions_q = (
+    decisions_q = apply_live_logical_decision_scope(
+        db,
         db.query(AgentDecision, Candidate)
-        .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(AgentDecision.organization_id == organization_id)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == AgentDecision.application_id,
+        )
+        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id),
+        organization_id=int(organization_id),
     )
-    events_q = (
-        db.query(CandidateApplicationEvent, Candidate, CandidateApplicationEvent.role_id)
+    events_q = apply_live_logical_event_scope(
+        db,
+        db.query(
+            CandidateApplicationEvent,
+            Candidate,
+            CandidateApplicationEvent.role_id,
+        )
         .join(
             CandidateApplication,
             CandidateApplication.id == CandidateApplicationEvent.application_id,
         )
-        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
-        .filter(
-            CandidateApplicationEvent.organization_id == organization_id,
-            CandidateApplicationEvent.actor_type == "agent",
-        )
+        .join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .filter(CandidateApplicationEvent.actor_type == "agent"),
+        organization_id=int(organization_id),
     )
     needs_q = db.query(AgentNeedsInput).filter(
         AgentNeedsInput.organization_id == organization_id

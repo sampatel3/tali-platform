@@ -19,6 +19,12 @@ from typing import Any, Dict, Optional
 
 from ...actions import advance_stage as advance_stage_action
 from ...actions.types import Actor
+from ...candidate_search.application_role_scope import (
+    score_expression as _role_score_expression,
+)
+from ...candidate_search.role_assessment_scores import (
+    hydrate_ordinary_assessment_runtime,
+)
 from ...candidate_search.role_scope import resolve_candidate_role_scope
 from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import (
@@ -121,6 +127,7 @@ from ...services.logical_role_batch_operations import (
     filter_contexts_applied_after,
     is_related_role,
     logical_role_contexts,
+    ordinary_score_targets_query,
     parse_applied_after,
     related_score_targets,
 )
@@ -892,6 +899,9 @@ def list_role_applications(
         role_id=int(role.id),
     )
     is_sister = role_scope.is_related
+    relationship_loaders = [
+        selectinload(CandidateApplication.interviews),
+    ]
     query = (
         db.query(CandidateApplication)
         .options(
@@ -901,19 +911,16 @@ def list_role_applications(
             # selectinload (not joinedload) for collections: joining multiple
             # one-to-many relationships at once produces a cartesian product —
             # measured at 343 apps -> 6,444 materialised rows for a single role,
-            # which SQLAlchemy then de-dupes in Python. selectinload issues one
-            # extra flat IN-query per collection instead. assessments stay
-            # loaded with their task: related-role projection reads task names,
-            # while _last_activity_at uses them for "Last updated", so
-            # dropping them would reintroduce a per-row lazy-load N+1.
+            # which SQLAlchemy then de-dupes in Python. Assessment runtime is
+            # hydrated separately by logical role + candidate below; its
+            # physical application relationship is not role authority.
             #
             # score_jobs is deliberately NOT loaded: the list only needs each
             # row's latest job status, but the full collection is ~19 rows/app
             # (6,444 for one role). We fetch just the latest status per app in
             # one grouped query below instead of hydrating thousands of ORM
             # objects we'd immediately discard.
-            selectinload(CandidateApplication.interviews),
-            selectinload(CandidateApplication.assessments).joinedload(Assessment.task),
+            *relationship_loaders,
         )
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
@@ -998,9 +1005,10 @@ def list_role_applications(
         )
     if is_sister:
         sort_col = (
-            SisterRoleEvaluation.role_fit_score
-            if sort_by
-            in {"pre_screen_score", "rank_score", "cv_match_score", "taali_score"}
+            _role_score_expression(role_scope, "taali_score_cache_100")
+            if sort_by == "taali_score"
+            else SisterRoleEvaluation.role_fit_score
+            if sort_by in {"pre_screen_score", "rank_score", "cv_match_score"}
             else SisterRoleEvaluation.scored_at
             if sort_by == "cv_match_scored_at"
             else SisterRoleEvaluation.created_at
@@ -1014,9 +1022,16 @@ def list_role_applications(
     query = query.order_by(
         direction(sort_col).nullslast(),
         direction(tie_breaker).nullslast(),
+        direction(CandidateApplication.id),
     )
 
     apps = query.offset(offset).limit(limit).all()
+    if not is_sister:
+        hydrate_ordinary_assessment_runtime(
+            db,
+            organization_id=int(current_user.organization_id),
+            applications=apps,
+        )
     application_ids = [int(app.id) for app in apps]
 
     # Latest score-job status per application, in one window query ordered by
@@ -1041,6 +1056,7 @@ def list_role_applications(
             include_cv_text=include_cv_text,
             score_status=status_map.get(app.id),
             pending_decision=decision_map.get(app.id),
+            include_assessment_runtime=not is_sister,
         )
         for app in apps
     ]
@@ -1050,7 +1066,6 @@ def list_role_applications(
             sister_role=role,
             applications=apps,
             payloads=payloads,
-            assessments_preloaded=True,
         )
     return [ApplicationDetailResponse(**payload) for payload in payloads]
 
@@ -1952,7 +1967,7 @@ def get_role_pipeline(
     threshold = _normalize_taali_score_for_filter(min_taali_score)
     if threshold is not None:
         score_column = (
-            SisterRoleEvaluation.role_fit_score
+            _role_score_expression(role_scope, "taali_score_cache_100")
             if is_sister else CandidateApplication.taali_score_cache_100
         )
         base_query = base_query.filter(score_column.is_not(None), score_column >= threshold)
@@ -1998,8 +2013,10 @@ def get_role_pipeline(
     total = filtered_query.order_by(None).count()
     if is_sister:
         related_sort_column = (
-            SisterRoleEvaluation.role_fit_score
-            if sort_by in {"pre_screen_score", "taali_score", "cv_match_score"}
+            _role_score_expression(role_scope, "taali_score_cache_100")
+            if sort_by == "taali_score"
+            else SisterRoleEvaluation.role_fit_score
+            if sort_by in {"pre_screen_score", "cv_match_score"}
             else SisterRoleEvaluation.scored_at
             if sort_by == "cv_match_scored_at"
             else SisterRoleEvaluation.created_at
@@ -2010,6 +2027,7 @@ def get_role_pipeline(
         order_columns = (
             related_direction(related_sort_column).nullslast(),
             related_direction(SisterRoleEvaluation.created_at).nullslast(),
+            related_direction(CandidateApplication.id),
         )
     else:
         order_columns = _application_order_columns(sort_by, sort_order)
@@ -2025,6 +2043,7 @@ def get_role_pipeline(
     ]
     rows: list[CandidateApplication] = []
     if page_ids:
+        relationship_loaders = [selectinload(CandidateApplication.interviews)]
         fetched = (
             db.query(CandidateApplication)
             .options(
@@ -2032,20 +2051,28 @@ def get_role_pipeline(
                 joinedload(CandidateApplication.organization),
                 joinedload(CandidateApplication.role),
                 # selectinload avoids the multi-collection cartesian product.
-                # assessments stay loaded (no task join) — _last_activity_at
-                # iterates them for the "Last updated" column; dropping them
-                # would reintroduce a per-row lazy-load N+1.
-                selectinload(CandidateApplication.interviews),
-                selectinload(CandidateApplication.assessments).joinedload(Assessment.task),
+                # Assessment runtime is hydrated by logical identity below.
+                *relationship_loaders,
             )
             .filter(CandidateApplication.id.in_(page_ids))
             .all()
         )
         by_id = {int(item.id): item for item in fetched}
         rows = [by_id[row_id] for row_id in page_ids if row_id in by_id]
+        if not is_sister:
+            hydrate_ordinary_assessment_runtime(
+                db,
+                organization_id=int(current_user.organization_id),
+                applications=rows,
+            )
 
     items = [
-        application_list_payload(app, include_cv_text=include_cv_text) for app in rows
+        application_list_payload(
+            app,
+            include_cv_text=include_cv_text,
+            include_assessment_runtime=not is_sister,
+        )
+        for app in rows
     ]
     if is_sister:
         items = project_related_role_page(
@@ -2053,7 +2080,6 @@ def get_role_pipeline(
             sister_role=role,
             applications=rows,
             payloads=items,
-            assessments_preloaded=True,
         )
     active_candidates_count = (
         int(stage_counts.get("all", 0))
@@ -3481,15 +3507,13 @@ def batch_score_role(
                 "include_scored": bool(include_scored),
                 "scoring_scope": "related_role_evaluation",
             }
-        all_apps = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.role_id == role_id,
-                CandidateApplication.organization_id == current_user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-            )
-            .all()
-        )
+        all_apps = ordinary_score_targets_query(
+            db,
+            organization_id=int(current_user.organization_id),
+            role_id=int(role_id),
+            include_scored=True,
+            applied_after=applied_after_cutoff,
+        ).all()
 
         # The cascade is fetch-CV → pre-screen → score. So a candidate that
         # currently has no CV but has source=workable will be fetched, then
@@ -3566,16 +3590,13 @@ def batch_score_role(
     if related_targets is not None:
         target_count = len(related_targets)
     else:
-        target_query = (
-            db.query(CandidateApplication)
-            .filter(
-                CandidateApplication.role_id == role_id,
-                CandidateApplication.organization_id == current_user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-            )
+        target_query = ordinary_score_targets_query(
+            db,
+            organization_id=int(current_user.organization_id),
+            role_id=int(role_id),
+            include_scored=include_scored,
+            applied_after=applied_after_cutoff,
         )
-        if not include_scored:
-            target_query = target_query.filter(CandidateApplication.cv_match_score.is_(None))
         target_count = target_query.count()
 
     if target_count == 0:
@@ -4361,8 +4382,6 @@ def batch_score_all_roles(
     the caller can track progress across all roles.
     """
     from ...models.role import Role
-    from ...models.candidate import Candidate
-
     roles = (
         db.query(Role)
         .filter(
@@ -4400,25 +4419,13 @@ def batch_score_all_roles(
             target_count = len(related_targets)
         else:
             related_targets = ()
-            count_q = (
-                db.query(CandidateApplication)
-                .filter(
-                    CandidateApplication.role_id == role.id,
-                    CandidateApplication.organization_id
-                    == current_user.organization_id,
-                    CandidateApplication.deleted_at.is_(None),
-                )
+            count_q = ordinary_score_targets_query(
+                db,
+                organization_id=int(current_user.organization_id),
+                role_id=int(role.id),
+                include_scored=include_scored,
+                applied_after=applied_after_cutoff,
             )
-            if not include_scored:
-                count_q = count_q.filter(
-                    CandidateApplication.cv_match_score.is_(None)
-                )
-            if applied_after_cutoff is not None:
-                count_q = (
-                    count_q
-                    .join(Candidate, CandidateApplication.candidate_id == Candidate.id)
-                    .filter(Candidate.workable_created_at >= applied_after_cutoff)
-                )
             target_count = count_q.count()
         if target_count == 0:
             skipped.append({"role_id": role.id, "reason": "nothing_to_score"})

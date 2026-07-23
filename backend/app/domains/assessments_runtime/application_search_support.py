@@ -141,11 +141,21 @@ def application_order_columns(
             score("pre_screen_score_100"), -1.0 if reverse else 101.0
         )
     elif sort_by == "taali_score":
-        primary = func.coalesce(
-            score("taali_score_cache_100"),
-            score("pre_screen_score_100"),
-            -1.0 if reverse else 101.0,
-        )
+        if logical_selection is not None and logical_selection.active:
+            # The logical score expression already supplies current role fit
+            # when no completed assessment exists. A NULL here therefore means
+            # the latest completed assessment deliberately has no available
+            # score (partial/failed grading) and must remain NULL for sorting.
+            primary = func.coalesce(
+                logical_selection.taali_sort_expression(),
+                -1.0 if reverse else 101.0,
+            )
+        else:
+            primary = func.coalesce(
+                score("taali_score_cache_100"),
+                score("pre_screen_score_100"),
+                -1.0 if reverse else 101.0,
+            )
     elif sort_by == "cv_match_score":
         primary = func.coalesce(
             score("cv_match_score"), -1.0 if reverse else 101.0
@@ -190,7 +200,12 @@ def application_order_columns(
     id_direction = (
         CandidateApplication.id.desc if reverse else CandidateApplication.id.asc
     )
-    return [direction(), created_direction(), id_direction()]
+    order_columns = [direction(), created_direction(), id_direction()]
+    if logical_selection is not None and logical_selection.active:
+        logical_role = logical_selection.logical_role_id_expression()
+        logical_role_direction = logical_role.desc if reverse else logical_role.asc
+        order_columns.append(logical_role_direction())
+    return order_columns
 
 
 def apply_application_source_filter(query, source: str | None):

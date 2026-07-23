@@ -56,6 +56,82 @@ def _evaluation(db, *, role, candidate, source, deleted=False):
     return evaluation
 
 
+def test_ordinary_batch_previews_and_org_fanout_exclude_erased_people(db):
+    org = Organization(name="Ordinary deleted-person batch org")
+    db.add(org)
+    db.flush()
+    owner = User(
+        email="owner@ordinary-deleted-batch.test",
+        hashed_password="x",
+        is_active=True,
+        is_verified=True,
+        organization_id=int(org.id),
+        role="owner",
+    )
+    role = Role(
+        organization_id=int(org.id),
+        name="Ordinary deleted-person role",
+        source="manual",
+        job_status=JOB_STATUS_OPEN,
+        job_spec_text="Python platform engineer.",
+    )
+    candidate = Candidate(
+        organization_id=int(org.id),
+        email="erased@ordinary-deleted-batch.test",
+        full_name="Erased Batch Candidate",
+        deleted_at=datetime.now(timezone.utc),
+        cv_text="Sensitive erased CV",
+    )
+    db.add_all([owner, role, candidate])
+    db.flush()
+    application = _application(
+        db,
+        org=org,
+        role=role,
+        candidate=candidate,
+        source="workable",
+        cv_text="Sensitive erased CV",
+    )
+    db.commit()
+
+    preview = applications_routes.batch_score_role(
+        role_id=int(role.id),
+        include_scored=True,
+        applied_after=None,
+        dry_run=True,
+        db=db,
+        current_user=owner,
+    )
+    assert preview == {
+        "will_fetch_cv": 0,
+        "will_pre_screen": 0,
+        "will_score": 0,
+        "total": 0,
+        "include_scored": True,
+    }
+
+    with (
+        patch.object(applications_routes, "_redis_client", return_value=None),
+        patch(
+            "app.tasks.scoring_tasks.batch_score_role.delay"
+        ) as delayed_batch,
+    ):
+        fanout = applications_routes.batch_score_all_roles(
+            applied_after=None,
+            include_scored=True,
+            db=db,
+            current_user=owner,
+        )
+
+    assert fanout["roles_dispatched"] == 0
+    assert fanout["total_target"] == 0
+    assert fanout["skipped"] == [
+        {"role_id": int(role.id), "reason": "nothing_to_score"}
+    ]
+    delayed_batch.assert_not_called()
+    assert application.cv_match_score is None
+
+
 @pytest.fixture
 def logical_role_world(db):
     org = Organization(
@@ -286,6 +362,120 @@ def test_related_batch_preview_counts_only_live_membership(
     assert result["scoring_scope"] == "related_role_evaluation"
     assert result["total"] == 1
     assert result["will_score"] == 1
+
+
+def test_related_batch_applied_after_uses_transport_date_then_legacy_fallback(
+    db,
+    logical_role_world,
+):
+    """The role-linked application date wins over the shared candidate copy."""
+
+    world = logical_role_world
+    cutoff = "2026-06-01T00:00:00+00:00"
+    before = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    after = datetime(2026, 6, 12, tzinfo=timezone.utc)
+    candidate = world.member_app.candidate
+    world.member_app.source = "workable"
+
+    # A direct related-role evidence row can differ from the explicit ATS
+    # transport. The transport's per-application date is the only linked-job
+    # applied date.
+    source = _application(
+        db,
+        org=world.org,
+        role=world.related,
+        candidate=candidate,
+        source="manual",
+    )
+    world.evaluation.source_application_id = int(source.id)
+    world.evaluation.ats_application_id = int(world.member_app.id)
+    source.workable_created_at = before
+    candidate.workable_created_at = before
+    world.member_app.workable_created_at = after
+    db.commit()
+
+    included = applications_routes.batch_score_role(
+        role_id=int(world.related.id),
+        include_scored=False,
+        applied_after=cutoff,
+        dry_run=True,
+        db=db,
+        current_user=world.user,
+    )
+    assert included["total"] == 1
+    assert included["will_score"] == 1
+
+    # The shared candidate/source dates cannot pull an older linked
+    # application into the cohort.
+    world.member_app.workable_created_at = before
+    source.workable_created_at = after
+    candidate.workable_created_at = after
+    db.commit()
+
+    excluded = applications_routes.batch_score_role(
+        role_id=int(world.related.id),
+        include_scored=False,
+        applied_after=cutoff,
+        dry_run=True,
+        db=db,
+        current_user=world.user,
+    )
+    assert excluded["total"] == 0
+    assert excluded["will_score"] == 0
+
+    # A direct related-role membership can have no ATS transport at all. Its
+    # own application date remains the role-local applied truth.
+    world.evaluation.ats_application_id = None
+    source.workable_created_at = after
+    candidate.workable_created_at = before
+    db.commit()
+
+    direct = applications_routes.batch_score_role(
+        role_id=int(world.related.id),
+        include_scored=False,
+        applied_after=cutoff,
+        dry_run=True,
+        db=db,
+        current_user=world.user,
+    )
+    assert direct["total"] == 1
+    assert direct["will_score"] == 1
+
+    # Rolling-compatibility memberships without an explicit transport use
+    # their source application. Legacy Workable rows may then fall back to the
+    # candidate-level copy when their per-application date was never stored.
+    world.evaluation.source_application_id = int(world.member_app.id)
+    world.evaluation.ats_application_id = None
+    world.member_app.workable_created_at = None
+    candidate.workable_created_at = after
+    db.commit()
+
+    legacy = applications_routes.batch_score_role(
+        role_id=int(world.related.id),
+        include_scored=False,
+        applied_after=cutoff,
+        dry_run=True,
+        db=db,
+        current_user=world.user,
+    )
+    assert legacy["total"] == 1
+    assert legacy["will_score"] == 1
+
+    # Candidate-level Workable state belongs to another application and is not
+    # a valid fallback for a non-Workable source.
+    world.member_app.source = "manual"
+    db.commit()
+
+    manual = applications_routes.batch_score_role(
+        role_id=int(world.related.id),
+        include_scored=False,
+        applied_after=cutoff,
+        dry_run=True,
+        db=db,
+        current_user=world.user,
+    )
+    assert manual["total"] == 0
+    assert manual["will_score"] == 0
 
 
 def test_related_selected_fetch_uses_logical_id_and_validated_transport(

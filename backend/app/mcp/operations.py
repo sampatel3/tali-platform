@@ -19,6 +19,7 @@ from ..candidate_search.application_role_scope import (
     application_outcome_expression,
     pipeline_stage_expression,
 )
+from ..candidate_search.population import apply_searchable_candidate_scope
 from ..candidate_search.role_scope import resolve_candidate_role_scope
 from ..components.scoring.assessment_metrics import score_100 as assessment_score_100
 from ..models.assessment import Assessment, AssessmentStatus
@@ -460,15 +461,29 @@ def get_recruiting_overview(
                 Role.ats_owner_role_id.is_(None),
             )
         )
+        ordinary_query = apply_searchable_candidate_scope(
+            ordinary_query,
+            organization_id=organization_id,
+        )
         related_query = (
             db.query(SisterRoleEvaluation)
             .join(Role, Role.id == SisterRoleEvaluation.role_id)
+            .join(
+                CandidateApplication,
+                CandidateApplication.id
+                == SisterRoleEvaluation.source_application_id,
+            )
             .filter(
                 SisterRoleEvaluation.organization_id == organization_id,
                 SisterRoleEvaluation.deleted_at.is_(None),
+                CandidateApplication.organization_id == organization_id,
                 Role.organization_id == organization_id,
                 Role.deleted_at.is_(None),
             )
+        )
+        related_query = apply_searchable_candidate_scope(
+            related_query,
+            organization_id=organization_id,
         )
         application_aggregate_rows = [
             _application_aggregate(
@@ -481,7 +496,7 @@ def get_recruiting_overview(
             _application_aggregate(
                 related_query,
                 id_expression=SisterRoleEvaluation.id,
-                candidate_expression=SisterRoleEvaluation.candidate_id,
+                candidate_expression=CandidateApplication.candidate_id,
                 stage_expression=SisterRoleEvaluation.pipeline_stage,
                 outcome_expression=SisterRoleEvaluation.application_outcome,
             ),
@@ -526,7 +541,12 @@ def get_recruiting_overview(
                 )
             ],
         )
+        .join(Candidate, Candidate.id == Assessment.candidate_id)
         .filter(*assessment_filters)
+        .filter(
+            Candidate.organization_id == organization_id,
+            Candidate.deleted_at.is_(None),
+        )
         .one()
     )
 

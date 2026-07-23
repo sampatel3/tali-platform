@@ -16,6 +16,11 @@ from sqlalchemy.orm import Session, joinedload
 
 from ..actions import queue_decision
 from ..actions.types import Actor
+from ..candidate_search.assessment_score_truth import (
+    assessment_taali_score_100,
+    latest_role_assessment,
+    role_assessment_truth,
+)
 from ..models.agent_decision import AgentDecision
 from ..models.agent_run import AgentRun
 from ..models.assessment import Assessment, AssessmentStatus
@@ -57,40 +62,17 @@ def _numeric(value: object) -> float | None:
         return None
 
 
-def _assessment_score(assessment: Assessment) -> float | None:
-    """Best persisted post-assessment headline in the platform's 0..100 scale."""
-
-    for value in (
-        assessment.taali_score,
-        assessment.final_score,
-        assessment.assessment_score,
-    ):
-        score = _numeric(value)
-        if score is not None:
-            return max(0.0, min(100.0, score))
-    legacy = _numeric(assessment.score)
-    if legacy is not None:
-        return max(0.0, min(100.0, legacy * 10.0))
-    return None
-
-
 def _latest_assessment(
     db: Session, *, role: Role, evaluation: SisterRoleEvaluation
 ) -> Assessment | None:
     app = evaluation.source_application
     if app is None:
         return None
-    return (
-        db.query(Assessment)
-        .filter(
-            Assessment.organization_id == int(role.organization_id),
-            Assessment.application_id == int(app.id),
-            Assessment.candidate_id == int(app.candidate_id),
-            Assessment.role_id == int(role.id),
-            Assessment.is_voided.is_(False),
-        )
-        .order_by(Assessment.created_at.desc(), Assessment.id.desc())
-        .first()
+    return latest_role_assessment(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+        candidate_id=int(app.candidate_id),
     )
 
 
@@ -244,13 +226,20 @@ def _queue_role_decision(
         "evaluation_cv_fingerprint": evaluation.cv_fingerprint,
     }
     if assessment is not None:
-        evidence.update(
-            {
-                "assessment_id": int(assessment.id),
-                "assessment_score": score,
-                "task_id": int(assessment.task_id),
-            }
-        )
+        evidence["assessment_id"] = int(assessment.id)
+        evidence["assessment_status"] = _status(assessment.status)
+        if assessment.task_id is not None:
+            evidence["task_id"] = int(assessment.task_id)
+        if _status(assessment.status) in _ASSESSMENT_TERMINAL:
+            truth = role_assessment_truth(assessment)
+            evidence.update(
+                {
+                    "assessment_score": truth.assessment_score,
+                    "assessment_taali_score": truth.taali_score,
+                    "assessment_score_mode": truth.score_mode,
+                    "assessment_grading_state": truth.grading_state,
+                }
+            )
     reasoning = (
         f"Related-role score {score:.0f} is below the {threshold:.0f} threshold; "
         "reject this candidate only in this role."
@@ -574,8 +563,8 @@ def run_related_role_cycle(
             score = _numeric(evaluation.role_fit_score) or 0.0
             decision_type = "resend_assessment_invite"
         elif assessment is not None and assessment_status in _ASSESSMENT_TERMINAL:
-            score = _assessment_score(assessment)
-            if score is None or bool(assessment.scoring_failed or assessment.scoring_partial):
+            score = assessment_taali_score_100(assessment)
+            if score is None:
                 summary["assessment_incomplete"] += 1
                 continue
             decision_type = "advance_to_interview" if score >= threshold else "reject"

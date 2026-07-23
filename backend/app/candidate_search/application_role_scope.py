@@ -225,7 +225,7 @@ def build_role_local_projection(
             {
                 "role_id": int(scope.requested_role.id),
                 "role_name": scope.requested_role.name,
-                "score_mode": "sister_role",
+                "score_mode": application.score_mode_cache,
                 "frontend_url": application_url(
                     int(application.id),
                     role_id=int(scope.requested_role.id),

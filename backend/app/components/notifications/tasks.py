@@ -394,6 +394,51 @@ def send_assessment_email(
         _invalidate_resend_probe(error)
         return {"success": False, "retry_wait": True, "error": error}
 
+    candidate_guard_db = None
+    if assessment_id:
+        from ...candidate_search.population import (
+            lock_live_candidate_for_execution,
+        )
+        from ...models.assessment import Assessment
+        from ...platform.database import SessionLocal
+
+        candidate_guard_db = SessionLocal()
+        identity = (
+            candidate_guard_db.query(
+                Assessment.organization_id,
+                Assessment.candidate_id,
+            )
+            .filter(Assessment.id == int(assessment_id))
+            .one_or_none()
+        )
+        live_candidate = (
+            lock_live_candidate_for_execution(
+                candidate_guard_db,
+                organization_id=int(identity.organization_id),
+                candidate_id=int(identity.candidate_id),
+            )
+            if identity is not None
+            else None
+        )
+        if live_candidate is None:
+            candidate_guard_db.close()
+            candidate_guard_db = None
+            error = "candidate_unavailable_before_delivery"
+            _persist_invite_email_state(
+                int(assessment_id),
+                status="dispatch_failed",
+                next_attempt_at=None,
+                claimed_at=None,
+                last_error=error,
+                expected_generation=send_generation,
+                log_extra=log_extra,
+            )
+            return {
+                "success": False,
+                "failed": True,
+                "reason": "candidate_unavailable",
+            }
+
     try:
         email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
         result = email_svc.send_assessment_invite(
@@ -410,6 +455,9 @@ def send_assessment_email(
         )
     except Exception as exc:  # defensive — send_assessment_invite catches internally
         result = {"success": False, "error": str(exc), "retryable": True, "rate_limited": False}
+    finally:
+        if candidate_guard_db is not None:
+            candidate_guard_db.close()
 
     if result.get("success") and assessment_id and not result.get("email_id"):
         # A provider acknowledgement without its message id cannot be tracked

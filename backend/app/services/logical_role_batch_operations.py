@@ -12,8 +12,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Iterable
 
+from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from ..candidate_search.population import apply_searchable_candidate_scope
+from ..models.candidate import Candidate
+from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, Role
 from .logical_role_application_authority import (
     LogicalRoleApplicationContext,
@@ -59,6 +63,44 @@ def parse_applied_after(value: str | None) -> datetime | None:
     return cutoff
 
 
+def _utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _context_applied_at(
+    context: LogicalRoleApplicationContext,
+) -> datetime | None:
+    """Resolve the applied date from this logical membership's application.
+
+    A related membership may keep evidence on one source application while
+    linking a different ATS application for the job-specific transport state.
+    The validated transport therefore wins when one exists. A direct related
+    membership or a rolling-compatibility membership without a usable
+    transport uses its already-authorized source application.
+
+    ``Candidate.workable_created_at`` is only the documented compatibility
+    fallback for legacy Workable rows that predate the per-application column.
+    It must never override a present application date or leak onto a manual
+    application for the same deduplicated person.
+    """
+
+    application = context.source_application
+    if context.is_related and context.ats_application is not None:
+        application = context.ats_application
+
+    applied_at = application.workable_created_at
+    if (
+        applied_at is None
+        and str(application.source or "").strip().lower() == "workable"
+    ):
+        applied_at = context.candidate.workable_created_at
+    return _utc_datetime(applied_at)
+
+
 def filter_contexts_applied_after(
     contexts: Iterable[LogicalRoleApplicationContext],
     *,
@@ -66,17 +108,65 @@ def filter_contexts_applied_after(
 ) -> tuple[LogicalRoleApplicationContext, ...]:
     if cutoff is None:
         return tuple(contexts)
+    normalized_cutoff = _utc_datetime(cutoff)
+    assert normalized_cutoff is not None
     return tuple(
         context
         for context in contexts
-        if context.candidate.workable_created_at is not None
-        and (
-            context.candidate.workable_created_at.replace(tzinfo=timezone.utc)
-            if context.candidate.workable_created_at.tzinfo is None
-            else context.candidate.workable_created_at
-        )
-        >= cutoff
+        if (applied_at := _context_applied_at(context)) is not None
+        and applied_at >= normalized_cutoff
     )
+
+
+def ordinary_score_targets_query(
+    db: Session,
+    *,
+    organization_id: int,
+    role_id: int,
+    include_scored: bool,
+    applied_after: datetime | None,
+):
+    """Build the canonical ordinary-role batch-scoring population.
+
+    Candidate erasure is absolute even when an application row remains live.
+    Application dates remain role-local: prefer the application timestamp, with
+    the candidate timestamp only as a compatibility fallback for legacy
+    Workable rows.
+    """
+
+    query = db.query(CandidateApplication)
+    query = apply_searchable_candidate_scope(
+        query,
+        organization_id=int(organization_id),
+    ).filter(
+        CandidateApplication.organization_id == int(organization_id),
+        CandidateApplication.role_id == int(role_id),
+        CandidateApplication.deleted_at.is_(None),
+    )
+    if not include_scored:
+        query = query.filter(CandidateApplication.cv_match_score.is_(None))
+    if applied_after is None:
+        return query
+
+    query = query.join(
+        Candidate,
+        Candidate.id == CandidateApplication.candidate_id,
+    )
+    application_date = case(
+        (
+            CandidateApplication.workable_created_at.isnot(None),
+            CandidateApplication.workable_created_at,
+        ),
+        (
+            func.lower(
+                func.trim(func.coalesce(CandidateApplication.source, ""))
+            )
+            == "workable",
+            Candidate.workable_created_at,
+        ),
+        else_=None,
+    )
+    return query.filter(application_date >= _utc_datetime(applied_after))
 
 
 def filter_contexts_stage(
@@ -158,6 +248,7 @@ __all__ = [
     "filter_contexts_stage",
     "is_related_role",
     "logical_role_contexts",
+    "ordinary_score_targets_query",
     "parse_applied_after",
     "related_score_is_reusable",
     "related_score_targets",

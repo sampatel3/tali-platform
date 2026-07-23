@@ -265,30 +265,46 @@ def _human_suppressed(
             from ..models.candidate_application import CandidateApplication
 
             application = db.get(CandidateApplication, int(application_id))
-            if (
-                application is not None
-                and int(role_id) != int(application.role_id)
-            ):
-                from ..models.role import Role
+            role = db.get(Role, int(role_id))
+            if application is not None and role is not None:
                 from ..services.decision_role_context import (
+                    is_cross_role_decision,
                     load_related_evaluation,
                     related_decision_staleness,
                 )
+                from ..services.logical_role_batch_operations import (
+                    is_related_role,
+                )
 
-                role = db.get(Role, int(role_id))
-                evaluation = load_related_evaluation(
-                    db,
-                    decision=suppressing,
-                    application=application,
-                )
-                report = related_decision_staleness(
-                    db,
+                # Physical application ownership is not the logical-role
+                # boundary. Use the shared decision classifier plus the
+                # rolling-compatible role identity rule: a direct application
+                # may physically belong to the related role, and mixed-version
+                # rows may carry only ``ats_owner_role_id``.
+                if is_related_role(role) or is_cross_role_decision(
                     suppressing,
-                    evaluation,
-                    application=application,
-                    role=role,
-                )
-                return suppressing if not report.is_stale else None
+                    application,
+                ):
+                    evaluation = load_related_evaluation(
+                        db,
+                        decision=suppressing,
+                        application=application,
+                    )
+                    if evaluation is None:
+                        # A removed membership cannot be reclassified as an
+                        # ordinary application merely because its physical row
+                        # points at this related role. Queue admission rejects
+                        # it; preserve the recruiter's "no" if this helper is
+                        # reached while membership state is unavailable.
+                        return suppressing
+                    report = related_decision_staleness(
+                        db,
+                        suppressing,
+                        evaluation,
+                        application=application,
+                        role=role,
+                    )
+                    return suppressing if not report.is_stale else None
 
             from ..services.decision_staleness import is_human_suppression_live
 

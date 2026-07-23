@@ -30,10 +30,13 @@ def test_searchable_scope_requires_live_candidate_in_same_organization(db):
         )
     ).lower()
 
-    assert "exists" in sql
-    assert "candidates.id = candidate_applications.candidate_id" in sql
-    assert "candidates.organization_id = 17" in sql
-    assert "candidates.deleted_at is null" in sql
+    assert "join candidates as searchable_candidate_lifecycle" in sql
+    assert (
+        "searchable_candidate_lifecycle.id = candidate_applications.candidate_id"
+        in sql
+    )
+    assert "searchable_candidate_lifecycle.organization_id = 17" in sql
+    assert "searchable_candidate_lifecycle.deleted_at is null" in sql
 
 
 def test_searchable_scope_composes_with_candidate_joining_skill_filter(db):
@@ -57,9 +60,50 @@ def test_searchable_scope_composes_with_candidate_joining_skill_filter(db):
     ).lower()
 
     assert "join candidates" in sql
-    assert "exists" in sql
-    assert "candidates.organization_id = 17" in sql
-    assert "candidates.deleted_at is null" in sql
+    assert "join candidates as searchable_candidate_lifecycle" in sql
+    assert "searchable_candidate_lifecycle.organization_id = 17" in sql
+    assert "searchable_candidate_lifecycle.deleted_at is null" in sql
+
+
+def test_searchable_scope_is_idempotent_for_layered_canonical_readers(db):
+    scoped_once = apply_searchable_candidate_scope(
+        db.query(CandidateApplication),
+        organization_id=17,
+    )
+    scoped_twice = apply_searchable_candidate_scope(
+        scoped_once,
+        organization_id=17,
+    )
+
+    sql = str(
+        scoped_twice.statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+
+    assert sql.count("join candidates as searchable_candidate_lifecycle") == 1
+
+
+def test_searchable_scope_fails_closed_if_layered_reader_changes_tenant(db):
+    scoped = apply_searchable_candidate_scope(
+        db.query(CandidateApplication),
+        organization_id=17,
+    )
+    crossed = apply_searchable_candidate_scope(
+        scoped,
+        organization_id=18,
+    )
+
+    sql = str(
+        crossed.statement.compile(
+            dialect=postgresql.dialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+    ).lower()
+
+    assert "false" in sql
+    assert sql.count("join candidates as searchable_candidate_lifecycle") == 1
 
 
 def test_population_filter_keeps_minimum_years_when_relaxing_evidence_fields():

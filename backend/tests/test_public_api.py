@@ -141,6 +141,73 @@ def test_tenant_isolation_via_tests(client):
     assert all(t["name"] != task_name for t in tests_b)
 
 
+def test_public_assessment_detail_hides_soft_deleted_candidate(client, db):
+    from datetime import datetime, timezone
+
+    from app.models.assessment import Assessment, AssessmentStatus
+    from app.models.candidate import Candidate
+    from app.models.role import Role
+    from app.models.user import User
+
+    headers, email = auth_headers(
+        client,
+        organization_name="OrgPublicAssessmentLifecycle",
+    )
+    organization_id = int(
+        db.query(User).filter(User.email == email).one().organization_id
+    )
+    role = Role(
+        organization_id=organization_id,
+        name="Private Assessment Role",
+        source="manual",
+    )
+    candidate = Candidate(
+        organization_id=organization_id,
+        email="public-assessment-private@example.test",
+        full_name="Public Assessment Private",
+    )
+    db.add_all([role, candidate])
+    db.flush()
+    assessment = Assessment(
+        organization_id=organization_id,
+        role_id=int(role.id),
+        candidate_id=int(candidate.id),
+        token="public-assessment-private-token",
+        status=AssessmentStatus.COMPLETED,
+        completed_at=datetime.now(timezone.utc),
+        taali_score=91,
+        final_score=88,
+        assessment_score=84,
+        is_voided=False,
+    )
+    db.add(assessment)
+    db.commit()
+
+    secret = _mint_key(
+        client,
+        headers,
+        scopes=["assessments:read"],
+    )["secret"]
+    key_headers = _key_headers(secret)
+    visible = client.get(
+        f"/public/v1/assessments/{int(assessment.id)}",
+        headers=key_headers,
+    )
+    assert visible.status_code == 200, visible.text
+    assert visible.json()["candidate_id"] == int(candidate.id)
+    assert visible.json()["taali_score"] == 91
+
+    candidate.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    hidden = client.get(
+        f"/public/v1/assessments/{int(assessment.id)}",
+        headers=key_headers,
+    )
+    assert hidden.status_code == 404, hidden.text
+    assert hidden.json()["detail"] == "Assessment not found"
+
+
 def test_api_key_list_is_org_scoped(client):
     headers_a, _ = auth_headers(client, organization_name="OrgA-keys")
     key_a = _mint_key(client, headers_a, name="a-only")
@@ -183,13 +250,14 @@ def test_role_applications_expose_workable_stage_and_metrics(client, db):
     db.add(role)
     db.flush()
 
-    # (email, pipeline_stage, workable_stage, application_outcome)
+    # (email, pipeline_stage, workable_stage, application_outcome,
+    # requirements_fit_score_100)
     specs = [
-        ("a@ex.com", "applied", "Applied", "open"),
-        ("b@ex.com", "advanced", "Technical Interview", "open"),
-        ("c@ex.com", "applied", "Applied", "rejected"),
+        ("a@ex.com", "applied", "Applied", "open", 72),
+        ("b@ex.com", "advanced", "Technical Interview", "open", None),
+        ("c@ex.com", "applied", "Applied", "rejected", None),
     ]
-    for em, pstage, wstage, outcome in specs:
+    for em, pstage, wstage, outcome, requirements_score in specs:
         cand = Candidate(organization_id=org_id, email=em, full_name=em.split("@")[0])
         db.add(cand)
         db.flush()
@@ -201,6 +269,14 @@ def test_role_applications_expose_workable_stage_and_metrics(client, db):
                 pipeline_stage=pstage,
                 application_outcome=outcome,
                 workable_stage=wstage,
+                requirements_fit_score_100=requirements_score,
+                # Ordinary roles continue to expose the materialized column,
+                # not a similarly named component from the details blob.
+                cv_match_details=(
+                    {"requirements_match_score_100": 12}
+                    if requirements_score is not None
+                    else None
+                ),
             )
         )
     db.commit()
@@ -216,6 +292,19 @@ def test_role_applications_expose_workable_stage_and_metrics(client, db):
     assert len(body["applications"]) == 3
     assert {a["workable_stage"] for a in body["applications"]} == {"Applied", "Technical Interview"}
     assert all("pipeline_stage" in a and "workable_stage" in a for a in body["applications"])
+    ordinary = next(
+        application
+        for application in body["applications"]
+        if application["candidate"]["email"] == "a@ex.com"
+    )
+    assert ordinary["requirements_fit_score_100"] == 72
+
+    ordinary_detail = client.get(
+        f"/public/v1/applications/{ordinary['id']}",
+        headers=kh,
+    )
+    assert ordinary_detail.status_code == 200, ordinary_detail.text
+    assert ordinary_detail.json()["requirements_fit_score_100"] == 72
 
     # Filter by Workable stage.
     filtered = client.get(
@@ -297,6 +386,8 @@ def test_related_role_public_applications_use_independent_pool_and_ats_link(
         workable_stage="Final Interview",
         external_stage_raw="Final Interview",
         taali_score_cache_100=3,
+        requirements_fit_score_100=13,
+        cv_match_details={"requirements_match_score_100": 12},
     )
     owner_only_application = CandidateApplication(
         organization_id=org_id,
@@ -313,22 +404,27 @@ def test_related_role_public_applications_use_independent_pool_and_ats_link(
     )
     db.add_all([transport, local, owner_only_application])
     db.flush()
-    db.add(
-        SisterRoleEvaluation(
-            organization_id=org_id,
-            role_id=related.id,
-            candidate_id=candidate.id,
-            source_application_id=local.id,
-            ats_application_id=transport.id,
-            status="done",
-            pipeline_stage="advanced",
-            application_outcome="open",
-            membership_source="direct_application",
-            spec_fingerprint="public-related-oracle",
-            role_fit_score=93,
-            details={"fixture": "public-related-oracle"},
-        )
+    evaluation = SisterRoleEvaluation(
+        organization_id=org_id,
+        role_id=related.id,
+        candidate_id=candidate.id,
+        source_application_id=local.id,
+        ats_application_id=transport.id,
+        status="done",
+        pipeline_stage="advanced",
+        application_outcome="open",
+        membership_source="direct_application",
+        spec_fingerprint="public-related-oracle",
+        role_fit_score=93,
+        details={
+            "fixture": "public-related-oracle",
+            "requirements_match_score_100": 81,
+            # A prior public-only key must not override canonical
+            # related-role evaluation truth.
+            "requirements_fit_score": 9,
+        },
     )
+    db.add(evaluation)
     db.commit()
 
     secret = _mint_key(client, headers, scopes=["applications:read"])["secret"]
@@ -349,6 +445,7 @@ def test_related_role_public_applications_use_independent_pool_and_ats_link(
     assert application["pipeline_stage"] == "advanced"
     assert application["application_outcome"] == "open"
     assert application["taali_score_100"] == 93
+    assert application["requirements_fit_score_100"] == 81
     assert application["workable_stage"] == "Technical Interview"
 
     linked_filter = client.get(
@@ -439,6 +536,26 @@ def test_related_role_public_applications_use_independent_pool_and_ats_link(
         headers=_key_headers(share_secret),
     )
     assert wrong_role_share.status_code == 404
+
+    # Rolling compatibility matches the canonical related-role projection:
+    # older evaluations without the requirements component fall back to their
+    # own role-fit score, never either physical application's score.
+    evaluation.details = {"fixture": "legacy-public-related-oracle"}
+    db.commit()
+    fallback_list = client.get(
+        f"/public/v1/roles/{related.id}/applications",
+        headers=key_headers,
+    )
+    assert fallback_list.status_code == 200, fallback_list.text
+    assert fallback_list.json()["applications"][0]["requirements_fit_score_100"] == 93
+
+    fallback_detail = client.get(
+        f"/public/v1/applications/{local.id}",
+        params={"view_role_id": related.id},
+        headers=key_headers,
+    )
+    assert fallback_detail.status_code == 200, fallback_detail.text
+    assert fallback_detail.json()["requirements_fit_score_100"] == 93
 
 
 def test_role_metrics_scope_and_org(client):

@@ -5,6 +5,7 @@ from __future__ import annotations
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from ..candidate_search.population import apply_searchable_candidate_scope
 from ..models.candidate_application import CandidateApplication
 from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import (
@@ -63,6 +64,8 @@ def _empty_related_pipeline_counts() -> dict[str, int]:
 def related_role_pipeline_counts_bulk(
     db: Session,
     role_ids: list[int],
+    *,
+    organization_id: int | None = None,
 ) -> dict[int, dict[str, int]]:
     """Load funnels from explicit live related-role memberships only."""
 
@@ -72,7 +75,24 @@ def related_role_pipeline_counts_bulk(
     }
     if not role_ids:
         return counts_by_role
-    rows = (
+    if organization_id is None:
+        organization_ids = [
+            int(value)
+            for (value,) in (
+                db.query(Role.organization_id)
+                .filter(
+                    Role.id.in_(role_ids),
+                    Role.deleted_at.is_(None),
+                )
+                .distinct()
+                .all()
+            )
+        ]
+        if len(organization_ids) != 1:
+            return counts_by_role
+        organization_id = organization_ids[0]
+
+    query = (
         db.query(
             SisterRoleEvaluation.role_id,
             SisterRoleEvaluation.pipeline_stage,
@@ -83,12 +103,22 @@ def related_role_pipeline_counts_bulk(
         .select_from(SisterRoleEvaluation)
         .join(
             CandidateApplication,
-            CandidateApplication.id == SisterRoleEvaluation.source_application_id,
+            CandidateApplication.id
+            == SisterRoleEvaluation.source_application_id,
         )
         .join(Role, Role.id == SisterRoleEvaluation.role_id)
-        .filter(
+    )
+    query = apply_searchable_candidate_scope(
+        query,
+        organization_id=int(organization_id),
+    )
+    rows = (
+        query.filter(
+            SisterRoleEvaluation.organization_id == int(organization_id),
             SisterRoleEvaluation.role_id.in_(role_ids),
             SisterRoleEvaluation.deleted_at.is_(None),
+            CandidateApplication.organization_id == int(organization_id),
+            Role.organization_id == int(organization_id),
             or_(
                 Role.role_kind == ROLE_KIND_SISTER,
                 Role.ats_owner_role_id.isnot(None),
@@ -132,7 +162,11 @@ def related_role_pipeline_counts_bulk(
 def related_role_pipeline_counts(db: Session, role: Role) -> dict[str, int]:
     """Return one related role's funnel over its explicit live memberships."""
 
-    return related_role_pipeline_counts_bulk(db, [int(role.id)])[int(role.id)]
+    return related_role_pipeline_counts_bulk(
+        db,
+        [int(role.id)],
+        organization_id=int(role.organization_id),
+    )[int(role.id)]
 
 
 def pipeline_counts_for_role(

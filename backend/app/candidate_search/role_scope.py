@@ -33,8 +33,11 @@ from .logical_application_scope import (
     LogicalMembershipKey,
     resolve_logical_application_selection,
 )
+from .population import apply_searchable_candidate_scope
 from .role_assessment_scores import (
+    RoleAssessmentTruth,
     assessment_scores_by_logical_membership,
+    assessment_truth_by_logical_membership,
     related_assessment_score_expression,
     related_taali_score,
     related_taali_score_expression,
@@ -88,11 +91,13 @@ class RelatedRoleSearchApplication:
         role: Role,
         evaluation: SisterRoleEvaluation | None,
         assessment_score: float | None,
+        assessment_truth: RoleAssessmentTruth | None = None,
     ) -> None:
         self.source_application = source_application
         self.related_role = role
         self.evaluation = evaluation
         self.role_assessment_score = assessment_score
+        self.role_assessment_truth = assessment_truth
         details = (
             dict(evaluation.details)
             if evaluation is not None and isinstance(evaluation.details, dict)
@@ -107,13 +112,25 @@ class RelatedRoleSearchApplication:
         if name in _ROLE_FIT_SCORE_FIELDS:
             return evaluation.role_fit_score if evaluation is not None else None
         if name == "assessment_score_cache_100":
-            return self.role_assessment_score
+            return (
+                self.role_assessment_truth.assessment_score
+                if self.role_assessment_truth is not None
+                else self.role_assessment_score
+            )
         if name == "taali_score_cache_100":
-            return related_taali_score(
-                assessment_score=self.role_assessment_score,
-                role_fit_score=(
-                    evaluation.role_fit_score if evaluation is not None else None
-                ),
+            # A completed assessment freezes the TAALI lifecycle score, including
+            # an intentionally unavailable score while grading is incomplete.
+            # Only a membership without a completed assessment falls back to
+            # the current related-role fit.
+            return (
+                self.role_assessment_truth.taali_score
+                if self.role_assessment_truth is not None
+                else related_taali_score(
+                    assessment_score=self.role_assessment_score,
+                    role_fit_score=(
+                        evaluation.role_fit_score if evaluation is not None else None
+                    ),
+                )
             )
         if name in _OWNER_ROLE_SCORE_FIELDS:
             return None
@@ -187,9 +204,19 @@ class RelatedRoleSearchApplication:
             )
         if name == "score_mode_cache":
             return (
-                "assessment_plus_role_fit"
-                if self.role_assessment_score is not None
+                self.role_assessment_truth.score_mode
+                if self.role_assessment_truth is not None
                 else "sister_role"
+            )
+        if name == "assessment_grading_pending":
+            return bool(
+                self.role_assessment_truth is not None
+                and self.role_assessment_truth.grading_pending
+            )
+        if name in {"scoring_partial", "scoring_failed"}:
+            return bool(
+                self.role_assessment_truth is not None
+                and getattr(self.role_assessment_truth, name)
             )
         if name in {
             "pre_screen_recommendation",
@@ -230,8 +257,12 @@ class CandidateRoleScope:
         )
 
     def scope_roster(self, query: Query) -> Query:
-        """Apply the selected role's explicit candidate-membership boundary."""
+        """Apply role membership plus the shared live-person boundary."""
 
+        query = apply_searchable_candidate_scope(
+            query,
+            organization_id=self.organization_id,
+        )
         if self.role_id is None:
             return query
         if self.is_related:
@@ -248,12 +279,13 @@ class CandidateRoleScope:
         return query.filter(CandidateApplication.role_id == int(self.role_id))
 
     def scope_visible_roster(self, query: Query) -> Query:
-        """Apply role membership and the correct evidence-row lifecycle rule.
+        """Apply role membership and both canonical lifecycle rules.
 
         Ordinary-role membership is the live application row itself. Related-
         role membership is the live evaluation row, so soft deletion of its
         evidence or ATS transport cannot silently delete the candidate from
-        this independent role.
+        this independent role. A soft-deleted person is never searchable in
+        either case; :meth:`scope_roster` applies that shared boundary.
         """
 
         scoped = self.scope_roster(query)
@@ -262,26 +294,18 @@ class CandidateRoleScope:
         return scoped.filter(CandidateApplication.deleted_at.is_(None))
 
     def roster_size(self, db: Session) -> int:
-        """Count non-deleted source applications in the selected role roster."""
+        """Count the same live-person roster exposed by canonical readers."""
 
-        if self.is_related and self.role_id is not None:
-            return int(
-                db.query(func.count(SisterRoleEvaluation.id))
-                .filter(
-                    SisterRoleEvaluation.organization_id == self.organization_id,
-                    SisterRoleEvaluation.role_id == int(self.role_id),
-                    SisterRoleEvaluation.deleted_at.is_(None),
-                )
-                .scalar()
-                or 0
-            )
-        query = db.query(func.count(CandidateApplication.id)).filter(
+        query = db.query(CandidateApplication).filter(
             CandidateApplication.organization_id == self.organization_id,
-            CandidateApplication.deleted_at.is_(None),
         )
-        if self.role_id is not None:
-            query = query.filter(CandidateApplication.role_id == int(self.role_id))
-        return int(query.scalar() or 0)
+        query = self.scope_visible_roster(query)
+        return int(
+            query.order_by(None)
+            .with_entities(func.count(CandidateApplication.id))
+            .scalar()
+            or 0
+        )
 
     def evaluation_map(
         self,
@@ -308,6 +332,7 @@ class CandidateRoleScope:
         self,
         evaluations: dict[int, SisterRoleEvaluation],
         assessment_scores: dict[int, float] | None = None,
+        assessment_truth: dict[int, RoleAssessmentTruth] | None = None,
     ) -> (
         Callable[
             [CandidateApplication],
@@ -326,6 +351,7 @@ class CandidateRoleScope:
                 role=self.requested_role,
                 evaluation=evaluations.get(int(application.id)),
                 assessment_score=(assessment_scores or {}).get(int(application.id)),
+                assessment_truth=(assessment_truth or {}).get(int(application.id)),
             )
 
         return adapt
@@ -353,6 +379,29 @@ class CandidateRoleScope:
             if role_id == int(self.role_id)
         }
 
+    def assessment_truth_map(
+        self,
+        db: Session,
+        *,
+        applications: list[CandidateApplication],
+    ) -> dict[int, RoleAssessmentTruth]:
+        """Return canonical completed truth owned by this related role."""
+
+        if not self.is_related or self.role_id is None:
+            return {}
+        logical_truth = assessment_truth_by_logical_membership(
+            db,
+            organization_id=self.organization_id,
+            memberships=[
+                (int(self.role_id), application) for application in applications
+            ],
+        )
+        return {
+            application_id: truth
+            for (role_id, application_id), truth in logical_truth.items()
+            if role_id == int(self.role_id)
+        }
+
     def bounded_row_adapter(self, db: Session) -> RelatedRoleRowAdapter | None:
         """Adapt only rows the ranking engine actually hydrates."""
 
@@ -368,7 +417,7 @@ class RelatedRoleRowAdapter:
         self.db = db
         self.scope = scope
         self.evaluations: dict[int, SisterRoleEvaluation] = {}
-        self.assessment_scores: dict[int, float] = {}
+        self.assessment_truth: dict[int, RoleAssessmentTruth] = {}
         self.loaded_ids: set[int] = set()
 
     def prepare(self, applications: list[CandidateApplication]) -> None:
@@ -382,8 +431,8 @@ class RelatedRoleRowAdapter:
                 for application in applications
                 if int(application.id) in ids
             ]
-            self.assessment_scores.update(
-                self.scope.assessment_score_map(
+            self.assessment_truth.update(
+                self.scope.assessment_truth_map(
                     self.db,
                     applications=selected,
                 )
@@ -399,7 +448,8 @@ class RelatedRoleRowAdapter:
             application,
             role=self.scope.requested_role,
             evaluation=self.evaluations.get(int(application.id)),
-            assessment_score=self.assessment_scores.get(int(application.id)),
+            assessment_score=None,
+            assessment_truth=self.assessment_truth.get(int(application.id)),
         )
 
 
@@ -419,10 +469,12 @@ def hydrate_logical_candidate_rows(
     application_ids = sorted({application_id for _, application_id in normalized})
     source_by_id = {
         int(application.id): application
-        for application in db.query(CandidateApplication)
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
+        for application in apply_searchable_candidate_scope(
+            db.query(CandidateApplication).options(
+                joinedload(CandidateApplication.candidate),
+                joinedload(CandidateApplication.role),
+            ),
+            organization_id=int(selection.organization_id),
         )
         .filter(
             CandidateApplication.organization_id == int(selection.organization_id),
@@ -437,7 +489,7 @@ def hydrate_logical_candidate_rows(
         source = source_by_id.get(key[1])
         if membership is not None and membership.is_related and source is not None:
             related_sources_by_role.setdefault(key[0], []).append(source)
-    assessment_score_by_key = assessment_scores_by_logical_membership(
+    assessment_truth_by_key = assessment_truth_by_logical_membership(
         db,
         organization_id=int(selection.organization_id),
         memberships=[
@@ -462,7 +514,8 @@ def hydrate_logical_candidate_rows(
                 source,
                 role=membership.logical_role,
                 evaluation=membership.evaluation,
-                assessment_score=assessment_score_by_key.get(key),
+                assessment_score=None,
+                assessment_truth=assessment_truth_by_key.get(key),
             )
             if membership.is_related
             else source
@@ -491,9 +544,12 @@ class GlobalLogicalCandidateLoader:
             self._candidate_ids_by_application.update(
                 {
                     int(application_id): int(candidate_id)
-                    for application_id, candidate_id in self.db.query(
-                        CandidateApplication.id,
-                        CandidateApplication.candidate_id,
+                    for application_id, candidate_id in apply_searchable_candidate_scope(
+                        self.db.query(
+                            CandidateApplication.id,
+                            CandidateApplication.candidate_id,
+                        ),
+                        organization_id=int(self.selection.organization_id),
                     )
                     .filter(
                         CandidateApplication.organization_id
@@ -701,7 +757,7 @@ def _project_related_top_candidate_payload(
         owner_role=owner_role,
         evaluation=application.evaluation,
     )
-    assessment_score = application.role_assessment_score
+    assessment_score = application.assessment_score_cache_100
     taali_score = application.taali_score_cache_100
     projected.update(
         {
@@ -717,6 +773,9 @@ def _project_related_top_candidate_payload(
                 "taali_score": taali_score,
                 "mode": application.score_mode_cache,
                 "score_mode": application.score_mode_cache,
+                "assessment_grading_pending": application.assessment_grading_pending,
+                "scoring_partial": application.scoring_partial,
+                "scoring_failed": application.scoring_failed,
             }
         )
     for timestamp_field in (

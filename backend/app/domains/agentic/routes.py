@@ -365,7 +365,11 @@ def list_agent_decisions(
         .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
         .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
         .outerjoin(Role, Role.id == AgentDecision.role_id)
-        .filter(AgentDecision.organization_id == current_user.organization_id)
+    )
+    query = decision_membership.apply_live_logical_decision_scope(
+        db,
+        query,
+        organization_id=int(current_user.organization_id),
     )
     if role_id is not None:
         query = query.filter(AgentDecision.role_id == int(role_id))
@@ -1382,19 +1386,18 @@ def agent_status(
     # "pending" rolls up both decisions awaiting recruiter approve/override
     # and open orchestrator questions awaiting an answer. The Review queue
     # UI surfaces both kinds in one place — counts must follow.
-    pending_decisions_count = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.organization_id == current_user.organization_id,
+    pending_decisions_count = decision_membership.apply_live_logical_decision_scope(
+        db,
+        db.query(AgentDecision).filter(
             AgentDecision.role_id == role_id,
             AgentDecision.status == "pending",
             or_(
                 AgentDecision.snoozed_until.is_(None),
                 AgentDecision.snoozed_until <= now,
             ),
-        )
-        .count()
-    )
+        ),
+        organization_id=int(current_user.organization_id),
+    ).count()
     open_needs_input_count = (
         db.query(AgentNeedsInput)
         .filter(

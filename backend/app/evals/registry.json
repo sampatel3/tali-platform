@@ -4,7 +4,7 @@
   "capabilities": {
     "candidate.pool_state": {
       "risk": "critical",
-      "ground_truth_scope": "The exact active logical-role roster and role-local current state are identical for ordinary and related roles; ATS owner/source rows are storage evidence and restrictions, never implicit membership or replacement state. Global structured and qualitative searches operate on that same logical union, preserve owner and related memberships for one physical candidate, retain related-only members, and select one deterministic latest valid assessment per role/candidate. Qualitative search covers every active member regardless of missing, low, or below-threshold prior scores; scores rank grounded matches but never define membership. Identity/state filtering cannot ground skill or experience claims, which require matching criterion-level cited evidence and exhaustive successful coverage before a zero is allowed.",
+      "ground_truth_scope": "The exact active logical-role roster and role-local current state are identical for ordinary and related roles; ATS owner/source rows are storage evidence and restrictions, never implicit membership or replacement state. Soft-deleted application evidence may remain usable for a live related-role member, but a soft-deleted person is absent from every roster, count, search, scoring queue, outbound delivery, and serialized surface, including when deletion happens after enqueue. Global structured and qualitative searches operate on that same logical union, preserve owner and related memberships for one physical candidate, retain related-only members, and select one deterministic latest valid assessment per role/candidate. Partial or failed assessment grading never falls back to a current role-fit score or an older attempt, and related transport assessments never become ordinary-role assessment truth. Related-role batch applied-date cohorts use the linked transport or direct source application's per-application timestamp, with the shared candidate timestamp only as a legacy Workable fallback. Qualitative search covers every active member regardless of missing, low, or below-threshold prior scores; scores rank grounded matches but never define membership. Identity/state filtering cannot ground skill or experience claims, which require matching criterion-level cited evidence and exhaustive successful coverage before a zero is allowed.",
       "required_surfaces": [
         "rest",
         "public_mcp",
@@ -73,10 +73,23 @@
         "tests/test_candidate_search_tool_failure_contract.py::test_canonical_role_search_fails_closed_when_current_state_is_unavailable",
         "tests/postgres/test_logical_application_scope.py::test_postgres_logical_membership_union_preserves_independent_role_state",
         "tests/test_global_related_role_application_search.py::test_mixed_roles_preserve_owner_and_related_memberships_without_duplicates",
+        "tests/test_global_related_role_application_search.py::test_related_role_pipeline_min_taali_score_uses_projected_blended_score",
+        "tests/test_global_related_role_application_search.py::test_related_role_application_lists_taali_sort_use_projected_blended_score",
+        "tests/test_global_related_role_application_search.py::test_ordinary_runtime_excludes_related_assessment_on_shared_transport",
+        "tests/test_global_related_role_application_search.py::test_global_taali_sort_keeps_incomplete_assessment_unavailable",
+        "tests/test_global_related_role_application_search.py::test_mixed_membership_pagination_uses_logical_role_as_final_tie_breaker",
         "tests/test_global_related_role_application_search.py::test_global_search_applications_matches_logical_membership_truth_in_mcp_and_taali",
         "tests/test_global_related_role_application_search.py::test_global_reader_uses_one_latest_assessment_per_logical_membership",
         "tests/test_global_related_role_application_search.py::test_global_taali_qualitative_search_uses_independent_logical_memberships",
         "tests/test_global_related_role_application_search.py::test_global_search_removes_only_deleted_related_membership",
+        "tests/test_global_related_role_application_search.py::test_deleted_people_are_absent_from_all_canonical_role_and_global_reads",
+        "tests/test_api_candidates.py::test_soft_deleted_candidate_blocks_every_raw_and_document_route",
+        "tests/test_public_api.py::test_public_assessment_detail_hides_soft_deleted_candidate",
+        "tests/test_assessment_invite_rate_limit.py::test_deleted_candidate_cancels_claimed_invite_before_provider_call",
+        "tests/test_candidate_search_population.py::test_searchable_scope_requires_live_candidate_in_same_organization",
+        "tests/test_candidate_search_population.py::test_searchable_scope_composes_with_candidate_joining_skill_filter",
+        "tests/test_candidate_search_population.py::test_searchable_scope_is_idempotent_for_layered_canonical_readers",
+        "tests/test_candidate_search_population.py::test_searchable_scope_fails_closed_if_layered_reader_changes_tenant",
         "tests/test_global_related_role_application_search.py::test_public_mcp_role_detail_compare_and_resource_follow_membership_truth",
         "tests/evals/test_search_surface_parity.py::test_grounded_qualitative_search_uses_full_active_pool_on_every_surface",
         "tests/evals/test_search_surface_parity.py::test_grounded_qualitative_exact_empty_is_identical_on_every_surface",
@@ -84,6 +97,16 @@
         "tests/test_api_requisition_job_bridge.py::test_set_job_status_keeps_related_role_lifecycle_independent",
         "tests/test_related_role_membership_contract.py::test_direct_application_promotion_closes_prior_active_lifecycle",
         "tests/test_related_role_membership_contract.py::test_explicit_seed_restores_legacy_rolling_compatibility_shadow",
+        "tests/test_logical_role_batch_routes.py::test_related_batch_applied_after_uses_transport_date_then_legacy_fallback",
+        "tests/test_logical_role_batch_routes.py::test_ordinary_batch_previews_and_org_fanout_exclude_erased_people",
+        "tests/test_batch_score_role_fetch.py::test_batch_score_role_never_fetches_or_enqueues_erased_candidates",
+        "tests/test_batch_score_role_fetch.py::test_queued_score_job_stops_before_provider_when_candidate_is_erased",
+        "tests/test_role_pipeline_counts_bulk.py::test_bulk_matches_per_role_and_counts_advanced_and_rejected",
+        "tests/test_related_role_pipeline_counts.py::test_related_counts_use_local_outcomes_and_keep_explicit_deleted_source_membership",
+        "tests/test_related_role_assessment_truth.py::test_transport_linked_assessment_drives_cycle_staleness_and_suppression",
+        "tests/test_related_role_assessment_truth.py::test_related_restart_voids_transport_linked_assessment_by_candidate",
+        "tests/test_related_role_assessment_truth.py::test_incomplete_grading_mode_matches_rest_mcp_and_chat",
+        "tests/test_related_role_assessment_truth.py::test_global_multi_related_projection_batches_runtime_truth",
         "tests/postgres/test_candidate_capability_migrations.py::test_migration_185_retries_after_committed_additive_phase",
         "tests/postgres/test_candidate_capability_migrations.py::test_migration_185_promotes_pre_snapshot_legacy_shadow",
         "tests/postgres/test_candidate_capability_migrations.py::test_migration_185_keeps_post_snapshot_legacy_shadow_archived",
@@ -136,7 +159,7 @@
     },
     "candidate.action_history": {
       "risk": "critical",
-      "ground_truth_scope": "Confirmed workflow actions are derived from the immutable occurrence ledger, ordered by occurred_at and separated from pending recommendations, failed attempts, and current-state snapshots. Physical event rows remain evidence; their model-facing application id resolves deterministically to the live role/candidate membership, or to the event-time membership after removal.",
+      "ground_truth_scope": "Confirmed workflow actions are derived from the immutable occurrence ledger, ordered by occurred_at and separated from pending recommendations, failed attempts, and current-state snapshots. Recruiter-facing activity requires the current live logical role/person subject, while immutable audit remains historical. Physical event rows remain evidence; their model-facing application id resolves deterministically to the live role/candidate membership, or to the event-time membership after removal. Delayed external actions re-authorize the live person and logical membership immediately before the irreversible provider boundary.",
       "required_surfaces": [
         "rest",
         "public_mcp",
@@ -185,13 +208,14 @@
         "tests/test_pipeline_event_idempotency.py::test_legacy_owner_event_replay_returns_existing_instead_of_colliding",
         "tests/test_pipeline_event_idempotency.py::test_legacy_related_event_is_idempotent_only_for_its_grounded_role",
         "tests/test_pipeline_event_idempotency.py::test_related_action_replay_cannot_reapply_a_legacy_event",
+        "tests/test_related_role_action_contract.py::test_delayed_related_move_cancels_when_candidate_was_deleted",
         "tests/agent_runtime_policy/test_manual_action_reader.py::test_manual_actions_are_isolated_by_logical_role_on_shared_application",
         "tests/postgres/test_candidate_capability_runtime_matrix.py::test_removed_related_membership_leaves_pool_but_keeps_role_history_on_every_surface"
       ]
     },
     "candidate.decision_history": {
       "risk": "critical",
-      "ground_truth_scope": "Agent recommendations are admitted and keyed by logical organization/role/candidate identity even when their physical evidence application is replaced or soft-deleted; an active related-role membership remains actionable while a deleted ordinary application remains blocked. Recommendations are filtered independently by created and resolved time, ordered deterministically, and never presented as proof that a workflow action completed. Policy feedback and nightly labels resolve the same role/candidate subject.",
+      "ground_truth_scope": "Agent recommendations are admitted and keyed by logical organization/role/candidate identity even when their physical evidence application is replaced or soft-deleted; an active related-role membership remains actionable while a deleted ordinary application remains blocked. Recruiter-facing queues and tools expose only live logical subjects, and every active card remains bound to its exact current membership application rather than following a replacement source. Immutable audit rows remain available after a subject is erased or removed, but candidate-derived reasoning, evidence, notes, and other PII are redacted. A recruiter's explicit discard remains suppressed until the acting logical role's own score, CV, assessment, threshold, or policy inputs materially change; physical owner/application drift cannot override that human decision, including for direct and rolling-compatible related roles. Recommendations are filtered independently by created and resolved time, ordered deterministically, and never presented as proof that a workflow action completed. Policy feedback and nightly labels resolve the same role/candidate subject.",
       "required_surfaces": [
         "rest",
         "public_mcp",
@@ -245,6 +269,15 @@
         "tests/test_decision_input_fingerprint_role_boundary.py::test_ordinary_application_snapshots_application_owned_inputs",
         "tests/test_related_role_runtime.py::test_active_related_membership_with_deleted_evidence_still_queues",
         "tests/test_related_role_runtime.py::test_related_queue_fails_closed_without_exact_live_membership",
+        "tests/test_related_role_runtime.py::test_direct_related_human_suppression_ignores_application_scores",
+        "tests/test_related_role_runtime.py::test_direct_related_human_suppression_releases_on_membership_score_change",
+        "tests/test_related_role_runtime.py::test_direct_related_human_suppression_releases_on_membership_cv_change",
+        "tests/test_related_role_runtime.py::test_direct_related_human_suppression_releases_on_threshold_change",
+        "tests/test_related_role_runtime.py::test_direct_related_removed_membership_cannot_requeue_as_ordinary",
+        "tests/test_related_role_runtime.py::test_rolling_direct_related_human_suppression_uses_membership_identity",
+        "tests/test_related_role_runtime.py::test_related_page_does_not_project_decision_from_replaced_membership",
+        "tests/test_deleted_candidate_agent_visibility.py::test_agentic_home_and_mcp_hide_deleted_or_unowned_decisions",
+        "tests/test_deleted_candidate_agent_visibility.py::test_audit_keeps_metadata_but_redacts_unavailable_candidate_content",
         "tests/test_taali_chat_role_scoped.py::test_decision_history_follows_candidate_when_related_source_changes"
       ]
     }

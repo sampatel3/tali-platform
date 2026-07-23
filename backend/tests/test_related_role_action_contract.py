@@ -7,6 +7,7 @@ boundary only; it never couples the roles' local funnel state.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -837,6 +838,39 @@ def test_related_role_note_failure_does_not_replay_confirmed_workable_move(
         .count()
         == 1
     )
+
+
+def test_delayed_related_move_cancels_when_candidate_was_deleted(client, db):
+    from app.services import workable_op_runner
+
+    _headers, _user, owner, related_roles, application = _family(client, db)
+    related = related_roles[0]
+    application.source = "workable"
+    application.workable_candidate_id = "deleted-before-related-move"
+    application.candidate.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    payload = {
+        "application_id": int(application.id),
+        "role_application_id": int(application.id),
+        "target_stage": "final-interview",
+        "acting_role_id": int(related.id),
+    }
+
+    with patch.object(
+        workable_op_runner, "_route_bullhorn_op", return_value=None
+    ), patch(
+        "app.services.workable_actions_service.move_candidate_in_workable"
+    ) as provider_move:
+        with pytest.raises(WorkableWritebackError) as blocked:
+            workable_op_runner._op_move_stage(
+                db,
+                int(owner.organization_id),
+                payload,
+            )
+
+    assert blocked.value.code == "related_role_context_invalid"
+    assert "candidate is unavailable" in blocked.value.message.lower()
+    provider_move.assert_not_called()
 
 
 def test_direct_related_membership_uses_ats_only_as_transport(client, db):

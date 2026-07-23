@@ -19,6 +19,7 @@ from ...candidate_search.application_role_scope import (
     application_outcome_expression,
     with_ats_transport,
 )
+from ...candidate_search.population import apply_live_candidate_scope
 from ...candidate_search.role_candidate_reader import (
     RoleCandidatePage,
     read_role_candidate_page,
@@ -34,6 +35,7 @@ from ...models.api_key import (
     SCOPE_SHARE_LINKS_WRITE,
 )
 from ...models.assessment import Assessment
+from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...models.share_link import ShareLink
@@ -197,6 +199,12 @@ def _public_related_application(application: Any) -> PublicApplication:
         if isinstance(application.cv_match_details, dict)
         else {}
     )
+    requirements_fit_score = details.get("requirements_match_score_100")
+    if not isinstance(requirements_fit_score, (int, float)):
+        # Match the canonical related-role projection for rolling data that
+        # predates the requirements component: the role-local fit score is the
+        # compatible fallback, never a score from the source/owner application.
+        requirements_fit_score = application.cv_match_score
     return PublicApplication(
         id=int(application.id),
         # Related roles own their workflow state. The legacy ``status`` field
@@ -214,7 +222,7 @@ def _public_related_application(application: Any) -> PublicApplication:
         role_name=(application.role.name if application.role else None),
         cv_match_score=application.cv_match_score,
         pre_screen_score_100=application.pre_screen_score_100,
-        requirements_fit_score_100=details.get("requirements_fit_score"),
+        requirements_fit_score_100=requirements_fit_score,
         taali_score_100=application.taali_score_cache_100,
         recommendation=None,
         # The public schema predates provider-neutral ATS context. Preserve its
@@ -447,14 +455,18 @@ def get_public_assessment(
     principal: ApiKey = Depends(require_scope(SCOPE_ASSESSMENTS_READ)),
     db: Session = Depends(get_db),
 ):
-    a = (
+    assessment_query = (
         db.query(Assessment)
+        .join(Candidate, Candidate.id == Assessment.candidate_id)
         .filter(
             Assessment.id == assessment_id,
             Assessment.organization_id == principal.organization_id,
         )
-        .first()
     )
+    a = apply_live_candidate_scope(
+        assessment_query,
+        organization_id=int(principal.organization_id),
+    ).first()
     if a is None:
         raise HTTPException(status_code=404, detail="Assessment not found")
     return PublicAssessment(

@@ -175,10 +175,11 @@ def test_agent_activity_route_returns_merged_feed(client):
 
 
 def test_related_role_activity_uses_event_logical_role_not_transport_role(client):
-    """A related-role action remains visible and labelled in its owning role.
+    """A live related-role action remains visible and labelled in its role.
 
     The application is deliberately persisted under the original role to model
-    an optional shared ATS transport.  Event.role_id is the product authority.
+    an optional shared ATS transport. Event.role_id identifies the product role,
+    while its explicit evaluation row remains the current membership authority.
     """
     from tests.conftest import TestingSessionLocal, auth_headers
 
@@ -198,6 +199,26 @@ def test_related_role_activity_uses_event_logical_role_not_transport_role(client
             monthly_usd_budget_cents=0,
         )
         sess.add(related)
+        sess.flush()
+        source_application = sess.get(
+            CandidateApplication,
+            seeded["application_id"],
+        )
+        assert source_application is not None
+        sess.add(
+            SisterRoleEvaluation(
+                organization_id=seeded["org_id"],
+                role_id=int(related.id),
+                candidate_id=int(source_application.candidate_id),
+                source_application_id=int(source_application.id),
+                ats_application_id=int(source_application.id),
+                status="done",
+                pipeline_stage="review",
+                application_outcome="open",
+                membership_source="test",
+                spec_fingerprint="related-activity-live-membership",
+            )
+        )
         sess.flush()
         related_event = CandidateApplicationEvent(
             application_id=seeded["application_id"],

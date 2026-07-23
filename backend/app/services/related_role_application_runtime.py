@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
+from ..candidate_search.assessment_score_truth import canonical_score_100
 from ..models.agent_decision import AgentDecision
 from ..models.assessment import Assessment
 from ..models.candidate_application import CandidateApplication
@@ -57,12 +60,15 @@ def related_role_for_application(
         .filter(
             Role.id == int(role_id),
             Role.organization_id == int(application.organization_id),
-            Role.role_kind == ROLE_KIND_SISTER,
             Role.deleted_at.is_(None),
         )
         .one_or_none()
     )
     if role is None:
+        return None
+    from .logical_role_batch_operations import is_related_role
+
+    if not is_related_role(role):
         return None
     membership = (
         db.query(SisterRoleEvaluation.id)
@@ -127,7 +133,9 @@ def role_application_is_resolved(
         )
         .one_or_none()
     )
-    if role is not None and str(role.role_kind or "") == ROLE_KIND_SISTER:
+    from .logical_role_batch_operations import is_related_role
+
+    if role is not None and is_related_role(role):
         evaluation = related_role_evaluation_for_application(
             db,
             role_id=int(role.id),
@@ -177,7 +185,9 @@ def assessment_uses_related_role_pipeline(db: Session, assessment) -> bool:
     )
     if role is None:
         return application_role_id is not None
-    if str(role.role_kind or "") == ROLE_KIND_SISTER:
+    from .logical_role_batch_operations import is_related_role
+
+    if is_related_role(role):
         return True
     return bool(
         application_role_id is not None
@@ -233,7 +243,14 @@ def lock_related_role_assessment_context(
         )
         .one_or_none()
     )
-    if role_identity is None or str(role_identity.role_kind or "") != ROLE_KIND_SISTER:
+    role_is_related = bool(
+        role_identity is not None
+        and (
+            str(role_identity.role_kind or "") == ROLE_KIND_SISTER
+            or role_identity.ats_owner_role_id is not None
+        )
+    )
+    if not role_is_related:
         # A role mismatch must never be interpreted as permission to mutate
         # the source application's owner-role pipeline.
         source_role_id = (
@@ -306,7 +323,9 @@ def lock_related_role_assessment_context(
         role_ids=role_ids,
     )
     role = locked_roles.get(int(role_id))
-    if role is None or str(role.role_kind or "") != ROLE_KIND_SISTER:
+    from .logical_role_batch_operations import is_related_role
+
+    if role is None or not is_related_role(role):
         return RelatedRoleAssessmentContext(
             handled=True,
             reason="assessment_role_unavailable",
@@ -617,27 +636,38 @@ def apply_related_role_runtime_projection(
         payload.get("id")
         or (evaluation.source_application_id if evaluation is not None else 0)
     )
+    candidate_id = int(
+        getattr(application, "candidate_id", 0)
+        or (evaluation.candidate_id if evaluation is not None else 0)
+    )
     if runtime_preloaded:
         role_assessments = list(assessments or [])
     else:
         application = (
             db.get(CandidateApplication, application_id) if application_id else None
         )
+        if application is not None:
+            candidate_id = int(application.candidate_id)
         role_assessments = (
             db.query(Assessment)
             .options(joinedload(Assessment.task))
             .filter(
                 Assessment.organization_id == int(sister_role.organization_id),
                 Assessment.role_id == int(sister_role.id),
-                Assessment.application_id == application_id,
+                Assessment.candidate_id == candidate_id,
             )
-            .order_by(Assessment.created_at.desc(), Assessment.id.desc())
+            .order_by(
+                Assessment.completed_at.desc().nullslast(),
+                Assessment.created_at.desc().nullslast(),
+                Assessment.id.desc(),
+            )
             .all()
-            if application_id
+            if candidate_id
             else []
         )
     active = [item for item in role_assessments if not bool(item.is_voided)]
     if application is not None:
+        canonical_role_fit_score = canonical_score_100(role_fit_score)
         # The physical application may belong to the ATS owner. Feed the score
         # builder a role-local view so its provenance, integrity and fallback
         # components cannot be inherited from that owner's score columns.
@@ -647,7 +677,7 @@ def apply_related_role_runtime_projection(
                 if evaluation is not None and isinstance(evaluation.details, dict)
                 else {}
             ),
-            cv_match_score=role_fit_score,
+            cv_match_score=canonical_role_fit_score,
             cv_match_scored_at=(
                 evaluation.scored_at if evaluation is not None else None
             ),
@@ -665,9 +695,9 @@ def apply_related_role_runtime_projection(
         if not completed:
             summary.update(
                 {
-                    "taali_score": role_fit_score,
-                    "role_fit_score": role_fit_score,
-                    "cv_fit_score": role_fit_score,
+                    "taali_score": canonical_role_fit_score,
+                    "role_fit_score": canonical_role_fit_score,
+                    "cv_fit_score": canonical_role_fit_score,
                     "assessment_score": None,
                     "mode": "sister_role",
                 }
@@ -757,94 +787,219 @@ def project_related_role_page(
     sister_role: Role,
     applications: list[CandidateApplication],
     payloads: list[dict],
-    assessments_preloaded: bool = False,
 ) -> list[dict]:
     """Project one candidate page with constant-count role-runtime queries."""
 
-    if not applications:
-        return payloads
-    if len(applications) != len(payloads):
-        raise ValueError("Related-role page applications and payloads must align")
-    owner_role = (
-        db.get(Role, int(sister_role.ats_owner_role_id))
-        if sister_role.ats_owner_role_id
-        else None
+    return project_related_role_pages(
+        db,
+        groups=[(sister_role, applications, payloads)],
+    )[0]
+
+
+def project_related_role_pages(
+    db: Session,
+    *,
+    groups: list[tuple[Role, list[CandidateApplication], list[dict]]],
+) -> list[list[dict]]:
+    """Project multiple related roles with a constant runtime-query count.
+
+    Global search can contain many independent related roles on one page.
+    Assessment and decision truth is therefore batched over logical
+    ``(organization, role, candidate)`` identities, rather than re-running the
+    single-role projector for every group.
+    """
+
+    if not groups:
+        return []
+    logical_rows: list[tuple[int, int, CandidateApplication]] = []
+    for role, applications, payloads in groups:
+        if len(applications) != len(payloads):
+            raise ValueError(
+                "Related-role page applications and payloads must align"
+            )
+        for application in applications:
+            if int(application.organization_id) != int(role.organization_id):
+                raise ValueError(
+                    "Related-role page application belongs to another organization"
+                )
+            logical_rows.append(
+                (int(role.organization_id), int(role.id), application)
+            )
+    if not logical_rows:
+        return [payloads for _role, _applications, payloads in groups]
+
+    organization_ids = {item[0] for item in logical_rows}
+    role_ids = {item[1] for item in logical_rows}
+    application_ids = {int(item[2].id) for item in logical_rows}
+    candidate_ids = {int(item[2].candidate_id) for item in logical_rows}
+    valid_application_keys = {
+        (organization_id, role_id, int(application.id))
+        for organization_id, role_id, application in logical_rows
+    }
+    valid_candidate_keys = {
+        (organization_id, role_id, int(application.candidate_id))
+        for organization_id, role_id, application in logical_rows
+    }
+
+    owner_role_ids = {
+        int(role.ats_owner_role_id)
+        for role, _applications, _payloads in groups
+        if role.ats_owner_role_id is not None
+    }
+    owners_by_id = (
+        {
+            int(role.id): role
+            for role in db.query(Role)
+            .filter(
+                Role.id.in_(owner_role_ids),
+                Role.organization_id.in_(organization_ids),
+            )
+            .all()
+        }
+        if owner_role_ids
+        else {}
     )
-    application_ids = [int(application.id) for application in applications]
-    evaluation_map = {
-        int(evaluation.source_application_id): evaluation
-        for evaluation in db.query(SisterRoleEvaluation).filter(
-            SisterRoleEvaluation.role_id == int(sister_role.id),
+
+    evaluation_map: dict[tuple[int, int, int], SisterRoleEvaluation] = {}
+    evaluations = (
+        db.query(SisterRoleEvaluation)
+        .options(
+            joinedload(SisterRoleEvaluation.source_application),
+            joinedload(SisterRoleEvaluation._ats_application_record),
+        )
+        .filter(
+            SisterRoleEvaluation.organization_id.in_(organization_ids),
+            SisterRoleEvaluation.role_id.in_(role_ids),
             SisterRoleEvaluation.source_application_id.in_(application_ids),
             SisterRoleEvaluation.deleted_at.is_(None),
         )
-    }
-    assessment_map: dict[int, list[Assessment]] = {}
-    if assessments_preloaded:
-        role_assessments = (
-            assessment
-            for application in applications
-            for assessment in (application.assessments or [])
-            if int(assessment.role_id or 0) == int(sister_role.id)
-            and int(assessment.organization_id or 0)
-            == int(sister_role.organization_id)
+        .all()
+    )
+    for evaluation in evaluations:
+        key = (
+            int(evaluation.organization_id),
+            int(evaluation.role_id),
+            int(evaluation.source_application_id),
         )
-    else:
-        role_assessments = iter(
-            db.query(Assessment)
-            .options(joinedload(Assessment.task))
-            .filter(
-                Assessment.organization_id == int(sister_role.organization_id),
-                Assessment.role_id == int(sister_role.id),
-                Assessment.application_id.in_(application_ids),
-            )
-            .order_by(
-                Assessment.application_id.asc(),
-                Assessment.created_at.desc(),
-                Assessment.id.desc(),
-            )
-            .all()
-        )
-    for assessment in role_assessments:
-        if assessment.application_id is not None:
-            assessment_map.setdefault(int(assessment.application_id), []).append(
-                assessment
-            )
-    if assessments_preloaded:
-        for assessments in assessment_map.values():
-            assessments.sort(
-                key=lambda assessment: (
-                    assessment.created_at.timestamp()
-                    if assessment.created_at is not None
-                    else 0.0,
-                    int(assessment.id or 0),
-                ),
-                reverse=True,
-            )
+        if key in valid_application_keys:
+            evaluation_map[key] = evaluation
 
-    from .pending_decision_projection import pending_decision_map
+    assessment_map: dict[tuple[int, int, int], list[Assessment]] = {}
+    assessments = (
+        db.query(Assessment)
+        .options(joinedload(Assessment.task))
+        .filter(
+            Assessment.organization_id.in_(organization_ids),
+            Assessment.role_id.in_(role_ids),
+            Assessment.candidate_id.in_(candidate_ids),
+        )
+        .order_by(
+            Assessment.organization_id.asc(),
+            Assessment.role_id.asc(),
+            Assessment.candidate_id.asc(),
+            Assessment.completed_at.desc().nullslast(),
+            Assessment.created_at.desc().nullslast(),
+            Assessment.id.desc(),
+        )
+        .all()
+    )
+    for assessment in assessments:
+        key = (
+            int(assessment.organization_id),
+            int(assessment.role_id),
+            int(assessment.candidate_id),
+        )
+        if key in valid_candidate_keys:
+            assessment_map.setdefault(key, []).append(assessment)
+
+    now = datetime.now(timezone.utc)
+    pending_map: dict[tuple[int, int, int], dict] = {}
+    pending_rows = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.organization_id.in_(organization_ids),
+            AgentDecision.role_id.in_(role_ids),
+            AgentDecision.application_id.in_(application_ids),
+            AgentDecision.candidate_id.in_(candidate_ids),
+            AgentDecision.status.in_(
+                ("pending", "processing", "reverted_for_feedback")
+            ),
+            or_(
+                AgentDecision.snoozed_until.is_(None),
+                AgentDecision.snoozed_until <= now,
+            ),
+        )
+        .order_by(
+            AgentDecision.organization_id.asc(),
+            AgentDecision.role_id.asc(),
+            AgentDecision.candidate_id.asc(),
+            AgentDecision.created_at.desc().nullslast(),
+            AgentDecision.id.desc(),
+        )
+        .all()
+    )
+    for decision in pending_rows:
+        application_key = (
+            int(decision.organization_id),
+            int(decision.role_id),
+            int(decision.application_id),
+        )
+        key = (
+            int(decision.organization_id),
+            int(decision.role_id),
+            int(decision.candidate_id),
+        )
+        if (
+            application_key not in valid_application_keys
+            or key not in valid_candidate_keys
+            or key in pending_map
+        ):
+            continue
+        pending_map[key] = {
+            "id": int(decision.id),
+            "decision_type": decision.decision_type,
+            "recommendation": decision.recommendation,
+            "status": decision.status,
+            "created_at": decision.created_at,
+        }
+
     from .sister_role_projection import project_sister_application
 
-    decision_map = pending_decision_map(
-        db,
-        application_ids,
-        role_id=int(sister_role.id),
-        statuses=("pending", "processing", "reverted_for_feedback"),
-    )
-    return [
-        project_sister_application(
-            payload,
-            sister_role=sister_role,
-            owner_role=owner_role,
-            evaluation=evaluation_map.get(int(application.id)),
-            db=db,
-            application=application,
-            assessments=assessment_map.get(int(application.id), []),
-            pending_decision=decision_map.get(int(application.id)),
-            runtime_preloaded=True,
+    results: list[list[dict]] = []
+    for sister_role, applications, payloads in groups:
+        organization_id = int(sister_role.organization_id)
+        role_id = int(sister_role.id)
+        owner_role = (
+            owners_by_id.get(int(sister_role.ats_owner_role_id))
+            if sister_role.ats_owner_role_id is not None
+            else None
         )
-        for application, payload in zip(applications, payloads, strict=True)
-    ]
+        results.append(
+            [
+                project_sister_application(
+                    payload,
+                    sister_role=sister_role,
+                    owner_role=owner_role,
+                    evaluation=evaluation_map.get(
+                        (organization_id, role_id, int(application.id))
+                    ),
+                    db=db,
+                    application=application,
+                    assessments=assessment_map.get(
+                        (organization_id, role_id, int(application.candidate_id)),
+                        [],
+                    ),
+                    pending_decision=pending_map.get(
+                        (organization_id, role_id, int(application.candidate_id))
+                    ),
+                    runtime_preloaded=True,
+                )
+                for application, payload in zip(
+                    applications, payloads, strict=True
+                )
+            ]
+        )
+    return results
 
 
 __all__ = [
@@ -855,6 +1010,7 @@ __all__ = [
     "assessment_uses_related_role_pipeline",
     "complete_timeout_pipeline",
     "project_related_role_page",
+    "project_related_role_pages",
     "lock_related_role_assessment_context",
     "related_role_evaluation_for_application",
     "related_role_for_application",

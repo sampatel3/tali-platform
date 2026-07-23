@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import event
+from sqlalchemy import event, text, update
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Query
 
@@ -22,7 +22,7 @@ from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.candidate_application_event import CandidateApplicationEvent
 from app.models.organization import Organization
-from app.models.role import ROLE_KIND_SISTER, Role
+from app.models.role import ROLE_KIND_SISTER, ROLE_KIND_STANDARD, Role
 from app.models.role_criterion import RoleCriterion
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.task import Task
@@ -668,6 +668,92 @@ def _role_local_fingerprints(application, role, evaluation):
     evaluation.details = {"engine_version": "2.1.0"}
 
 
+def _direct_related_membership(db):
+    """Create a related membership whose evidence row belongs to that role."""
+
+    org, _owner, owner_application, roles, evaluations = _family(
+        db,
+        related_count=1,
+    )
+    role, evaluation = roles[0], evaluations[0]
+    direct_application = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=owner_application.candidate_id,
+        role_id=role.id,
+        source="manual",
+        pipeline_stage="review",
+        pipeline_stage_source="system",
+        application_outcome="open",
+        cv_text="Direct related-role candidate evidence.",
+        pre_screen_score_100=15.0,
+        assessment_score_cache_100=20.0,
+        taali_score_cache_100=25.0,
+        cv_match_score=30.0,
+    )
+    db.add(direct_application)
+    db.flush()
+    evaluation.candidate_id = direct_application.candidate_id
+    evaluation.source_application_id = direct_application.id
+    evaluation.ats_application_id = owner_application.id
+    evaluation.role_fit_score = 85.0
+    role.auto_reject_threshold_mode = "manual"
+    _role_local_fingerprints(direct_application, role, evaluation)
+    db.commit()
+    return org, direct_application, role, evaluation
+
+
+def _human_discard(db, *, decision, organization):
+    reviewer = User(
+        email=f"direct-related-reviewer-{decision.id}@example.com",
+        hashed_password="x",
+        full_name="Reviewer",
+        organization_id=organization.id,
+        is_active=True,
+        is_verified=True,
+    )
+    db.add(reviewer)
+    db.flush()
+    decision.status = "discarded"
+    decision.resolved_at = datetime.now(timezone.utc)
+    decision.resolved_by_user_id = reviewer.id
+    db.commit()
+
+
+def _discarded_direct_related_decision(db):
+    org, application, role, evaluation = _direct_related_membership(db)
+    assert run_related_role_cycle(db, role=role)["created"] == 1
+    decision = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).one()
+    _human_discard(db, decision=decision, organization=org)
+    return org, application, role, evaluation
+
+
+def _force_rolling_related_identity(db, *, role_id: int) -> Role:
+    """Persist the mixed-version identity without ORM normalization."""
+
+    assert db.bind is not None
+    assert db.bind.dialect.name == "sqlite"
+    db.execute(text("PRAGMA ignore_check_constraints = ON"))
+    try:
+        db.execute(
+            update(Role.__table__)
+            .where(Role.id == int(role_id))
+            .values(role_kind=ROLE_KIND_STANDARD)
+        )
+        db.commit()
+    finally:
+        db.execute(text("PRAGMA ignore_check_constraints = OFF"))
+        db.commit()
+    db.expire_all()
+    role = db.get(Role, int(role_id))
+    assert role is not None
+    assert role.role_kind == ROLE_KIND_STANDARD
+    assert role.ats_owner_role_id is not None
+    return role
+
+
 def test_related_decision_staleness_tracks_threshold_and_role_inputs(db):
     _org, _owner, application, roles, evaluations = _family(db, related_count=1)
     role, evaluation = roles[0], evaluations[0]
@@ -806,6 +892,221 @@ def test_related_human_suppression_ignores_owner_scores_but_releases_on_threshol
     role.score_threshold = 75
     db.commit()
     assert run_related_role_cycle(db, role=role)["created"] == 1
+
+
+def test_direct_related_human_suppression_ignores_application_scores(db):
+    _org, application, role, _evaluation = _discarded_direct_related_decision(db)
+
+    # These columns belong to the physical application, not the related role's
+    # logical membership. Even material changes must not override a recruiter's
+    # explicit "no" for unchanged related-role evidence.
+    application.pre_screen_score_100 = 95.0
+    application.assessment_score_cache_100 = 96.0
+    application.taali_score_cache_100 = 97.0
+    application.cv_match_score = 98.0
+    db.commit()
+
+    result = run_related_role_cycle(db, role=role)
+
+    assert result["deduplicated"] == 1
+    assert db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).count() == 1
+
+
+def test_direct_related_human_suppression_releases_on_membership_score_change(db):
+    _org, application, role, evaluation = _discarded_direct_related_decision(db)
+
+    # Keep the deterministic verdict above threshold while materially changing
+    # the score owned by this related-role membership.
+    evaluation.role_fit_score = 80.0
+    db.commit()
+
+    result = run_related_role_cycle(db, role=role)
+
+    assert result["created"] == 1
+    assert db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).count() == 2
+
+
+def test_direct_related_human_suppression_releases_on_membership_cv_change(db):
+    _org, application, role, evaluation = _discarded_direct_related_decision(db)
+
+    evaluation.cv_fingerprint = text_fingerprint(
+        "Updated CV evidence used by this related-role evaluation."
+    )
+    db.commit()
+
+    result = run_related_role_cycle(db, role=role)
+
+    assert result["created"] == 1
+    assert db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).count() == 2
+
+
+def test_direct_related_human_suppression_releases_on_threshold_change(db):
+    _org, application, role, _evaluation = _discarded_direct_related_decision(db)
+
+    role.score_threshold = 75
+    db.commit()
+
+    result = run_related_role_cycle(db, role=role)
+
+    assert result["created"] == 1
+    assert db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).count() == 2
+
+
+def test_rolling_direct_related_human_suppression_uses_membership_identity(db):
+    from app.actions import queue_decision
+
+    org, application, role, evaluation = _discarded_direct_related_decision(db)
+    assert role.ats_owner_role_id is not None
+    decision = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).one()
+    evidence = dict(decision.evidence or {})
+    for marker in (
+        "related_role_id",
+        "related_role_membership_id",
+        "shared_ats_application",
+    ):
+        evidence.pop(marker, None)
+    decision.evidence = evidence
+    db.commit()
+    role = _force_rolling_related_identity(db, role_id=int(role.id))
+
+    application.pre_screen_score_100 = 95.0
+    application.assessment_score_cache_100 = 96.0
+    application.taali_score_cache_100 = 97.0
+    application.cv_match_score = 98.0
+    # The physical row's terminal state is equally non-authoritative. The
+    # live membership remains open and must control queue admission.
+    application.pipeline_stage = "advanced"
+    application.application_outcome = "rejected"
+    first_retry = AgentRun(
+        organization_id=org.id,
+        role_id=role.id,
+        trigger="manual",
+        status="running",
+        model_version="test",
+        prompt_version="test",
+    )
+    db.add(first_retry)
+    db.commit()
+
+    suppressed = queue_decision.run(
+        db,
+        Actor.agent(int(first_retry.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(application.id),
+        decision_type="advance_to_interview",
+        reasoning="Rolling-compatible related-role decision.",
+        evidence=dict(decision.evidence or {}),
+        model_version="test",
+        prompt_version="test",
+    )
+    assert suppressed.id == decision.id
+    assert suppressed.status == "discarded"
+
+    evaluation.role_fit_score = 80.0
+    second_retry = AgentRun(
+        organization_id=org.id,
+        role_id=role.id,
+        trigger="manual",
+        status="running",
+        model_version="test",
+        prompt_version="test",
+    )
+    db.add(second_retry)
+    db.commit()
+
+    refreshed_evidence = dict(decision.evidence or {})
+    refreshed_evidence.update(
+        {
+            "related_role_id": int(role.id),
+            "role_fit_score": 80.0,
+            "taali_score": 80.0,
+        }
+    )
+    fresh = queue_decision.run(
+        db,
+        Actor.agent(int(second_retry.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(application.id),
+        decision_type="advance_to_interview",
+        reasoning="Membership-owned score changed materially.",
+        evidence=refreshed_evidence,
+        model_version="test",
+        prompt_version="test",
+    )
+    db.commit()
+
+    assert fresh.id != decision.id
+    assert fresh.status == "pending"
+    db.refresh(role)
+    assert role.role_kind == ROLE_KIND_STANDARD
+    assert role.ats_owner_role_id is not None
+
+
+def test_direct_related_removed_membership_cannot_requeue_as_ordinary(db):
+    from app.actions import queue_decision
+    from app.actions.queue_decision import _human_suppressed
+
+    org, application, role, evaluation = _discarded_direct_related_decision(db)
+    decision = db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).one()
+    evaluation.deleted_at = datetime.now(timezone.utc)
+    agent_run = AgentRun(
+        organization_id=org.id,
+        role_id=role.id,
+        trigger="manual",
+        status="running",
+        model_version="test",
+        prompt_version="test",
+    )
+    db.add(agent_run)
+    db.commit()
+
+    suppressed = _human_suppressed(
+        db,
+        role_id=int(role.id),
+        application_id=int(application.id),
+        decision_type="advance_to_interview",
+    )
+    assert suppressed is not None
+    assert suppressed.id == decision.id
+
+    with pytest.raises(HTTPException) as exc:
+        queue_decision.run(
+            db,
+            Actor.agent(int(agent_run.id)),
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            application_id=int(application.id),
+            decision_type="advance_to_interview",
+            reasoning="Membership was removed.",
+            model_version="test",
+            prompt_version="test",
+        )
+
+    assert exc.value.status_code == 404
+    assert db.query(AgentDecision).filter(
+        AgentDecision.role_id == role.id,
+        AgentDecision.application_id == application.id,
+    ).count() == 1
 
 
 def test_threshold_reconcile_uses_only_related_membership_score_and_state(db):
@@ -1621,6 +1922,48 @@ def test_owner_manual_advance_does_not_mutate_related_role_state(db):
         .filter(SisterRoleEvaluation.source_application_id == application.id)
         .all()
     } == {"review"}
+
+
+def test_related_page_does_not_project_decision_from_replaced_membership(db):
+    from app.services.related_role_application_runtime import (
+        project_related_role_page,
+    )
+
+    _org, owner, application_a, roles, evaluations = _family(
+        db,
+        related_count=1,
+    )
+    related = roles[0]
+    evaluation = evaluations[0]
+    stale_decision = _pending_decision(
+        db,
+        role=related,
+        application=application_a,
+    )
+    application_b = CandidateApplication(
+        organization_id=int(owner.organization_id),
+        candidate_id=int(application_a.candidate_id),
+        role_id=int(related.id),
+        source="manual",
+        pipeline_stage="review",
+        application_outcome="open",
+        cv_text=application_a.cv_text,
+    )
+    db.add(application_b)
+    db.flush()
+    evaluation.source_application_id = int(application_b.id)
+    evaluation.ats_application_id = int(application_a.id)
+    db.commit()
+
+    [projected] = project_related_role_page(
+        db,
+        sister_role=related,
+        applications=[application_b],
+        payloads=[{"id": int(application_b.id)}],
+    )
+
+    assert stale_decision.application_id == application_a.id
+    assert projected["pending_decision"] is None
 
 
 def test_related_advance_uses_owner_workable_stage_configuration(db, monkeypatch):

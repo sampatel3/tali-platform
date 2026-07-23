@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
+from ...candidate_search.population import apply_searchable_candidate_scope
 from ...models.agent_decision import AgentDecision
 from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
@@ -973,7 +974,7 @@ def _invite_delivery_extra(
             Assessment.invite_opened_at.isnot(None),
         )
     )
-    rows = (
+    query = (
         db.query(
             CandidateApplication.role_id,
             func.count(func.distinct(CandidateApplication.id)),
@@ -987,7 +988,13 @@ def _invite_delivery_extra(
                 Assessment.is_voided.is_(False),
             ),
         )
-        .filter(
+    )
+    query = apply_searchable_candidate_scope(
+        query,
+        organization_id=int(organization_id),
+    )
+    rows = (
+        query.filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id.in_(role_ids),
             CandidateApplication.deleted_at.is_(None),
@@ -1033,13 +1040,18 @@ def role_pipeline_counts(
     # shows in the funnel as 'advanced' for alignment — the furthest stage wins —
     # regardless of Tali's pipeline_stage (which stays 'applied' for the backend).
     ph_expr = _post_handover_sql()
+    open_query = db.query(
+        CandidateApplication.pipeline_stage,
+        scored_expr,
+        ph_expr,
+        func.count(CandidateApplication.id),
+    )
+    open_query = apply_searchable_candidate_scope(
+        open_query,
+        organization_id=int(organization_id),
+    )
     rows = (
-        db.query(
-            CandidateApplication.pipeline_stage,
-            scored_expr,
-            ph_expr,
-            func.count(CandidateApplication.id),
-        )
+        open_query
         .filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id == role_id,
@@ -1071,9 +1083,13 @@ def role_pipeline_counts(
             counts[bucket] += int(total or 0)
     # `rejected` is an application_outcome, orthogonal to pipeline_stage, so it is
     # counted across all stages rather than via the open-stage query above.
+    rejected_query = db.query(func.count(CandidateApplication.id))
+    rejected_query = apply_searchable_candidate_scope(
+        rejected_query,
+        organization_id=int(organization_id),
+    )
     rejected_total = (
-        db.query(func.count(CandidateApplication.id))
-        .filter(
+        rejected_query.filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id == role_id,
             CandidateApplication.deleted_at.is_(None),
@@ -1087,10 +1103,16 @@ def role_pipeline_counts(
     # chip — the frontend used to derive it as scored − pending, which
     # over-counted resolved candidates + the cv_match_scored_at basis (which
     # includes pre-screen-filtered candidates with no real score).
-    not_yet_decided = (
+    not_yet_decided_query = (
         db.query(func.count(CandidateApplication.id))
         .join(Role, Role.id == CandidateApplication.role_id)
-        .filter(
+    )
+    not_yet_decided_query = apply_searchable_candidate_scope(
+        not_yet_decided_query,
+        organization_id=int(organization_id),
+    )
+    not_yet_decided = (
+        not_yet_decided_query.filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id == role_id,
             CandidateApplication.deleted_at.is_(None),
@@ -1180,14 +1202,19 @@ def role_pipeline_counts_bulk(
     # Workable-advanced candidates display as 'advanced' (alignment) regardless of
     # Tali's pipeline_stage — see role_pipeline_counts().
     ph_expr = _post_handover_sql()
+    open_query = db.query(
+        CandidateApplication.role_id,
+        CandidateApplication.pipeline_stage,
+        scored_expr,
+        ph_expr,
+        func.count(CandidateApplication.id),
+    )
+    open_query = apply_searchable_candidate_scope(
+        open_query,
+        organization_id=int(organization_id),
+    )
     open_rows = (
-        db.query(
-            CandidateApplication.role_id,
-            CandidateApplication.pipeline_stage,
-            scored_expr,
-            ph_expr,
-            func.count(CandidateApplication.id),
-        )
+        open_query
         .filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id.in_(role_ids),
@@ -1222,11 +1249,16 @@ def role_pipeline_counts_bulk(
 
     # `rejected` is an application_outcome, orthogonal to pipeline_stage —
     # counted across all stages, mirroring role_pipeline_counts().
+    rejected_query = db.query(
+        CandidateApplication.role_id,
+        func.count(CandidateApplication.id),
+    )
+    rejected_query = apply_searchable_candidate_scope(
+        rejected_query,
+        organization_id=int(organization_id),
+    )
     rejected_rows = (
-        db.query(
-            CandidateApplication.role_id,
-            func.count(CandidateApplication.id),
-        )
+        rejected_query
         .filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id.in_(role_ids),
@@ -1244,10 +1276,19 @@ def role_pipeline_counts_bulk(
     # 'not_yet_decided' per role — scored, open candidates with NO agent decision
     # (pending OR resolved). The TRUE count for the funnel's chip (see the
     # single-role helper). One batched query, NOT EXISTS against AgentDecision.
-    nyd_rows = (
-        db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
+    nyd_query = (
+        db.query(
+            CandidateApplication.role_id,
+            func.count(CandidateApplication.id),
+        )
         .join(Role, Role.id == CandidateApplication.role_id)
-        .filter(
+    )
+    nyd_query = apply_searchable_candidate_scope(
+        nyd_query,
+        organization_id=int(organization_id),
+    )
+    nyd_rows = (
+        nyd_query.filter(
             CandidateApplication.organization_id == organization_id,
             CandidateApplication.role_id.in_(role_ids),
             CandidateApplication.deleted_at.is_(None),

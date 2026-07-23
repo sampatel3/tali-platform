@@ -18,7 +18,6 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...platform.request_context import get_request_id
-from ...services.related_role_application_runtime import project_related_role_page
 from .application_search_support import (
     APPLICATION_OUTCOME_VALUES,
     PIPELINE_STAGE_VALUES,
@@ -35,7 +34,7 @@ from .application_search_support import (
     release_metadata,
     run_search_for_route,
 )
-from .role_support import application_list_payload
+from .global_application_runtime_projection import project_global_application_runtime
 
 logger = logging.getLogger("taali.applications")
 
@@ -183,9 +182,10 @@ def list_applications_global_data(
             else (CandidateApplication,)
         )
         latest_assessment_id = (
-            db.query(func.max(Assessment.id))
+            db.query(Assessment.id)
             .filter(
-                Assessment.application_id == CandidateApplication.id,
+                Assessment.organization_id == int(current_user.organization_id),
+                Assessment.candidate_id == CandidateApplication.candidate_id,
                 Assessment.is_voided.isnot(True),
                 *(
                     (
@@ -196,6 +196,11 @@ def list_applications_global_data(
                     else ()
                 ),
             )
+            .order_by(
+                Assessment.created_at.desc().nullslast(),
+                Assessment.id.desc(),
+            )
+            .limit(1)
             .correlate(*assessment_correlates)
             .scalar_subquery()
         )
@@ -394,9 +399,6 @@ def list_applications_global_data(
                 joinedload(CandidateApplication.organization),
                 joinedload(CandidateApplication.role),
                 selectinload(CandidateApplication.interviews),
-                selectinload(CandidateApplication.assessments).joinedload(
-                    Assessment.task
-                ),
             )
             .filter(CandidateApplication.id.in_(page_ids))
             .all()
@@ -404,40 +406,13 @@ def list_applications_global_data(
         rows_by_id = {int(item.id): item for item in fetched}
     rows = [rows_by_id[app_id] for _, app_id in page_keys if app_id in rows_by_id]
     hydrated_keys = [key for key in page_keys if key[1] in rows_by_id]
-    items = [
-        application_list_payload(app, include_cv_text=include_cv_text)
-        for app in rows
-    ]
-    if logical_selection.active and hydrated_keys:
-        memberships = logical_selection.resolve_memberships(db, hydrated_keys)
-        related_groups: dict[int, list[int]] = {}
-        for index, (key, item) in enumerate(zip(hydrated_keys, items, strict=True)):
-            membership = memberships.get(key)
-            if membership is None:
-                continue
-            item["logical_membership_id"] = membership.public_id
-            item["logical_role_id"] = int(membership.logical_role.id)
-            item["role_id"] = int(membership.logical_role.id)
-            item["role_name"] = membership.logical_role.name
-            if membership.is_related and membership.evaluation is not None:
-                related_groups.setdefault(int(membership.logical_role.id), []).append(
-                    index
-                )
-        for related_role_id, indices in related_groups.items():
-            related_role = logical_selection.roles_by_id[related_role_id]
-            projected = project_related_role_page(
-                db,
-                sister_role=related_role,
-                applications=[rows[index] for index in indices],
-                payloads=[items[index] for index in indices],
-                assessments_preloaded=True,
-            )
-            for index, payload in zip(indices, projected, strict=True):
-                payload["logical_membership_id"] = (
-                    f"{related_role_id}:{int(rows[index].id)}"
-                )
-                payload["logical_role_id"] = related_role_id
-                items[index] = payload
+    items = project_global_application_runtime(
+        db,
+        logical_selection=logical_selection,
+        hydrated_keys=hydrated_keys,
+        rows=rows,
+        include_cv_text=include_cv_text,
+    )
     if nl_query_clean and nl_verification_payload:
         verification_by_id = {
             int(item["application_id"]): item for item in nl_verification_payload

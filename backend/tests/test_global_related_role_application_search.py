@@ -8,11 +8,20 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import patch
 
+import pytest
 from sqlalchemy import text
 
+from app.agent_chat.tools import dispatch_tool as dispatch_agent_chat_tool
 from app.candidate_search.grounded_evidence import CriterionVerdict, Evidence
+from app.candidate_search.role_scope import resolve_candidate_role_scope
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
 from app.candidate_search.global_candidate_reader import read_global_candidate_page
+from app.domains.public_api.router import (
+    list_role_applications as list_public_role_applications,
+    role_metrics as public_role_metrics,
+)
+from app.mcp import handlers as mcp_handlers
+from app.mcp.operations import get_recruiting_overview
 from app.mcp import server as mcp_server
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
@@ -21,6 +30,10 @@ from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
 from app.services.taali_scoring import compute_taali_score
+from app.services.logical_role_application_authority import (
+    LogicalRoleApplicationAuthorizationError,
+    authorize_logical_role_application,
+)
 from app.taali_chat import tool_registry as taali_tools
 from tests.conftest import auth_headers
 
@@ -269,6 +282,7 @@ def _add_conflicting_assessment_truth(db, world: dict) -> None:
                 status=AssessmentStatus.COMPLETED,
                 completed_at=now,
                 assessment_score=22,
+                score_breakdown={"score_components": {"role_fit_score": 41}},
                 is_voided=False,
             ),
             Assessment(
@@ -279,6 +293,7 @@ def _add_conflicting_assessment_truth(db, world: dict) -> None:
                 status=AssessmentStatus.COMPLETED,
                 completed_at=now,
                 assessment_score=88,
+                score_breakdown={"score_components": {"role_fit_score": 88}},
                 is_voided=False,
             ),
             Assessment(
@@ -289,11 +304,43 @@ def _add_conflicting_assessment_truth(db, world: dict) -> None:
                 status=AssessmentStatus.COMPLETED,
                 completed_at=now,
                 assessment_score=77,
+                score_breakdown={"score_components": {"role_fit_score": 77}},
                 is_voided=False,
             ),
         ]
     )
     db.commit()
+
+
+def _add_related_role_assessment(
+    db,
+    world: dict,
+    *,
+    application: CandidateApplication,
+    assessment_score: float,
+    persisted_taali_score: float | None,
+    frozen_role_fit_score: float | None = None,
+    assessment_application: CandidateApplication | None = None,
+) -> Assessment:
+    assessment = Assessment(
+        organization_id=int(world["user"].organization_id),
+        candidate_id=int(application.candidate_id),
+        role_id=int(world["related"].id),
+        application_id=int((assessment_application or application).id),
+        status=AssessmentStatus.COMPLETED,
+        completed_at=datetime.now(timezone.utc),
+        assessment_score=assessment_score,
+        taali_score=persisted_taali_score,
+        score_breakdown=(
+            {"score_components": {"role_fit_score": frozen_role_fit_score}}
+            if frozen_role_fit_score is not None
+            else None
+        ),
+        is_voided=False,
+    )
+    db.add(assessment)
+    db.commit()
+    return assessment
 
 
 def test_global_reader_uses_one_latest_assessment_per_logical_membership(client, db):
@@ -562,6 +609,190 @@ def test_related_role_global_list_uses_local_state_score_counts_and_pagination(
     ]
 
 
+def test_related_role_pipeline_min_taali_score_uses_projected_blended_score(
+    client, db
+):
+    world = _world(client, db)
+    presented = world["direct"]
+    transport = CandidateApplication(
+        organization_id=int(world["user"].organization_id),
+        candidate_id=int(presented.candidate_id),
+        role_id=int(world["owner"].id),
+        source="manual",
+        status="applied",
+        pipeline_stage="review",
+        application_outcome="open",
+    )
+    db.add(transport)
+    db.flush()
+    membership = (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.role_id == int(world["related"].id),
+            SisterRoleEvaluation.source_application_id == int(presented.id),
+        )
+        .one()
+    )
+    membership.ats_application_id = int(transport.id)
+    # The displayed one-decimal truth is 70.5. Comparing the raw 70.45
+    # persisted float would incorrectly exclude this candidate at 70.5.
+    _add_related_role_assessment(
+        db,
+        world,
+        application=presented,
+        assessment_score=99,
+        persisted_taali_score=70.45,
+        frozen_role_fit_score=1,
+        assessment_application=transport,
+    )
+
+    response = client.get(
+        f"/api/v1/roles/{int(world['related'].id)}/pipeline",
+        params={
+            "search": "direct-related-member",
+            "min_taali_score": 70.5,
+        },
+        headers=world["headers"],
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["total"] == 1
+    assert payload["stage_counts"]["all"] == 1
+    assert [item["id"] for item in payload["items"]] == [int(presented.id)]
+    assert payload["items"][0]["taali_score"] == 70.5
+    assert payload["items"][0]["valid_assessment_id"] is not None
+    applications_response = client.get(
+        f"/api/v1/roles/{int(world['related'].id)}/applications",
+        params={"sort_by": "taali_score", "sort_order": "desc"},
+        headers=world["headers"],
+    )
+    assert applications_response.status_code == 200, applications_response.text
+    projected = {
+        int(item["id"]): item for item in applications_response.json()
+    }[int(presented.id)]
+    assert projected["taali_score"] == 70.5
+    assert projected["valid_assessment_id"] == payload["items"][0][
+        "valid_assessment_id"
+    ]
+
+    excluded = client.get(
+        f"/api/v1/roles/{int(world['related'].id)}/pipeline",
+        params={
+            "search": "direct-related-member",
+            "min_taali_score": 70.6,
+        },
+        headers=world["headers"],
+    )
+    assert excluded.status_code == 200, excluded.text
+    assert excluded.json()["total"] == 0
+
+
+def test_related_role_application_lists_taali_sort_use_projected_blended_score(
+    client, db
+):
+    world = _world(client, db)
+    shared = world["shared"]
+    soft = world["soft"]
+    shared_assessment = _add_related_role_assessment(
+        db,
+        world,
+        application=shared,
+        assessment_score=100,
+        # Persisted lifecycle truth deliberately conflicts with the legacy
+        # assessment/frozen-fit recomputation (70.5).
+        persisted_taali_score=12.3,
+        frozen_role_fit_score=41,
+    )
+    soft_assessment = _add_related_role_assessment(
+        db,
+        world,
+        application=soft,
+        assessment_score=100,
+        # Legacy rows have no persisted score. Their fallback is frozen on this
+        # attempt: (100 + 40) / 2 = 70, not current evaluation fit 88.
+        persisted_taali_score=None,
+        frozen_role_fit_score=40,
+    )
+
+    applications_response = client.get(
+        f"/api/v1/roles/{int(world['related'].id)}/applications",
+        params={"sort_by": "taali_score", "sort_order": "desc"},
+        headers=world["headers"],
+    )
+    pipeline_response = client.get(
+        f"/api/v1/roles/{int(world['related'].id)}/pipeline",
+        params={"sort_by": "taali_score", "sort_order": "desc"},
+        headers=world["headers"],
+    )
+
+    expected_ids = [int(world["direct"].id), int(soft.id), int(shared.id)]
+    expected_scores = [77, 70, 12.3]
+    assert applications_response.status_code == 200, applications_response.text
+    assert pipeline_response.status_code == 200, pipeline_response.text
+    assert [item["id"] for item in applications_response.json()] == expected_ids
+    assert [
+        item["taali_score"] for item in applications_response.json()
+    ] == expected_scores
+    assert [item["id"] for item in pipeline_response.json()["items"]] == expected_ids
+    assert [
+        item["taali_score"] for item in pipeline_response.json()["items"]
+    ] == expected_scores
+
+    # Stable offset pages need a unique final key after equal score + timestamp
+    # ties. Exercise both role endpoints, not just their unpaginated first page.
+    shared_assessment.taali_score = 77
+    soft_assessment.taali_score = 77
+    tied_at = datetime(2026, 7, 22, 12, 0, tzinfo=timezone.utc)
+    evaluations = (
+        db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == int(world["related"].id))
+        .all()
+    )
+    for evaluation in evaluations:
+        evaluation.role_fit_score = 77
+        evaluation.created_at = tied_at
+    db.commit()
+
+    expected_tied_ids = sorted(
+        (
+            int(world["shared"].id),
+            int(world["soft"].id),
+            int(world["direct"].id),
+        ),
+        reverse=True,
+    )
+    application_page_ids = []
+    pipeline_page_ids = []
+    for offset in range(3):
+        application_page = client.get(
+            f"/api/v1/roles/{int(world['related'].id)}/applications",
+            params={
+                "sort_by": "taali_score",
+                "sort_order": "desc",
+                "limit": 1,
+                "offset": offset,
+            },
+            headers=world["headers"],
+        )
+        pipeline_page = client.get(
+            f"/api/v1/roles/{int(world['related'].id)}/pipeline",
+            params={
+                "sort_by": "taali_score",
+                "sort_order": "desc",
+                "limit": 1,
+                "offset": offset,
+            },
+            headers=world["headers"],
+        )
+        assert application_page.status_code == 200, application_page.text
+        assert pipeline_page.status_code == 200, pipeline_page.text
+        application_page_ids.append(application_page.json()[0]["id"])
+        pipeline_page_ids.append(pipeline_page.json()["items"][0]["id"])
+    assert application_page_ids == expected_tied_ids
+    assert pipeline_page_ids == expected_tied_ids
+
+
 def test_mixed_roles_preserve_owner_and_related_memberships_without_duplicates(
     client, db
 ):
@@ -608,6 +839,172 @@ def test_mixed_roles_preserve_owner_and_related_memberships_without_duplicates(
     assert by_role[owner_id]["taali_score"] == 96
     assert by_role[related_id]["pipeline_stage"] == "review"
     assert by_role[related_id]["taali_score"] == 41
+
+
+def test_ordinary_runtime_excludes_related_assessment_on_shared_transport(
+    client, db
+):
+    world = _world(client, db)
+    owner_id = int(world["owner"].id)
+    related_id = int(world["related"].id)
+    shared = world["shared"]
+    related_assessment = _add_related_role_assessment(
+        db,
+        world,
+        application=shared,
+        assessment_score=91,
+        persisted_taali_score=86,
+        frozen_role_fit_score=81,
+        # The related assessment deliberately shares the ordinary owner's
+        # physical application as its transport metadata.
+        assessment_application=shared,
+    )
+
+    global_response = client.get(
+        "/api/v1/applications",
+        params={
+            "role_ids": f"{owner_id},{related_id}",
+            "search": "shared-owner-and-related",
+            "limit": 20,
+        },
+        headers=world["headers"],
+    )
+    owner_response = client.get(
+        f"/api/v1/roles/{owner_id}/applications",
+        params={"search": "shared-owner-and-related"},
+        headers=world["headers"],
+    )
+
+    assert global_response.status_code == 200, global_response.text
+    shared_rows = {
+        int(item["logical_role_id"]): item
+        for item in global_response.json()["items"]
+        if int(item["id"]) == int(shared.id)
+    }
+    assert shared_rows[owner_id]["score_summary"]["assessment_id"] is None
+    assert shared_rows[owner_id]["score_summary"]["assessment_status"] is None
+    assert (
+        shared_rows[related_id]["score_summary"]["assessment_id"]
+        == int(related_assessment.id)
+    )
+    assert shared_rows[related_id]["taali_score"] == 86
+
+    assert owner_response.status_code == 200, owner_response.text
+    owner_row = next(
+        item
+        for item in owner_response.json()
+        if int(item["id"]) == int(shared.id)
+    )
+    assert owner_row["score_summary"]["assessment_id"] is None
+    assert owner_row["score_summary"]["assessment_status"] is None
+
+
+def test_global_taali_sort_keeps_incomplete_assessment_unavailable(
+    client, db
+):
+    world = _world(client, db)
+    related_id = int(world["related"].id)
+    shared = world["shared"]
+    evaluations = {
+        int(evaluation.source_application_id): evaluation
+        for evaluation in db.query(SisterRoleEvaluation)
+        .filter(SisterRoleEvaluation.role_id == related_id)
+        .all()
+    }
+    evaluations[int(shared.id)].role_fit_score = 99
+    evaluations[int(world["direct"].id)].role_fit_score = 80
+    evaluations[int(world["soft"].id)].role_fit_score = 20
+    partial = _add_related_role_assessment(
+        db,
+        world,
+        application=shared,
+        assessment_score=99,
+        persisted_taali_score=99,
+        frozen_role_fit_score=99,
+    )
+    partial.scoring_partial = True
+    db.commit()
+
+    global_response = client.get(
+        "/api/v1/applications",
+        params={
+            "role_id": related_id,
+            "sort_by": "taali_score",
+            "sort_order": "desc",
+            "limit": 20,
+        },
+        headers=world["headers"],
+    )
+    role_response = client.get(
+        f"/api/v1/roles/{related_id}/applications",
+        params={"sort_by": "taali_score", "sort_order": "desc"},
+        headers=world["headers"],
+    )
+
+    assert global_response.status_code == 200, global_response.text
+    assert role_response.status_code == 200, role_response.text
+    expected_ids = [
+        int(world["direct"].id),
+        int(world["soft"].id),
+        int(shared.id),
+    ]
+    assert [
+        int(item["id"]) for item in global_response.json()["items"]
+    ] == expected_ids
+    assert [int(item["id"]) for item in role_response.json()] == expected_ids
+    assert global_response.json()["items"][-1]["taali_score"] is None
+    assert (
+        global_response.json()["items"][-1]["score_mode"]
+        == "rubric_grading_pending"
+    )
+
+
+def test_mixed_membership_pagination_uses_logical_role_as_final_tie_breaker(
+    client, db
+):
+    world = _world(client, db)
+    owner_id = int(world["owner"].id)
+    related_id = int(world["related"].id)
+    shared = world["shared"]
+    tied_at = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    shared.taali_score_cache_100 = 50
+    shared.pre_screen_score_100 = 50
+    shared.created_at = tied_at
+    evaluation = (
+        db.query(SisterRoleEvaluation)
+        .filter(
+            SisterRoleEvaluation.role_id == related_id,
+            SisterRoleEvaluation.source_application_id == int(shared.id),
+        )
+        .one()
+    )
+    evaluation.role_fit_score = 50
+    evaluation.created_at = tied_at
+    db.commit()
+
+    def paged_role_ids(sort_order: str) -> list[int]:
+        role_ids: list[int] = []
+        for offset in range(2):
+            response = client.get(
+                "/api/v1/applications",
+                params={
+                    "role_ids": f"{owner_id},{related_id}",
+                    "search": "shared-owner-and-related",
+                    "sort_by": "taali_score",
+                    "sort_order": sort_order,
+                    "limit": 1,
+                    "offset": offset,
+                },
+                headers=world["headers"],
+            )
+            assert response.status_code == 200, response.text
+            assert response.json()["total"] == 2
+            [item] = response.json()["items"]
+            role_ids.append(int(item["logical_role_id"]))
+        return role_ids
+
+    assert paged_role_ids("desc") == [related_id, owner_id]
+    assert paged_role_ids("asc") == [owner_id, related_id]
 
 
 def test_mixed_role_nl_results_expand_back_to_logical_memberships(client, db):
@@ -835,6 +1232,315 @@ def test_global_search_removes_only_deleted_related_membership(
         )
         == []
     )
+
+
+def test_deleted_people_are_absent_from_all_canonical_role_and_global_reads(
+    client,
+    db,
+):
+    """Person erasure overrides both ordinary and related live memberships.
+
+    A deleted application may remain evidence for a related role, but a
+    deleted ``Candidate`` may not appear in any candidate roster, count, text
+    search, or serialized response. The same shared readers back REST, public
+    API, MCP, Taali Chat, and Agent Chat, so this single oracle checks their
+    parity without provider calls.
+    """
+
+    world = _world(client, db)
+    user = world["user"]
+    owner = world["owner"]
+    related = world["related"]
+    ordinary_deleted = world["owner_only"]
+    related_deleted = world["direct"]
+    deleted_names = {
+        str(ordinary_deleted.candidate.full_name),
+        str(related_deleted.candidate.full_name),
+    }
+    deleted_emails = {
+        str(ordinary_deleted.candidate.email),
+        str(related_deleted.candidate.email),
+    }
+    ordinary_deleted.candidate.deleted_at = datetime.now(timezone.utc)
+    related_deleted.candidate.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+
+    owner_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(user.organization_id),
+        role_id=int(owner.id),
+    )
+    related_scope = resolve_candidate_role_scope(
+        db,
+        organization_id=int(user.organization_id),
+        role_id=int(related.id),
+    )
+    assert owner_scope.roster_size(db) == 1
+    assert related_scope.roster_size(db) == 2
+
+    global_page = read_global_candidate_page(
+        db,
+        organization_id=int(user.organization_id),
+        score_field="taali_score_cache_100",
+        sort_field="created_at",
+        sort_order="desc",
+        min_score=None,
+        pipeline_stage=None,
+        application_outcome=None,
+        q=None,
+        limit=100,
+        offset=0,
+        limit_ceiling=100,
+        prioritize_advanced=False,
+    )
+    assert global_page.total == 4
+    assert {
+        int(application.id) for application in global_page.applications
+    }.isdisjoint({int(ordinary_deleted.id), int(related_deleted.id)})
+    # A live person with a soft-deleted evidence application remains a valid
+    # related-role member; only person deletion is absolute.
+    assert (
+        f"{int(related.id)}:{int(world['soft'].id)}"
+        in global_page.logical_membership_ids
+    )
+
+    shared_rest = client.get(
+        "/api/v1/applications",
+        params={
+            "role_ids": f"{int(owner.id)},{int(related.id)}",
+            "application_outcome": "all",
+            "limit": 50,
+        },
+        headers=world["headers"],
+    )
+    assert shared_rest.status_code == 200, shared_rest.text
+    assert shared_rest.json()["total"] == 3
+    assert {
+        int(item["id"]) for item in shared_rest.json()["items"]
+    }.isdisjoint({int(ordinary_deleted.id), int(related_deleted.id)})
+
+    listed_roles = {
+        int(item["role_id"]): item
+        for item in mcp_handlers.list_roles(
+            db,
+            user,
+            include_stage_counts=True,
+        )
+    }
+    owner_detail = mcp_handlers.get_role(db, user, role_id=int(owner.id))
+    related_detail = mcp_handlers.get_role(db, user, role_id=int(related.id))
+    for payload, expected_total in (
+        (listed_roles[int(owner.id)], 1),
+        (owner_detail, 1),
+        (listed_roles[int(related.id)], 2),
+        (related_detail, 2),
+    ):
+        assert payload["applications_count"] == expected_total
+    assert owner_detail["stage_counts"]["advanced"] == 1
+    assert related_detail["stage_counts"]["review"] == 1
+    assert related_detail["stage_counts"]["applied"] == 1
+
+    for role, expected_total in ((owner, 1), (related, 2)):
+        recruiting_overview = get_recruiting_overview(
+            db,
+            user,
+            role_id=int(role.id),
+        )
+        assert recruiting_overview["applications"]["total"] == expected_total
+        assert recruiting_overview["candidates"]["total"] == expected_total
+
+        public_metrics = public_role_metrics(
+            role_id=int(role.id),
+            principal=type(
+                "PublicMetricsPrincipal",
+                (),
+                {"organization_id": int(user.organization_id)},
+            )(),
+            db=db,
+        )
+        assert public_metrics.total_applications == expected_total
+
+    jobs = client.get(
+        "/api/v1/roles",
+        params={"include_pipeline_stats": True, "limit": 500},
+        headers=world["headers"],
+    )
+    assert jobs.status_code == 200, jobs.text
+    jobs_by_id = {int(row["id"]): row for row in jobs.json()}
+    assert jobs_by_id[int(owner.id)]["applications_count"] == 1
+    assert jobs_by_id[int(owner.id)]["active_candidates_count"] == 1
+    assert jobs_by_id[int(related.id)]["applications_count"] == 2
+    assert jobs_by_id[int(related.id)]["active_candidates_count"] == 2
+
+    for role, expected_total in ((owner, 1), (related, 2)):
+        role_detail = client.get(
+            f"/api/v1/roles/{int(role.id)}",
+            headers=world["headers"],
+        )
+        assert role_detail.status_code == 200, role_detail.text
+        assert role_detail.json()["applications_count"] == expected_total
+
+    hub = client.get(
+        "/api/v1/agent/roles/breakdown",
+        headers=world["headers"],
+    )
+    assert hub.status_code == 200, hub.text
+    hub_by_role = {int(row["role_id"]): row for row in hub.json()}
+    assert hub_by_role[int(owner.id)]["stage_counts"]["advanced"] == 1
+    assert hub_by_role[int(related.id)]["stage_counts"]["completed"] == 1
+    assert hub_by_role[int(related.id)]["stage_counts"]["scored"] == 1
+
+    owner_overview = dispatch_agent_chat_tool(
+        "get_role_overview",
+        {},
+        db=db,
+        role=owner,
+        user=user,
+    )
+    related_overview = dispatch_agent_chat_tool(
+        "get_role_overview",
+        {},
+        db=db,
+        role=related,
+        user=user,
+    )
+    assert owner_overview["open_candidates"] == 1
+    assert related_overview["open_candidates"] == 2
+
+    for application, role in (
+        (ordinary_deleted, owner),
+        (related_deleted, related),
+    ):
+        pii_markers = {
+            str(application.candidate.full_name),
+            str(application.candidate.email),
+        }
+        searched_rest = client.get(
+            "/api/v1/applications",
+            params={
+                "role_id": int(role.id),
+                "search": str(application.candidate.email),
+                "application_outcome": "all",
+            },
+            headers=world["headers"],
+        )
+        assert searched_rest.status_code == 200, searched_rest.text
+        assert searched_rest.json()["total"] == 0
+        assert searched_rest.json()["items"] == []
+        assert all(marker not in searched_rest.text for marker in pii_markers)
+
+        detail_rest = client.get(
+            f"/api/v1/applications/{int(application.id)}",
+            params={"view_role_id": int(role.id)},
+            headers=world["headers"],
+        )
+        assert detail_rest.status_code == 404
+        assert all(marker not in detail_rest.text for marker in pii_markers)
+
+        mcp_role = mcp_handlers.search_role_candidates(
+            db,
+            user,
+            role_id=int(role.id),
+            q=str(application.candidate.email),
+            application_outcome=None,
+            limit=25,
+        )
+        assert mcp_role["total"] == 0
+        assert mcp_role["items"] == []
+        assert all(marker not in str(mcp_role["items"]) for marker in pii_markers)
+        with pytest.raises(ValueError):
+            mcp_handlers.get_role_candidate(
+                db,
+                user,
+                role_id=int(role.id),
+                application_id=int(application.id),
+                include_cv_text=True,
+            )
+        with pytest.raises(ValueError):
+            mcp_handlers.get_application(
+                db,
+                user,
+                application_id=int(application.id),
+                include_cv_text=True,
+            )
+        with pytest.raises(ValueError):
+            mcp_handlers.get_candidate(
+                db,
+                user,
+                candidate_id=int(application.candidate_id),
+            )
+        compared = mcp_handlers.compare_applications(
+            db,
+            user,
+            application_ids=[int(application.id), int(world["shared"].id)],
+        )
+        assert int(application.id) in compared["missing_ids"]
+        assert all(
+            marker not in str(compared["applications"]) for marker in pii_markers
+        )
+
+        agent_role = dispatch_agent_chat_tool(
+            "search_role_candidates",
+            {
+                "q": str(application.candidate.email),
+                "application_outcome": None,
+                "limit": 25,
+            },
+            db=db,
+            role=role,
+            user=user,
+        )
+        assert agent_role["total"] == 0
+        assert agent_role["items"] == []
+        assert all(marker not in str(agent_role["items"]) for marker in pii_markers)
+
+        with pytest.raises(LogicalRoleApplicationAuthorizationError):
+            authorize_logical_role_application(
+                db,
+                role=role,
+                application_id=int(application.id),
+            )
+
+    for deleted_marker in deleted_names | deleted_emails:
+        taali_rows = taali_tools.dispatch_tool(
+            "search_applications",
+            {
+                "q": deleted_marker,
+                "application_outcome": None,
+                "limit": 25,
+            },
+            db=db,
+            user=user,
+        )
+        assert taali_rows == []
+
+    public_principal = type(
+        "PublicPrincipal",
+        (),
+        {"organization_id": int(user.organization_id)},
+    )()
+    owner_public = list_public_role_applications(
+        role_id=int(owner.id),
+        principal=public_principal,
+        db=db,
+        limit=50,
+        offset=0,
+        workable_stage=None,
+        pipeline_stage=None,
+    )
+    related_public = list_public_role_applications(
+        role_id=int(related.id),
+        principal=public_principal,
+        db=db,
+        limit=50,
+        offset=0,
+        workable_stage=None,
+        pipeline_stage=None,
+    )
+    assert owner_public.total == 1
+    assert related_public.total == 2
+    public_text = owner_public.model_dump_json() + related_public.model_dump_json()
+    assert all(marker not in public_text for marker in deleted_names | deleted_emails)
 
 
 def test_public_mcp_role_detail_compare_and_resource_follow_membership_truth(

@@ -11,6 +11,7 @@ from app.models.organization import Organization
 from app.models.role import ROLE_KIND_SISTER, Role
 from app.models.sister_role_evaluation import SisterRoleEvaluation
 from app.models.user import User
+from app.services.role_candidate_metrics import load_role_candidate_metrics
 from app.services.sister_role_service import related_role_pipeline_counts_bulk
 from tests.conftest import auth_headers
 
@@ -262,6 +263,14 @@ def test_related_counts_use_local_outcomes_and_keep_explicit_deleted_source_memb
         suffix="open-disqualified",
         workable_disqualified=True,
     )
+    erased_person = _application(
+        db,
+        organization_id=organization.id,
+        role_id=owner.id,
+        suffix="erased-person",
+        pipeline_stage="advanced",
+    )
+    erased_person.candidate.deleted_at = datetime.now(timezone.utc)
     _evaluation(
         db,
         organization_id=organization.id,
@@ -293,12 +302,24 @@ def test_related_counts_use_local_outcomes_and_keep_explicit_deleted_source_memb
         status="pending",
         pipeline_stage="advanced",
     )
+    _evaluation(
+        db,
+        organization_id=organization.id,
+        role_id=related.id,
+        application_id=erased_person.id,
+        status="done",
+        pipeline_stage="advanced",
+    )
     db.commit()
 
     owner_counts = role_pipeline_counts(
         db, organization_id=organization.id, role_id=owner.id
     )
-    counts = related_role_pipeline_counts_bulk(db, [related.id])[related.id]
+    counts = related_role_pipeline_counts_bulk(
+        db,
+        [related.id],
+        organization_id=int(organization.id),
+    )[related.id]
 
     assert owner_counts["rejected"] == 1
     assert counts["applied"] == 1
@@ -306,6 +327,22 @@ def test_related_counts_use_local_outcomes_and_keep_explicit_deleted_source_memb
     assert counts["advanced"] == 1
     assert counts["rejected"] == 1
     assert sum(counts.values()) == 4
+
+    metrics = load_role_candidate_metrics(
+        db,
+        roles=[owner, related],
+        organization_id=int(organization.id),
+        include_pipeline_stats=True,
+    )
+    # Ordinary membership is the live application, so the soft-deleted source
+    # is absent there; the related role keeps that evidence row as long as the
+    # person is live. The erased person is absent from both.
+    assert metrics.application_counts[int(owner.id)] == 4
+    assert metrics.active_counts[int(owner.id)] == 1
+    assert metrics.application_counts[int(related.id)] == 4
+    assert metrics.active_counts[int(related.id)] == 3
+    assert metrics.stage_counts[int(owner.id)] == owner_counts
+    assert metrics.stage_counts[int(related.id)] == counts
 
 
 def test_role_list_and_detail_expose_the_same_explicit_local_counts(client, db):

@@ -545,7 +545,8 @@ def test_create_sister_role_persists_separate_scores_and_initial_pool_snapshot(
         headers=headers,
     )
     assert waiting_rows.status_code == 200, waiting_rows.text
-    assert waiting_rows.json()[0]["score_status"] == "retry_wait"
+    waiting_by_id = {row["id"]: row for row in waiting_rows.json()}
+    assert waiting_by_id[applications[0].id]["score_status"] == "retry_wait"
 
     rejected_rows = client.get(
         f"/api/v1/roles/{sister['id']}/applications",
@@ -2289,15 +2290,17 @@ def test_sister_application_api_ranks_by_alternate_score(client, db):
     assessment_selects = [
         statement
         for statement in statements
-        if statement.startswith("select") and " from assessments " in statement
+        if statement.startswith("select assessments.")
     ]
     decision_selects = [
         statement
         for statement in statements
         if statement.startswith("select") and "agent_decisions" in statement
     ]
-    # One batched role-assessment query per endpoint and one batched decision
-    # query per endpoint. Growing the page must not add per-candidate selects.
+    # One batched role-assessment load per endpoint and one batched decision
+    # query per endpoint. The main candidate query can contain the canonical
+    # correlated score expression; it is not another assessment round trip.
+    # Growing the page must not add per-candidate selects.
     assert len(assessment_selects) <= 2, assessment_selects
     assert len(decision_selects) <= 2, decision_selects
 

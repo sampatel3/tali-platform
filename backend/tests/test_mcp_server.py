@@ -815,6 +815,9 @@ def test_public_mcp_get_candidate_preserves_related_assessment_truth(
                 status=AssessmentStatus.COMPLETED,
                 completed_at=now,
                 assessment_score=34,
+                score_breakdown={
+                    "score_components": {"role_fit_score": 88}
+                },
                 is_voided=False,
             ),
         ]

@@ -234,6 +234,7 @@ def rescreen_related_role_candidates(
     dispatchable_ids: list[int] = []
     reset_ids: list[int] = []
     reset_application_ids: list[int] = []
+    reset_candidate_ids: list[int] = []
     unscorable_count = 0
     skipped_resolved_count = 0
     skipped_current_count = 0
@@ -280,6 +281,7 @@ def rescreen_related_role_candidates(
             dispatchable = False
         reset_ids.append(int(evaluation.id))
         reset_application_ids.append(int(identity.source_application_id))
+        reset_candidate_ids.append(int(identity.candidate_id))
         if dispatchable:
             dispatchable_ids.append(int(evaluation.id))
         else:
@@ -312,13 +314,17 @@ def rescreen_related_role_candidates(
             decisions_invalidated += 1
 
     assessments_voided = 0
-    if void_active_assessments and reset_application_ids:
+    if void_active_assessments and reset_candidate_ids:
         assessments = (
             db.query(Assessment)
             .filter(
                 Assessment.organization_id == int(locked_role.organization_id),
                 Assessment.role_id == int(locked_role.id),
-                Assessment.application_id.in_(reset_application_ids),
+                # Assessment application_id is evidence/transport metadata.
+                # Restart the logical membership by its tenant, role and
+                # candidate identity so a transport-linked attempt cannot
+                # survive the reset.
+                Assessment.candidate_id.in_(sorted(set(reset_candidate_ids))),
                 Assessment.is_voided.is_(False),
             )
             .order_by(Assessment.id.asc())

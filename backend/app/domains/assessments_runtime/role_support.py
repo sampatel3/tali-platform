@@ -8,11 +8,18 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm.attributes import NO_VALUE
 from sqlalchemy.orm import Session, joinedload, selectinload, with_loader_criteria
 
+from ...candidate_search.population import apply_searchable_candidate_scope
 from ...candidate_search.self_score import (
     self_score_decision,
     self_score_evidence_quote,
     self_score_note,
 )
+from ...candidate_search.role_assessment_scores import (
+    assessment_score_100 as _canonical_assessment_score_100,
+    assessment_snapshot_role_fit_score_100,
+    assessment_taali_score_100,
+)
+from ...candidate_search.assessment_score_truth import latest_role_assessment
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
@@ -36,7 +43,6 @@ from ...services.taali_scoring import (
     TAALI_SCORING_RUBRIC_VERSION,
     TAALI_WEIGHTS,
     compute_role_fit_score,
-    compute_taali_score,
     normalize_score_100,
 )
 from .pipeline_service import (
@@ -223,6 +229,10 @@ def get_application(
     )
     if not include_deleted:
         query = query.filter(CandidateApplication.deleted_at.is_(None))
+    query = apply_searchable_candidate_scope(
+        query,
+        organization_id=int(org_id),
+    )
     app = query.first()
     if not app:
         raise HTTPException(status_code=404, detail="Application not found")
@@ -592,7 +602,11 @@ def _sort_dt(value: datetime | None) -> datetime:
     return value
 
 
-def _last_activity_at(app: CandidateApplication) -> datetime | None:
+def _last_activity_at(
+    app: CandidateApplication,
+    *,
+    include_assessments: bool = True,
+) -> datetime | None:
     """Most recent moment any meaningful activity touched this application.
 
     Spans the application row itself — CV upload, every scoring pass
@@ -617,11 +631,12 @@ def _last_activity_at(app: CandidateApplication) -> datetime | None:
         app.score_cached_at,
         app.auto_reject_triggered_at,
     ]
-    for assessment in (app.assessments or []):
-        candidates.append(getattr(assessment, "updated_at", None))
-        candidates.append(getattr(assessment, "scored_at", None))
-        candidates.append(getattr(assessment, "completed_at", None))
-        candidates.append(getattr(assessment, "created_at", None))
+    if include_assessments:
+        for assessment in (app.assessments or []):
+            candidates.append(getattr(assessment, "updated_at", None))
+            candidates.append(getattr(assessment, "scored_at", None))
+            candidates.append(getattr(assessment, "completed_at", None))
+            candidates.append(getattr(assessment, "created_at", None))
     present = [value for value in candidates if value is not None]
     if not present:
         return None
@@ -662,74 +677,15 @@ def _assessment_grading_incomplete(assessment: Assessment | None) -> bool:
 
 
 def _assessment_score_100(assessment: Assessment | None) -> float | None:
-    if not assessment or _assessment_grading_incomplete(assessment):
-        return None
-    for value in (
-        getattr(assessment, "assessment_score", None),
-        getattr(assessment, "final_score", None),
-    ):
-        if value is not None:
-            normalized = _normalize_score_100_for_response(value)
-            if normalized is not None:
-                return normalized
-
-    score_10 = getattr(assessment, "score", None)
-    try:
-        if score_10 is not None:
-            return round(max(0.0, min(100.0, float(score_10) * 10.0)), 1)
-    except (TypeError, ValueError):
-        return None
-    return None
+    return _canonical_assessment_score_100(assessment)
 
 
 def _assessment_taali_score_100(assessment: Assessment | None) -> float | None:
-    if not assessment or _assessment_grading_incomplete(assessment):
-        return None
-    if getattr(assessment, "taali_score", None) is not None:
-        normalized = _normalize_score_100_for_response(getattr(assessment, "taali_score", None))
-        if normalized is not None:
-            return normalized
-
-    assessment_score = _assessment_score_100(assessment)
-    role_fit_score = _assessment_role_fit_score_100(assessment)
-    taali_score = compute_taali_score(assessment_score, role_fit_score)
-    if taali_score is not None:
-        return taali_score
-
-    if assessment_score is None:
-        return role_fit_score
-    if role_fit_score is None:
-        return assessment_score
-    return taali_score
+    return assessment_taali_score_100(assessment)
 
 
 def _assessment_role_fit_score_100(assessment: Assessment | None) -> float | None:
-    if not assessment:
-        return None
-    score_breakdown = (
-        assessment.score_breakdown
-        if isinstance(getattr(assessment, "score_breakdown", None), dict)
-        else {}
-    )
-    score_components = score_breakdown.get("score_components") if isinstance(score_breakdown, dict) else {}
-    if isinstance(score_components, dict):
-        try:
-            if score_components.get("role_fit_score") is not None:
-                return round(max(0.0, min(100.0, float(score_components.get("role_fit_score")))), 1)
-        except (TypeError, ValueError):
-            pass
-
-    raw_details = (
-        assessment.cv_job_match_details
-        if isinstance(getattr(assessment, "cv_job_match_details", None), dict)
-        else None
-    )
-    cv_fit_score = _normalize_cv_match_score_for_response(
-        getattr(assessment, "cv_job_match_score", None),
-        raw_details,
-    )
-    requirements_fit_score = _requirements_fit_score(raw_details)
-    return compute_role_fit_score(cv_fit_score, requirements_fit_score)
+    return assessment_snapshot_role_fit_score_100(assessment)
 
 
 def _dimension_extremes(category_scores: dict[str, Any] | None) -> tuple[str | None, str | None]:
@@ -783,16 +739,11 @@ def latest_valid_role_assessment(
 ) -> Assessment | None:
     if not candidate_id or not role_id:
         return None
-    return (
-        db.query(Assessment)
-        .filter(
-            Assessment.organization_id == org_id,
-            Assessment.candidate_id == candidate_id,
-            Assessment.role_id == role_id,
-            Assessment.is_voided.is_(False),
-        )
-        .order_by(Assessment.created_at.desc(), Assessment.id.desc())
-        .first()
+    return latest_role_assessment(
+        db,
+        organization_id=int(org_id),
+        candidate_id=int(candidate_id),
+        role_id=int(role_id),
     )
 
 
@@ -805,22 +756,12 @@ def completed_valid_role_assessment(
 ) -> Assessment | None:
     if not candidate_id or not role_id:
         return None
-    return (
-        db.query(Assessment)
-        .filter(
-            Assessment.organization_id == org_id,
-            Assessment.candidate_id == candidate_id,
-            Assessment.role_id == role_id,
-            Assessment.is_voided.is_(False),
-            Assessment.status.in_(
-                [
-                    AssessmentStatus.COMPLETED,
-                    AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
-                ]
-            ),
-        )
-        .order_by(Assessment.completed_at.desc(), Assessment.created_at.desc(), Assessment.id.desc())
-        .first()
+    return latest_role_assessment(
+        db,
+        organization_id=int(org_id),
+        candidate_id=int(candidate_id),
+        role_id=int(role_id),
+        completed_only=True,
     )
 
 
@@ -1285,6 +1226,7 @@ def application_to_response(
     use_cached_score_summary: bool = False,
     use_cached_interview_support: bool = False,
     score_status: Any = _UNSET,
+    include_assessment_activity: bool = True,
 ) -> ApplicationResponse:
     ensure_pipeline_fields(app)
     candidate = app.candidate
@@ -1440,7 +1382,10 @@ def application_to_response(
         score_summary=score_summary,
         created_at=app.created_at,
         updated_at=app.updated_at,
-        last_activity_at=_last_activity_at(app),
+        last_activity_at=_last_activity_at(
+            app,
+            include_assessments=include_assessment_activity,
+        ),
     )
 
 
@@ -1716,18 +1661,21 @@ def application_list_payload(
     include_cv_text: bool,
     score_status: Any = _UNSET,
     pending_decision: dict[str, Any] | None = None,
+    include_assessment_runtime: bool = True,
 ) -> dict[str, Any]:
     data = application_to_response(
         app,
         use_cached_score_summary=True,
         use_cached_interview_support=True,
         score_status=score_status,
+        include_assessment_activity=include_assessment_runtime,
     )
     payload = data.model_dump()
     # Cached score_summary blanks assessment_id/status + invite tracking; patch
     # them back from the live (selectinload'd) assessments so list rows show
     # "Invited / Delivered / Opened / Bounced". Shared with the detail payload.
-    _patch_live_assessment_summary(payload, app)
+    if include_assessment_runtime:
+        _patch_live_assessment_summary(payload, app)
     # Resolved by the list route in one batch query (see _pending_decision_map)
     # so the AGENT column shows a chip for every row that has a pending
     # decision, not just the first page of a capped decisions fetch.

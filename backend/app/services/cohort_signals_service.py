@@ -205,7 +205,14 @@ def compute_cohort_signals(db: Session, *, role_id: int, organization_id: int) -
         db,
         application_ids=[int(application.id) for application in apps],
     )
-    adapter = role_scope.row_adapter(evaluations)
+    assessment_truth = role_scope.assessment_truth_map(
+        db,
+        applications=list(apps),
+    )
+    adapter = role_scope.row_adapter(
+        evaluations,
+        assessment_truth=assessment_truth,
+    )
     pool: list[tuple[float, Candidate]] = []
     for source_application in apps:
         application = (

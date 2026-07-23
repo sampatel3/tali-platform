@@ -4,9 +4,9 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
-from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, selectinload
 
+from ...candidate_search.role_scope import resolve_candidate_role_scope
 from ...deps import get_current_user
 from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
@@ -459,28 +459,11 @@ def _serialize_role_detail(db: Session, role: Role, organization_id: int) -> Rol
     """The full role-detail payload: funnel counts + pending-decision chips + the
     linked requisition's structured spec. Shared by GET /roles/{id} and the
     job-status mutation so both stay in lock-step."""
-    if str(role.role_kind or "") == ROLE_KIND_SISTER:
-        app_count = (
-            db.query(func.count(SisterRoleEvaluation.id))
-            .filter(
-                SisterRoleEvaluation.organization_id == int(organization_id),
-                SisterRoleEvaluation.role_id == int(role.id),
-                SisterRoleEvaluation.deleted_at.is_(None),
-            )
-            .scalar()
-            or 0
-        )
-    else:
-        app_count = (
-            db.query(func.count(CandidateApplication.id))
-            .filter(
-                CandidateApplication.organization_id == organization_id,
-                CandidateApplication.role_id == int(role.id),
-                CandidateApplication.deleted_at.is_(None),
-            )
-            .scalar()
-            or 0
-        )
+    app_count = resolve_candidate_role_scope(
+        db,
+        organization_id=int(organization_id),
+        role_id=int(role.id),
+    ).roster_size(db)
     # Per-stage funnel counts (applied → invited → in_assessment → review →
     # advanced + rejected) — the same aggregate the /roles list attaches, so
     # the role detail page can render the home-card funnel summary from the

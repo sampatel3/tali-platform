@@ -19,7 +19,8 @@ from typing import Iterable
 from sqlalchemy.orm import Session, joinedload
 
 from ..candidate_search.role_assessment_scores import (
-    assessment_scores_by_logical_membership,
+    RoleAssessmentTruth,
+    assessment_truth_by_logical_membership,
 )
 from ..candidate_search.role_scope import (
     RelatedRoleSearchApplication,
@@ -57,6 +58,7 @@ class LogicalRoleApplicationContext:
     related_evaluation: SisterRoleEvaluation | None = None
     ats_application: CandidateApplication | None = None
     assessment_score: float | None = None
+    assessment_truth: RoleAssessmentTruth | None = None
 
     @property
     def is_related(self) -> bool:
@@ -92,6 +94,7 @@ class LogicalRoleApplicationContext:
             role=self.role,
             evaluation=self.related_evaluation,
             assessment_score=self.assessment_score,
+            assessment_truth=self.assessment_truth,
         )
 
 
@@ -154,8 +157,8 @@ def _scoped_contexts(
         db,
         application_ids=[int(application.id) for application in applications],
     )
-    assessment_scores = (
-        assessment_scores_by_logical_membership(
+    assessment_truth = (
+        assessment_truth_by_logical_membership(
             db,
             organization_id=organization_id,
             memberships=[(role_id, application) for application in applications],
@@ -208,11 +211,15 @@ def _scoped_contexts(
                 application=application,
                 evaluation=evaluations.get(int(application.id)),
             ),
-            assessment_score=assessment_scores.get(
-                (role_id, int(application.id))
+            assessment_score=(
+                truth.assessment_score if truth is not None else None
             ),
+            assessment_truth=truth,
         )
         for application in applications
+        for truth in (
+            assessment_truth.get((role_id, int(application.id))),
+        )
     ]
 
 
@@ -405,15 +412,21 @@ def authorize_historical_logical_role_application(
             role_id=int(role.id),
             application_ids=(int(application_id),),
         )
+    assessment_truth = assessment_truth_by_logical_membership(
+        db,
+        organization_id=organization_id,
+        memberships=[(int(role.id), source)],
+    ).get((int(role.id), int(source.id)))
     return LogicalRoleApplicationContext(
         role=role,
         source_application=source,
         related_evaluation=evaluation,
-        assessment_score=assessment_scores_by_logical_membership(
-            db,
-            organization_id=organization_id,
-            memberships=[(int(role.id), source)],
-        ).get((int(role.id), int(source.id))),
+        assessment_score=(
+            assessment_truth.assessment_score
+            if assessment_truth is not None
+            else None
+        ),
+        assessment_truth=assessment_truth,
     )
 
 

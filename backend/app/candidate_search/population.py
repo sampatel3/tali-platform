@@ -11,7 +11,7 @@ import logging
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
-from sqlalchemy import exists
+from sqlalchemy.orm import Session, aliased
 
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
@@ -21,16 +21,94 @@ from .schemas import ParsedFilter
 
 logger = logging.getLogger("taali.candidate_search.population")
 
+_SEARCHABLE_CANDIDATE = aliased(
+    Candidate,
+    name="searchable_candidate_lifecycle",
+)
+_SEARCHABLE_SCOPE_EXECUTION_OPTION = "_taali_searchable_candidate_scoped"
 
-def apply_searchable_candidate_scope(base_query, *, organization_id: int):
-    """Exclude erased/cross-tenant person rows at the shared search boundary."""
 
-    searchable_candidate = exists().where(
-        Candidate.id == CandidateApplication.candidate_id,
+def apply_live_candidate_scope(
+    base_query,
+    *,
+    organization_id: int,
+    candidate_entity=Candidate,
+):
+    """Require a live person row inside one organization.
+
+    Direct candidate routes and application-backed search surfaces share this
+    lifecycle boundary.  Keeping it here prevents a detail/download endpoint
+    from accidentally treating a soft-deleted person as readable merely
+    because an application or document row still exists for audit purposes.
+    """
+
+    return base_query.filter(
+        candidate_entity.organization_id == int(organization_id),
+        candidate_entity.deleted_at.is_(None),
+    )
+
+
+def lock_live_candidate_for_execution(
+    db: Session,
+    *,
+    organization_id: int,
+    candidate_id: int,
+) -> Candidate | None:
+    """Lock one live person through an irreversible execution boundary.
+
+    Delayed email and ATS workers must re-authorize the person after dequeue,
+    not rely on the lifecycle snapshot captured when work was enqueued. On
+    PostgreSQL the row lock also serializes a concurrent erasure until the
+    caller commits or rolls back its provider result.
+    """
+
+    query = db.query(Candidate).filter(
+        Candidate.id == int(candidate_id),
         Candidate.organization_id == int(organization_id),
         Candidate.deleted_at.is_(None),
-    ).correlate(CandidateApplication)
-    return base_query.filter(searchable_candidate)
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        query = query.with_for_update(of=Candidate)
+    return query.populate_existing().one_or_none()
+
+
+def apply_searchable_candidate_scope(
+    base_query,
+    *,
+    organization_id: int,
+):
+    """Exclude erased/cross-tenant person rows at the shared read boundary.
+
+    A named alias avoids colliding with callers that separately join
+    ``Candidate`` for text filters. The indexed candidate PK join is also
+    intentionally flat: this scope is embedded in already-rich logical-role
+    score queries, where another correlated subquery would materially increase
+    SQLite planning time without improving PostgreSQL authority.
+    """
+
+    get_options = getattr(base_query, "get_execution_options", None)
+    existing_organization_id = (
+        get_options().get(_SEARCHABLE_SCOPE_EXECUTION_OPTION)
+        if callable(get_options)
+        else None
+    )
+    if existing_organization_id is not None:
+        if int(existing_organization_id) != int(organization_id):
+            # A layered reader must never replace an established tenant scope.
+            return base_query.filter(False)
+        return base_query
+    scoped = base_query.join(
+        _SEARCHABLE_CANDIDATE,
+        _SEARCHABLE_CANDIDATE.id == CandidateApplication.candidate_id,
+    )
+    scoped = apply_live_candidate_scope(
+        scoped,
+        organization_id=int(organization_id),
+        candidate_entity=_SEARCHABLE_CANDIDATE,
+    )
+    return scoped.execution_options(
+        **{_SEARCHABLE_SCOPE_EXECUTION_OPTION: int(organization_id)},
+    )
 
 
 def population_filter(parsed: ParsedFilter) -> ParsedFilter:
@@ -141,8 +219,10 @@ def _positive_int(value: object) -> int | None:
 
 
 __all__ = [
+    "apply_live_candidate_scope",
     "apply_searchable_candidate_scope",
     "application_map_from_rows",
     "estimate_graph_coverage",
+    "lock_live_candidate_for_execution",
     "population_filter",
 ]

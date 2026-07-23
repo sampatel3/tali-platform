@@ -22,8 +22,10 @@ from ..models.role import ROLE_KIND_SISTER, Role
 from ..models.sister_role_evaluation import SisterRoleEvaluation
 from .role_assessment_scores import (
     assessment_score_value_expression,
-    blended_taali_score_expression,
+    assessment_taali_score_value_expression,
+    normalized_score_expression,
 )
+from .population import apply_searchable_candidate_scope
 
 
 LogicalMembershipKey = tuple[int, int]
@@ -85,14 +87,11 @@ class LogicalApplicationSelection:
         return tuple(sorted(self.roles_by_id))
 
     def apply_membership(self, query: Query) -> Query:
-        """Join ``query`` to the exact selected logical-membership union."""
+        """Join membership and one role-local technical-assessment snapshot."""
 
+        joined = self.apply_roster_membership(query)
         if not self.active:
-            return query.filter(CandidateApplication.deleted_at.is_(None))
-        joined = query.join(
-            self.membership_rows,
-            self.membership_rows.c.application_id == CandidateApplication.id,
-        )
+            return joined
         return joined.outerjoin(
             self.assessment_rows,
             and_(
@@ -100,6 +99,21 @@ class LogicalApplicationSelection:
                 self.assessment_rows.c.candidate_id
                 == CandidateApplication.candidate_id,
             ),
+        )
+
+    def apply_roster_membership(self, query: Query) -> Query:
+        """Join the logical roster and enforce the shared person lifecycle."""
+
+        if not self.active:
+            joined = query.filter(CandidateApplication.deleted_at.is_(None))
+        else:
+            joined = query.join(
+                self.membership_rows,
+                self.membership_rows.c.application_id == CandidateApplication.id,
+            )
+        return apply_searchable_candidate_scope(
+            joined,
+            organization_id=self.organization_id,
         )
 
     def logical_role_id_expression(self) -> Any:
@@ -212,9 +226,12 @@ class LogicalApplicationSelection:
         if score_field == "assessment_score_cache_100":
             related_value = self.assessment_rows.c.assessment_score
         elif score_field == "taali_score_cache_100":
-            related_value = blended_taali_score_expression(
-                assessment_expression=self.assessment_rows.c.assessment_score,
-                role_fit_expression=role_fit_value,
+            related_value = case(
+                (
+                    self.assessment_rows.c.assessment_id.isnot(None),
+                    self.assessment_rows.c.taali_score,
+                ),
+                else_=normalized_score_expression(role_fit_value),
             )
         elif score_field == "workable_score":
             related_value = literal(None)
@@ -230,6 +247,24 @@ class LogicalApplicationSelection:
         return case(
             (self._uses_related_evaluation(), related_value),
             else_=source,
+        )
+
+    def taali_sort_expression(self) -> Any:
+        """Keep ordinary cache fallback without reviving unavailable grading."""
+
+        taali_score = self.score_expression("taali_score_cache_100")
+        ordinary_score = func.coalesce(
+            taali_score,
+            CandidateApplication.pre_screen_score_100,
+        )
+        if not self.related_role_ids:
+            return ordinary_score
+        return case(
+            (
+                self.logical_role_id_expression().in_(self.related_role_ids),
+                taali_score,
+            ),
+            else_=ordinary_score,
         )
 
     def cv_match_scored_at_expression(self) -> Any:
@@ -266,24 +301,35 @@ class LogicalApplicationSelection:
         )
         if not normalized or not self.active:
             return {}
+        authorized_query = db.query(
+            self.membership_rows.c.application_id,
+            self.membership_rows.c.logical_role_id,
+        ).join(
+            CandidateApplication,
+            and_(
+                CandidateApplication.id == self.membership_rows.c.application_id,
+                CandidateApplication.organization_id == int(self.organization_id),
+            ),
+        )
+        authorized_query = apply_searchable_candidate_scope(
+            authorized_query,
+            organization_id=self.organization_id,
+        )
         authorized = {
             (int(role_id), int(application_id))
-            for application_id, role_id in db.query(
-                self.membership_rows.c.application_id,
-                self.membership_rows.c.logical_role_id,
-            )
-            .filter(
-                or_(
-                    *(
-                        and_(
-                            self.membership_rows.c.logical_role_id == role_id,
-                            self.membership_rows.c.application_id == application_id,
+            for application_id, role_id in (
+                authorized_query.filter(
+                    or_(
+                        *(
+                            and_(
+                                self.membership_rows.c.logical_role_id == role_id,
+                                self.membership_rows.c.application_id == application_id,
+                            )
+                            for role_id, application_id in normalized
                         )
-                        for role_id, application_id in normalized
                     )
-                )
+                ).all()
             )
-            .all()
         }
         normalized = tuple(key for key in normalized if key in authorized)
         if not normalized:
@@ -357,20 +403,23 @@ def _membership_subquery(
 
 
 def _assessment_subquery(*, organization_id: int) -> Any:
-    """One active completed technical score per logical role/candidate."""
+    """One latest completed score snapshot per logical role/candidate."""
 
     score = assessment_score_value_expression()
+    taali_score = assessment_taali_score_value_expression()
     ranked = (
         select(
+            Assessment.id.label("assessment_id"),
             Assessment.role_id.label("role_id"),
             Assessment.candidate_id.label("candidate_id"),
             score.label("assessment_score"),
+            taali_score.label("taali_score"),
             func.row_number()
             .over(
                 partition_by=(Assessment.role_id, Assessment.candidate_id),
                 order_by=(
-                    Assessment.completed_at.desc(),
-                    Assessment.created_at.desc(),
+                    Assessment.completed_at.desc().nullslast(),
+                    Assessment.created_at.desc().nullslast(),
                     Assessment.id.desc(),
                 ),
             )
@@ -386,17 +435,16 @@ def _assessment_subquery(*, organization_id: int) -> Any:
                     AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
                 )
             ),
-            Assessment.scoring_partial.is_not(True),
-            Assessment.scoring_failed.is_not(True),
-            score.is_not(None),
         )
         .subquery("ranked_logical_role_assessment_scores")
     )
     return (
         select(
+            ranked.c.assessment_id,
             ranked.c.role_id,
             ranked.c.candidate_id,
             ranked.c.assessment_score,
+            ranked.c.taali_score,
         )
         .where(ranked.c.assessment_rank == 1)
         .subquery("logical_role_assessment_scores")

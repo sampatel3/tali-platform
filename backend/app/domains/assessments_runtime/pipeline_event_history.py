@@ -14,6 +14,7 @@ from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
 from ...models.sister_role_evaluation import SisterRoleEvaluation
+from ...services.logical_event_membership import apply_live_logical_event_scope
 
 
 def positive_int_hint(value: object) -> int | None:
@@ -187,7 +188,7 @@ def latest_role_application_activity(
         .all()
     )
 
-    rows = (
+    rows_query = (
         db.query(CandidateApplicationEvent, CandidateApplication, Candidate)
         .join(
             CandidateApplication,
@@ -207,6 +208,13 @@ def latest_role_application_activity(
                     ),
                 ),
             ),
+        )
+    )
+    rows = (
+        apply_live_logical_event_scope(
+            db,
+            rows_query,
+            organization_id=int(organization_id),
         )
         .order_by(
             CandidateApplicationEvent.created_at.desc(),

@@ -8,12 +8,13 @@ from typing import Any
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
+from ..candidate_search.population import lock_live_candidate_for_execution
 from ..domains.assessments_runtime.pipeline_event_service import (
     existing_idempotent_event,
 )
 from ..domains.assessments_runtime.pipeline_service import append_application_event
 from ..models.candidate_application import CandidateApplication
-from ..models.role import ROLE_KIND_SISTER, Role
+from ..models.role import Role
 from ..models.sister_role_evaluation import SisterRoleEvaluation
 from .pre_screen_decision_emitter import discard_pending_decisions_for_app
 from .sister_role_service import (
@@ -78,12 +79,15 @@ def lock_related_role_membership(
         .filter(
             Role.id == int(acting_role_id),
             Role.organization_id == int(application.organization_id),
-            Role.role_kind == ROLE_KIND_SISTER,
             Role.deleted_at.is_(None),
         )
         .one_or_none()
     )
     if role is None:
+        return None
+    from .logical_role_batch_operations import is_related_role
+
+    if not is_related_role(role):
         return None
     membership_query = db.query(SisterRoleEvaluation).filter(
         SisterRoleEvaluation.organization_id == int(application.organization_id),
@@ -126,6 +130,17 @@ def resolve_related_role_ats_action_context(
 
     if acting_role_id is None:
         return None
+    if (
+        lock_live_candidate_for_execution(
+            db,
+            organization_id=int(organization_id),
+            candidate_id=int(ats_application.candidate_id),
+        )
+        is None
+    ):
+        raise RelatedRoleActionContractError(
+            "Related-role candidate is unavailable"
+        )
     source_id = int(source_application_id or ats_application.id)
     source_application = (
         db.query(CandidateApplication)
