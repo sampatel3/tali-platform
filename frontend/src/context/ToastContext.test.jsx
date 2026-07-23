@@ -74,6 +74,25 @@ describe('ToastProvider', () => {
     expect(notifications.getByRole('alert')).toHaveTextContent('Sync failed');
   });
 
+  it('drops pending auto-dismiss timers on early dismissal and on unmount', () => {
+    vi.useFakeTimers();
+    const { unmount } = renderToasts();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show info' }));
+    expect(vi.getTimerCount()).toBe(1);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(vi.getTimerCount()).toBe(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show info' }));
+    expect(vi.getTimerCount()).toBe(1);
+
+    // A timer that outlives the provider fires into a torn-down tree — in
+    // vitest that is an unhandled "window is not defined" that fails the run.
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('does not stack the same active error or duplicate its activity entry', () => {
     renderToasts();
 

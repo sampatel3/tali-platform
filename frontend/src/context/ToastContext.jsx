@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useRef, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import {
   AnimatePresence,
   m,
@@ -38,12 +38,30 @@ export function ToastProvider({ children }) {
   // Platform updates) before React has committed the first state update.
   const activeToastKeysRef = useRef(new Set());
   const toastKeysByIdRef = useRef(new Map());
+  // Auto-dismiss timers, keyed by toast id. A timer that outlives the
+  // provider would set state on a dead tree (and in jsdom tests, fire after
+  // the environment is torn down), so every pending id is tracked here and
+  // cleared on early dismissal or unmount.
+  const dismissTimersRef = useRef(new Map());
 
   const dismiss = useCallback((id) => {
     const key = toastKeysByIdRef.current.get(id);
     if (key) activeToastKeysRef.current.delete(key);
     toastKeysByIdRef.current.delete(id);
+    const timer = dismissTimersRef.current.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      dismissTimersRef.current.delete(id);
+    }
     setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  useEffect(() => {
+    const timers = dismissTimersRef.current;
+    return () => {
+      timers.forEach((timer) => clearTimeout(timer));
+      timers.clear();
+    };
   }, []);
 
   const showToast = useCallback((message, type = 'info') => {
@@ -71,9 +89,11 @@ export function ToastProvider({ children }) {
     // away never learns something broke, so error toasts persist until they
     // explicitly dismiss. Every other severity still auto-clears.
     if (type !== 'error') {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        dismissTimersRef.current.delete(id);
         dismiss(id);
       }, 5000);
+      dismissTimersRef.current.set(id, timer);
     }
   }, [dismiss]);
 
