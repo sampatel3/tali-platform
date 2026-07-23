@@ -41,6 +41,12 @@ os.environ["CLAUDE_MODEL"] = "claude-haiku-4-5-20251001"
 os.environ["TASK_AUTHORING_API_ENABLED"] = "true"
 os.environ["GITHUB_MOCK_MODE"] = "true"
 
+# Self-serve signup is OFF in production (sales-led onboarding), so the register
+# router is unmounted by default. The auth tests still exercise that capability,
+# so enable it for the test app. test_registration_gate.py asserts the prod
+# default is off, which is the guard that actually matters.
+os.environ["ALLOW_PUBLIC_REGISTRATION"] = "true"
+
 # Task snapshots and assessment repository mocks are real local Git
 # repositories. Test records commonly reuse small integer task IDs, so sharing
 # either default root lets xdist workers mutate the same checkout concurrently
