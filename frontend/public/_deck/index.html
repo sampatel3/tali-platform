@@ -130,8 +130,8 @@
     line-height: 1; letter-spacing: -.035em;
   }
   .h71-engine-simple p {
-    margin: 30px 0 0; max-width: 690px; font-size: 21px;
-    line-height: 1.48; color: var(--ink-2);
+    margin: auto 0; padding: 26px 0; max-width: 690px; font-size: 21px;
+    line-height: 1.5; color: var(--ink-2);
   }
   .h71-engine-simple.dark p { color: rgba(255,255,255,.76); }
   .h71-engine-path {
@@ -1053,7 +1053,7 @@
   .roadmap-v3 .slide-title { font-size: 52px !important; max-width: 1744px; white-space: nowrap; }
   .roadmap-v3 .slide-sub { margin-top: 10px; font-size: 19px; }
   .capability-board {
-    flex: none; height: 730px; display: grid;
+    flex: 1; min-height: 0; display: grid;
     grid-template-rows: 58px minmax(0,1fr) 154px; gap: 13px;
   }
   .live-mode-bar {
@@ -1120,24 +1120,27 @@
   deck-stage > section[data-slide^="surf-"],
   deck-stage > section.product-preview { padding-bottom: 84px; }
 
-  .h71-stats3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
-  .h71-stat { min-height: 545px; padding: 40px 42px 30px; border: 1px solid var(--line); border-radius: 24px; background: var(--bg-2); display: flex; flex-direction: column; }
+  .h71-stats3 { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+  .h71-stat { min-height: 0; padding: 40px 42px 30px; border: 1px solid var(--line); border-radius: 24px; background: var(--bg-2); display: flex; flex-direction: column; }
   .h71-stat.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
-  .h71-stat .big { margin-top: 34px; font-family: var(--font-display); font-size: 86px; font-weight: 600; letter-spacing: -.04em; line-height: .95; color: var(--ink); }
+  .h71-stat .big { margin-top: auto; padding-top: 26px; font-family: var(--font-display); font-size: 96px; font-weight: 600; letter-spacing: -.04em; line-height: .95; color: var(--ink); }
   .h71-stat.dark .big { color: #fff; }
   .h71-stat .big em { color: var(--purple); font-style: normal; }
   .h71-stat.dark .big em { color: var(--purple-lav); }
-  .h71-stat h3 { margin: 18px 0 0; font: 600 25px/1.18 var(--font-display); letter-spacing: -.02em; }
-  .h71-stat p { margin: 16px 0 0; font-size: 17px; line-height: 1.5; color: var(--ink-2); }
+  .h71-stat h3 { margin: 20px 0 0; font: 600 26px/1.18 var(--font-display); letter-spacing: -.02em; }
+  .h71-stat p { margin: 18px 0 0; font-size: 17.5px; line-height: 1.52; color: var(--ink-2); }
   .h71-stat.dark p { color: rgba(255,255,255,.78); }
   .h71-stat .src { margin-top: auto; padding-top: 14px; border-top: 1px dashed var(--line); font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--mute); }
   .h71-stat.dark .src { border-color: rgba(255,255,255,.18); color: rgba(255,255,255,.52); }
 
   .pipe-grid { min-height: 0; display: grid; grid-template-columns: repeat(6, 1fr); gap: 13px; }
   .pipe-stage { min-height: 0; padding: 22px 22px 18px; border: 1px solid var(--line); border-radius: 17px; background: var(--bg-2); display: flex; flex-direction: column; }
-  .pipe-stage h3 { margin: 12px 0 0; font: 600 26px/1.08 var(--font-display); letter-spacing: -.02em; }
-  .pipe-stage p { margin: 12px 0 0; font-size: 15.5px; line-height: 1.5; color: var(--ink-2); }
-  .pipe-feats { margin-top: auto; padding-top: 14px; border-top: 1px dashed var(--line); display: flex; flex-direction: column; gap: 7px; font-family: var(--font-mono); font-size: 11px; letter-spacing: .03em; line-height: 1.35; color: var(--mute); }
+  .pipe-stage h3 { margin: 12px 0 0; font: 600 27px/1.08 var(--font-display); letter-spacing: -.02em; }
+  .pipe-stage p { margin: 13px 0 0; font-size: 16px; line-height: 1.52; color: var(--ink-2); }
+  .pipe-feats span { display: block; }
+  .pipe-feats { gap: 8px; font-size: 11.5px; }
+  .pipe-stage p { margin-top: auto; margin-bottom: auto; padding: 13px 0; }
+  .pipe-feats { margin-top: 0; padding-top: 14px; border-top: 1px dashed var(--line); display: flex; flex-direction: column; gap: 7px; font-family: var(--font-mono); font-size: 11px; letter-spacing: .03em; line-height: 1.35; color: var(--mute); }
   .pipe-live { margin-top: 14px; padding-top: 14px; border-top: 1px dashed var(--line); display: inline-flex; align-items: center; gap: 7px; font: 700 10.5px var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--green); }
   .pipe-live .blip { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
 
@@ -1149,7 +1152,8 @@
 
   .proof-caveat { margin-top: 10px; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--mute); }
   [data-slide="proof"] .traction { display: flex; flex-direction: column; }
-  [data-slide="proof"] .traction > .pilot { flex: 1; align-content: center; }
+  [data-slide="proof"] .traction > .pilot { flex: 1; align-content: space-between; }
+  [data-slide="proof"] .pilot .ds { font-size: 15px; line-height: 1.5; }
   .proof-right .th { font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--mute); }
 
   .pilot-strip { margin-top: 16px; display: grid; grid-template-columns: 150px repeat(5, 1fr); gap: 12px; align-items: stretch; }
@@ -1215,14 +1219,16 @@
   .shift-bridge b { font-family: var(--font-display); font-size: 22px; }
   .shift-bridge span { font-size: 18px; color: var(--ink-2); }
   .fived-strip-label { margin: 20px 0 12px; font: 700 12px var(--font-mono); letter-spacing: .13em; text-transform: uppercase; color: var(--purple); }
-  .fived-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
-  .fived-mini { padding: 20px 20px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); }
+  .fived-strip { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+  .fived-mini { min-height: 0; padding: 20px 20px 18px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-2); display: flex; flex-direction: column; }
   .fived-mini.dark { background: var(--ink); border-color: var(--ink); color: #fff; }
   .fived-mini .n { font: 700 10.5px var(--font-mono); letter-spacing: .1em; color: var(--purple); }
   .fived-mini.dark .n { color: var(--purple-lav); }
   .fived-mini b { display: block; margin-top: 8px; font: 600 21px var(--font-display); letter-spacing: -.015em; }
   .fived-mini span { display: block; margin-top: 8px; font-size: 13.5px; line-height: 1.45; color: var(--ink-2); }
   .fived-mini.dark span { color: rgba(255,255,255,.75); }
+  .fived-mini .fe { margin-top: auto; padding-top: 12px; border-top: 1px dashed var(--line); font: 700 10px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--purple); }
+  .fived-mini.dark .fe { border-color: rgba(255,255,255,.18); color: var(--purple-lav); }
 
   /* Uniform one-line titles on all story slides (product demos keep surf-title) */
   deck-stage > section[data-slide] .slide-title { font-size: 52px !important; line-height: 1.05; max-width: none; white-space: nowrap; }
@@ -1353,11 +1359,11 @@
     <div class="shift-bridge"><b>Software teams felt it first.</b><span>The same shift is reaching every knowledge role — and a CV cannot show who is good at this way of working.</span></div>
     <div class="fived-strip-label">// The five Ds — how Taali scores the new way of working · every score links to the recorded session</div>
     <div class="fived-strip">
-      <div class="fived-mini"><span class="n">01</span><b>Delegation</b><span>What do they own — and what do they hand to AI?</span></div>
-      <div class="fived-mini"><span class="n">02</span><b>Description</b><span>Do they give AI clear goals, context and constraints?</span></div>
-      <div class="fived-mini dark"><span class="n">03</span><b>Discernment</b><span>Do they challenge and correct what AI produces?</span></div>
-      <div class="fived-mini"><span class="n">04</span><b>Diligence</b><span>Do they test and verify before trusting it?</span></div>
-      <div class="fived-mini"><span class="n">05</span><b>Deliverable</b><span>Is the final result genuinely good?</span></div>
+      <div class="fived-mini"><span class="n">01</span><b>Delegation</b><span>What do they own — and what do they hand to AI?</span><span class="fe">Evidence · task split + prompts</span></div>
+      <div class="fived-mini"><span class="n">02</span><b>Description</b><span>Do they give AI clear goals, context and constraints?</span><span class="fe">Evidence · prompt quality</span></div>
+      <div class="fived-mini dark"><span class="n">03</span><b>Discernment</b><span>Do they challenge and correct what AI produces?</span><span class="fe">Evidence · edits + corrections</span></div>
+      <div class="fived-mini"><span class="n">04</span><b>Diligence</b><span>Do they test and verify before trusting it?</span><span class="fe">Evidence · tests + verification</span></div>
+      <div class="fived-mini"><span class="n">05</span><b>Deliverable</b><span>Is the final result genuinely good?</span><span class="fe">Evidence · final deliverable</span></div>
     </div>
     <div class="slide-foot"><span>04 / 08 · The shift · the five Ds</span><span class="brand">taali<span class="p">.</span></span></div>
   </section>
