@@ -5,30 +5,28 @@ Routes that have an org context should call ``get_client_for_org(org)``;
 flows without an org context (admin tools, scripts) can call
 ``get_shared_client()`` for the Taali-wide key.
 
-Workspace keys are provisioned **lazily** on first call: avoids signup
-latency, and orgs that never make a billable Claude call never get a
-workspace at all (saving Admin API quota).
+Workspace keys are **not** provisioned automatically. The Admin API has no
+create-API-key endpoint (``POST /v1/organizations/api_keys`` returns 405) —
+keys can only be minted in the Console. The old auto-provisioner created the
+workspace, failed on the key, and orphaned the workspace on every call; ~185
+dead ``taali-org-*`` workspaces accumulated that way before it was removed.
 
-Failures degrade gracefully: any provisioning error is logged,
-``Organization.anthropic_workspace_provisioning_failed_at`` is stamped, and
-we fall back to the shared key. The customer-facing flow never breaks.
+So an org uses its own key only if one was minted by hand in the Console and
+stored (encrypted) on ``Organization.anthropic_workspace_key_encrypted``.
+Everything else falls back to the shared key, with ``organization_id`` bound
+for metering attribution. The customer-facing flow never breaks either way.
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 from anthropic import Anthropic
 
-from ..components.integrations.anthropic_admin.service import (
-    is_configured as admin_is_configured,
-    provision_workspace_for_org,
-)
 from ..models.organization import Organization
 from ..platform.config import settings
 from ..platform.database import SessionLocal
-from ..platform.secrets import decrypt_text, encrypt_text
+from ..platform.secrets import decrypt_text
 from .metered_anthropic_client import MeteredAnthropicClient
 
 logger = logging.getLogger("taali.claude_client_resolver")
@@ -130,68 +128,6 @@ def _decrypted_workspace_key(org: Organization) -> Optional[str]:
     return plaintext or None
 
 
-def _provision_for_org_safe(org: Organization) -> Optional[str]:
-    """Provision a workspace + key for an org, SERIALIZED per-org so concurrent
-    first-calls can't each create a workspace (the source of duplicate
-    ``taali-org-*`` workspaces). Returns the plaintext key on success, ``None``
-    on failure (caller falls back to shared key).
-
-    The org row is locked (``with_for_update``) for the whole check → provision
-    → persist sequence, so a second concurrent call blocks until the first
-    commits, then sees the freshly-stored key and returns it WITHOUT creating a
-    duplicate. The lock is held across the Admin API call (~1-2s) — acceptable
-    because provisioning happens exactly once per org, at low volume.
-    """
-    if not admin_is_configured():
-        return None
-    org_id = int(org.id)
-    try:
-        with SessionLocal() as session:
-            locked = (
-                session.query(Organization)
-                .filter(Organization.id == org_id)
-                .with_for_update()
-                .first()
-            )
-            if locked is None:
-                return None
-            # Re-check UNDER THE LOCK: a concurrent call may have already
-            # provisioned (key persisted) or recorded a failure while we waited
-            # for the lock. Either way, never create a second workspace.
-            existing = _decrypted_workspace_key(locked)
-            if existing:
-                return existing
-            if locked.anthropic_workspace_provisioning_failed_at is not None:
-                return None
-            # We hold the lock and the org still has no key → sole provisioner.
-            try:
-                provisioned = provision_workspace_for_org(
-                    org_id=org_id,
-                    org_slug=getattr(locked, "slug", None),
-                )
-            except Exception as exc:  # AnthropicAdminError or anything else
-                logger.warning(
-                    "Admin API provisioning failed for org=%s: %s", org_id, exc
-                )
-                locked.anthropic_workspace_provisioning_failed_at = datetime.now(
-                    timezone.utc
-                )
-                session.commit()
-                return None
-            locked.anthropic_workspace_id = provisioned.workspace_id
-            locked.anthropic_workspace_key_encrypted = encrypt_text(
-                provisioned.api_key_plaintext, settings.SECRET_KEY
-            )
-            locked.anthropic_workspace_provisioning_failed_at = None
-            session.commit()
-            return provisioned.api_key_plaintext
-    except Exception:
-        logger.exception(
-            "Unexpected error provisioning workspace for org=%s", org_id
-        )
-        return None
-
-
 def get_metered_client(
     *,
     organization_id: Optional[int] = None,
@@ -257,9 +193,8 @@ def get_client_for_org(
     a ``metering={...}`` kwarg. See ``metered_anthropic_client`` for the
     full kwarg schema.
 
-    Lazy provisioning: if the org has no workspace key and Admin API is
-    configured, attempt to provision one now. Any failure falls back to
-    the shared key without raising.
+    No provisioning happens here: an org either already has a hand-minted
+    workspace key stored on its row, or it uses the shared key.
     """
     org_id = int(org.id) if org is not None else None
 
@@ -282,14 +217,4 @@ def get_client_for_org(
     if existing:
         return _wrap(_client(existing))
 
-    # Skip retry if a recent attempt failed — checked at the call site so
-    # we don't hammer Admin API on every Claude call. A scheduled retry
-    # task can clear the timestamp later.
-    failed_at = getattr(org, "anthropic_workspace_provisioning_failed_at", None)
-    if failed_at is not None:
-        return _wrap(_client(_shared_api_key()))
-
-    plaintext = _provision_for_org_safe(org)
-    if plaintext:
-        return _wrap(_client(plaintext))
     return _wrap(_client(_shared_api_key()))
