@@ -16,6 +16,7 @@ import {
   WORKSPACE_SIGNAL_SUMMARY,
   WORKSPACE_SIGNALS_FLAG,
   WORK_RECORD_SENTENCE,
+  TAB_FOCUS_TELEMETRY_SITES,
   recordingFlagLabel,
 } from './sessionDisclosure';
 
@@ -128,6 +129,21 @@ describe('assessment session disclosure', () => {
       const hardcoded = read(rel).match(falseClaim);
       expect(hardcoded, `${rel} hardcodes a transcript-only claim: ${hardcoded?.[0]}`).toBeNull();
     }
+  });
+
+  it('knows every candidate surface that watches the assessment tab', () => {
+    // The runtime-event allow-list is not the only write path: #1144 added a
+    // per-question tab_switches counter in UnderstandingCheck that posts with
+    // the answer instead. Pin the set of files that listen, so a third channel
+    // has to be classified and disclosed rather than landing quietly.
+    const runtimeDir = path.join(repoRoot, 'frontend/src/features/assessment_runtime');
+    const listeners = fs.readdirSync(runtimeDir)
+      .filter((name) => name.endsWith('.jsx') && !name.includes('.test.'))
+      .filter((name) => fs.readFileSync(path.join(runtimeDir, name), 'utf8').includes('visibilitychange'));
+
+    expect(sorted(listeners)).toEqual(sorted(TAB_FOCUS_TELEMETRY_SITES));
+    // ...and the disclosure covers what they all capture.
+    expect(WORKSPACE_SIGNAL_SENTENCE).toMatch(/when the tab loses focus/);
   });
 
   it('states what the metrics are for and that they carry no content', () => {

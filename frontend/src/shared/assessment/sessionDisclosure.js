@@ -92,6 +92,17 @@ export const WORKSPACE_SIGNAL_PAYLOAD_FIELDS = Object.freeze([
 
 export const WORKSPACE_SIGNAL_CAVEAT = 'Each one records which metric it was, when it happened, where in the workspace, how many characters were involved, and the file you were in — never the content of what you type or copy.';
 
+// Every candidate-facing file that watches the assessment tab's focus. There is
+// more than one write path: the workspace posts `visibility_hidden` through the
+// runtime-event allow-list, while the understanding check counts switches
+// per question and submits them with the answer, bypassing that allow-list
+// entirely. The disclosure covers both ("when the tab loses focus"), and the
+// test pins this list so a third path cannot land undisclosed.
+export const TAB_FOCUS_TELEMETRY_SITES = Object.freeze([
+  'AssessmentPageContent.jsx',
+  'UnderstandingCheck.jsx',
+]);
+
 export const NO_AV_RECORDING_SENTENCE = 'We do not record your screen, camera, or microphone.';
 
 // Summary chip in the live workspace footer. Each branch has to be true of the
