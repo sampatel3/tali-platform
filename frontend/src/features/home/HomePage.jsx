@@ -890,7 +890,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             console (outcomes, fleet, teaching, A/B, decision log) moved to
             /analytics — keeps the hub's review loop focused, and keeps the
             expensive reporting queries off every home load. */}
-        <HomeAnalyticsSummary kpis={kpis} orgBudget={orgBudget} onNavigate={onNavigate} />
+        <HomeAnalyticsSummary kpis={kpis} orgBudget={orgBudget} known={Boolean(orgStatus)} onNavigate={onNavigate} />
       </div>
         </div>
         {/* The chat dock opens when an agent is selected (or in bulk mode). Its

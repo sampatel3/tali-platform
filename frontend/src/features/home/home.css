@@ -1647,6 +1647,9 @@
   margin-top: 3px;
   letter-spacing: -0.01em;
 }
+.home-pulse-v-muted {
+  color: var(--mute);
+}
 .home-pulse-unit {
   font-size: var(--fs-body);
   font-weight: 400;
