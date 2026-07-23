@@ -76,17 +76,21 @@ export const WORK_RECORD_SENTENCE = `We record your work in this session: ${join
 // who is about to sit an assessment.
 export const WORKSPACE_SIGNAL_SENTENCE = `To keep the assessment fair we also log activity metrics from this tab — ${WORKSPACE_SIGNAL_SUMMARY}.`;
 
-// Every field the server persists for one of these events
-// (candidate_integrity_routes.py) — the caveat below has to account for all of
-// them, or it is the same "claims to be exhaustive but isn't" defect this
-// module exists to prevent. `advisory` is an internal marker, not candidate data.
+// Every field persisted for one of these events — the envelope written by
+// `append_assessment_timeline_event` (event_type, timestamp) plus the advisory
+// payload from candidate_integrity_routes.py. The caveat below is an
+// affirmative "each one records X" claim, so X has to be all of them, or it is
+// the same "reads as exhaustive but isn't" defect this module exists to
+// prevent. `advisory` is an internal marker, not candidate data.
 export const WORKSPACE_SIGNAL_PAYLOAD_FIELDS = Object.freeze([
+  'event_type',
+  'timestamp',
   'source',
   'length',
   'file_path',
 ]);
 
-export const WORKSPACE_SIGNAL_CAVEAT = 'Each one records where in the workspace it happened, how many characters were involved, and the file you were in — never the content of what you type or copy.';
+export const WORKSPACE_SIGNAL_CAVEAT = 'Each one records which metric it was, when it happened, where in the workspace, how many characters were involved, and the file you were in — never the content of what you type or copy.';
 
 export const NO_AV_RECORDING_SENTENCE = 'We do not record your screen, camera, or microphone.';
 

@@ -24,6 +24,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 const read = (rel) => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
 
 const integrityRoutes = read('backend/app/domains/assessments_runtime/candidate_integrity_routes.py');
+const repositorySource = read('backend/app/components/assessments/repository.py');
 const workspaceSecuritySource = read('frontend/src/features/assessment_runtime/AssessmentWorkspaceSecurity.jsx');
 const runtimeSource = read('frontend/src/features/assessment_runtime/AssessmentPageContent.jsx');
 
@@ -134,23 +135,35 @@ describe('assessment session disclosure', () => {
     expect(WORKSPACE_SIGNAL_CAVEAT).toMatch(/never the content of what you type or copy/);
   });
 
-  it('accounts for every field the server persists on an advisory event', () => {
+  it('accounts for every field persisted on an advisory event', () => {
     // The caveat is an affirmative "each one records X" claim, so X has to be
-    // the whole set. The first version said "counts and timestamps" while the
-    // server also stored file_path — the same claims-to-be-exhaustive defect
-    // this module exists to prevent, one level down.
+    // the whole set. Two versions of it were wrong: "counts and timestamps"
+    // while file_path was stored, then the file path without the timestamp.
+    // Both slipped because the guard only read one of the two write sites, so
+    // it now reads both — the shared envelope AND the advisory payload.
+    const envelope = repositorySource
+      .split('def append_assessment_timeline_event')[1]
+      .split('assessment.timeline = timeline')[0];
+    const envelopeFields = Array.from(
+      envelope.matchAll(/^\s+"([a-z0-9_]+)":/gm),
+      (match) => match[1],
+    );
+
     const advisoryBlock = integrityRoutes
       .split('if event_type in _ADVISORY_INTEGRITY_EVENT_TYPES:')[1]
       .split('append_assessment_timeline_event')[0];
-    const persisted = Array.from(
+    const payloadFields = Array.from(
       advisoryBlock.matchAll(/payload\["([a-z0-9_]+)"\]\s*=/g),
       (match) => match[1],
-    ).filter((field) => field !== 'advisory');
+    );
 
-    expect(sorted(persisted)).toEqual(sorted(WORKSPACE_SIGNAL_PAYLOAD_FIELDS));
+    const persisted = [...envelopeFields, ...payloadFields].filter((f) => f !== 'advisory');
+    expect(sorted(new Set(persisted))).toEqual(sorted(WORKSPACE_SIGNAL_PAYLOAD_FIELDS));
 
     // ...and each declared field is actually described to the candidate.
     const described = {
+      event_type: /which metric it was/,
+      timestamp: /when it happened/,
       source: /where in the workspace/,
       length: /how many characters/,
       file_path: /the file you were in/,

@@ -24,7 +24,7 @@ Depending on your application, we and Taali process:
 - Your identity and contact details (name, email, phone, location).
 - Your CV / résumé and its content, and your work history, education and skills.
 - Your answers to screening questions and any notes about your application.
-- If you take a work-sample assessment: your prompts, the AI's responses, your file changes and validation runs. To keep the assessment fair we also log activity metrics from the assessment browser tab — clipboard use, blocked export attempts, and when the tab loses focus. Each one records where in the workspace it happened, how many characters were involved, and the file you were in — never the content of what you type or copy — and they are not an input to your score. **We do not record your screen, microphone, or camera.**
+- If you take a work-sample assessment: your prompts, the AI's responses, your file changes and validation runs. To keep the assessment fair we also log activity metrics from the assessment browser tab — clipboard use, blocked export attempts, and when the tab loses focus. Each one records which metric it was, when it happened, where in the workspace, how many characters were involved, and the file you were in — never the content of what you type or copy — and they are not an input to your score. **We do not record your screen, microphone, or camera.**
 - If we interview you and use a transcription tool: the interview transcript. `⚖ COUNSEL` — `[CUSTOMER: state your recording/consent approach here; you are responsible for the lawful basis for recording]`.
 - Scores, cited evidence and the recommendation reached about your application, and any human review of it.
 
