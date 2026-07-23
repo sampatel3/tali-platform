@@ -22,7 +22,12 @@ export default defineConfig({
         manualChunks: {
           react_vendor: ['react', 'react-dom', 'react-router-dom'],
           charts_vendor: ['recharts'],
-          monaco_vendor: ['@monaco-editor/react'],
+          // Reached only through the lazy CodeEditor import, so the Monaco
+          // runtime stays out of the initial app load. Seeded with the editor
+          // API rather than the `monaco-editor` package entry: the entry is
+          // editor.main, which would drag every language Monaco ships back
+          // into the graph regardless of what monacoSetup.js imports.
+          monaco_vendor: ['@monaco-editor/react', 'monaco-editor/esm/vs/editor/editor.api'],
           icons_vendor: ['lucide-react'],
           graph_vendor: ['cytoscape'],
         },
