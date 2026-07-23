@@ -56,6 +56,7 @@ from .repository import (
     utcnow,
 )
 from .task_snapshot import task_view_for_assessment
+from . import understanding_check
 
 logger = logging.getLogger("taali.assessments")
 
@@ -1087,7 +1088,77 @@ def build_submission_receipt(
             "required": True,
             "status": "satisfied" if artifact_delta["work_present"] else "incomplete",
         },
+        # Tells the browser whether to route to the understanding check or
+        # straight to the confirmation screen. Status only — the questions
+        # themselves come from the check route, one at a time.
+        "understanding_check_pending": understanding_check.is_window_open(assessment),
     }
+
+
+def _open_understanding_check(
+    assessment: Assessment,
+    task: Task,
+    db: Session,
+    *,
+    settings_obj: Any,
+    repo_files: Dict[str, str],
+) -> None:
+    """Generate the comprehension questions and open the answering window.
+
+    Never raises. Every failure path lands on ``skip_window``, which records
+    "not assessed" and leaves grading free to proceed on the next sweep tick —
+    a submitted assessment must never be stranded by this feature.
+    """
+    try:
+        task_extra = task.extra_data if isinstance(task.extra_data, dict) else {}
+        raw_dps = task_extra.get("decision_points")
+        outcome = understanding_check.generate_questions(
+            api_key=getattr(settings_obj, "ANTHROPIC_API_KEY", "") or "",
+            organization_id=int(assessment.organization_id),
+            git_evidence=(
+                assessment.git_evidence
+                if isinstance(assessment.git_evidence, dict)
+                else {}
+            ),
+            repo_files=repo_files,
+            prompt_transcript=list(assessment.ai_prompts or []),
+            decision_points=[dp for dp in (raw_dps or []) if isinstance(dp, dict)],
+            task_scenario=task.scenario or "",
+            candidate_role=str(getattr(task, "role", "") or ""),
+            assessment_id=int(assessment.id),
+            role_id=int(assessment.role_id) if assessment.role_id else None,
+            trace_id=get_request_id(),
+        )
+        if not outcome.questions:
+            understanding_check.skip_window(
+                assessment, reason=outcome.error or "no_questions_generated"
+            )
+        else:
+            understanding_check.open_window(assessment, outcome.questions)
+            append_assessment_timeline_event(
+                assessment,
+                "understanding_check_opened",
+                {
+                    "questions_total": len(outcome.questions),
+                    "model_used": outcome.model_used,
+                    "expires_at": assessment.understanding_check_expires_at.isoformat(),
+                },
+            )
+        db.commit()
+    except Exception:
+        logger.exception(
+            "Failed to open understanding check assessment_id=%s", assessment.id
+        )
+        db.rollback()
+        try:
+            understanding_check.skip_window(assessment, reason="open_failed")
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Failed to mark understanding check skipped assessment_id=%s",
+                assessment.id,
+            )
+            db.rollback()
 
 
 def submit_assessment_impl(
@@ -1367,6 +1438,18 @@ def submit_assessment_impl(
         )
 
     if defer_scoring:
+        # Open the post-submit understanding check against the artifact we just
+        # froze. Deliberately AFTER the freeze commit: the candidate's work is
+        # already durable and idempotently recoverable at this point, so a
+        # generator outage — or a candidate who closes the tab on the first
+        # question — costs the comprehension signal and nothing else.
+        _open_understanding_check(
+            assessment,
+            task,
+            db,
+            settings_obj=settings_obj,
+            repo_files=sandbox_repo_files,
+        )
         # The immutable database artifact is now authoritative. Retire the
         # mutable candidate sandbox only after that commit; capture failures
         # above deliberately leave it running so the candidate can retry.
@@ -1747,6 +1830,7 @@ def submit_assessment_impl(
                 git_evidence=(assessment.git_evidence or {}) if isinstance(assessment.git_evidence, dict) else {},
                 traps=traps_for_grader,
                 process_features=process_features,
+                understanding_check=understanding_check.summarize(assessment),
             )
             scorer = RubricScorer(
                 api_key=settings_obj.ANTHROPIC_API_KEY,

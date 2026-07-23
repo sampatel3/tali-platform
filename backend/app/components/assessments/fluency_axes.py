@@ -23,6 +23,11 @@ FLUENCY_AXES = ("delegation", "description", "discernment", "diligence", "delive
 _GRADER_AXES: Dict[str, str] = {
     "interrogation_outcome": "delegation",
     "practice_outcome": "description",
+    # The post-submit understanding check asks whether the candidate can read
+    # back what the agent produced for them. That is Discernment — critically
+    # evaluating the agent's output — not Diligence, which is about verifying
+    # before claiming done.
+    "comprehension_outcome": "discernment",
 }
 
 # Lens -> axis. Every lens in ``task_spec_loader._SUPPORTED_LENSES`` must have

@@ -130,6 +130,30 @@ export const assessments = {
       candidateSessionKey,
     );
   },
+  // Post-submit understanding check. The work is already frozen by the time
+  // these run, so they carry the token + live session but no request proof —
+  // that exists to protect workspace mutations, and these only append answers.
+  getUnderstandingCheck: async (id, assessmentToken, candidateSessionKey) => {
+    const requestPath = `/assessments/${id}/understanding-check`;
+    return api.get(requestPath, {
+      authMode: ASSESSMENT_TOKEN_AUTH_MODE,
+      headers: {
+        'X-Assessment-Token': assessmentToken,
+        ...(candidateSessionKey ? { 'X-Assessment-Session': candidateSessionKey } : {}),
+      },
+    });
+  },
+  answerUnderstandingCheck: (id, payload, assessmentToken, candidateSessionKey) => api.post(
+    `/assessments/${id}/understanding-check/answer`,
+    payload,
+    {
+      authMode: ASSESSMENT_TOKEN_AUTH_MODE,
+      headers: {
+        'X-Assessment-Token': assessmentToken,
+        ...(candidateSessionKey ? { 'X-Assessment-Session': candidateSessionKey } : {}),
+      },
+    },
+  ),
   remove: (id) => api.delete(`/assessments/${id}`),
   resend: (id) => api.post(`/assessments/${id}/resend`),
   recoverCandidateDevice: (id) => api.post(`/assessments/${id}/recover-candidate-device`),

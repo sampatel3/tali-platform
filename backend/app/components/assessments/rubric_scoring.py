@@ -145,6 +145,10 @@ class ScoringArtifacts:
     # — the loop skeleton (test runs, challenges, cadence) handed to the LLM
     # judge so it doesn't have to infer counts from a truncated transcript.
     process_features: Dict[str, Any] = field(default_factory=dict)
+    # Post-submit understanding check — understanding_check.summarize() output
+    # for this assessment. Read by the ``comprehension_outcome`` grader. Empty
+    # dict for a run that predates the feature, which grades as not-assessed.
+    understanding_check: Dict[str, Any] = field(default_factory=dict)
 
     def repo_files_excerpt(self) -> str:
         """Concatenated repo files for prompt embedding (bounded)."""
@@ -1069,6 +1073,81 @@ class RubricScorer:
             reasoning=reasoning[:1000], evidence_citations=evidence[:10], weight=weight,
         )
 
+    def grade_dimension_via_comprehension_outcome(
+        self,
+        dimension_id: str,
+        artifacts: ScoringArtifacts,
+        *,
+        weight: float = 0.0,
+    ) -> DimensionGrade:
+        """Deterministic grader for the post-submit understanding check
+        (``grader: "comprehension_outcome"``). No Anthropic call.
+
+        The questions were generated from the candidate's own frozen diff and
+        auto-graded at answer time, so this is a pure read of the stored
+        record: percent correct, scaled to the 0-10 dimension range.
+
+        Not-assessed is a first-class outcome, and it is deliberately an
+        ``error`` rather than a zero. ``summarize_fluency_4d`` skips errored
+        dimensions, so a run that predates the feature, or one whose generator
+        failed, leaves Discernment to the task's other dimensions instead of
+        being dragged to the floor by a check that was never asked. Scoring a
+        missing check as zero would silently re-rate every historical
+        assessment the moment this shipped.
+
+        A candidate who ran out of the window mid-check IS graded, on the
+        questions asked — abandoning a check is a result, not an absence.
+        """
+        summary = artifacts.understanding_check or {}
+        status = str(summary.get("status") or "")
+        total = int(summary.get("questions_total") or 0)
+        if not status or status == "skipped" or total <= 0:
+            return DimensionGrade(
+                dimension_id=dimension_id, score=0.0, rating="poor",
+                reasoning=(
+                    "No understanding check was asked on this assessment "
+                    f"(status={status or 'none'}); dimension not assessed."
+                ),
+                evidence_citations=[], weight=weight,
+                error="understanding_check_not_asked",
+            )
+        if status not in ("completed", "expired"):
+            return DimensionGrade(
+                dimension_id=dimension_id, score=0.0, rating="poor",
+                reasoning=f"Understanding check is still {status}; not yet gradeable.",
+                evidence_citations=[], weight=weight,
+                error="understanding_check_incomplete",
+            )
+
+        correct = int(summary.get("questions_correct") or 0)
+        percent = 100.0 * correct / total
+        score = round(percent / 10.0, 1)
+        rating = "excellent" if percent >= 80 else ("good" if percent >= 50 else "poor")
+        detail = summary.get("questions")
+        missed = [
+            str(question.get("probe") or "?")
+            for question in (detail if isinstance(detail, list) else [])
+            if isinstance(question, dict) and not question.get("is_correct")
+        ]
+        reasoning = (
+            f"Answered {correct} of {total} comprehension questions correctly "
+            f"about their own submitted diff ({percent:.0f}%)."
+        )
+        if status == "expired":
+            answered = int(summary.get("questions_answered") or 0)
+            reasoning += f" Check window expired after {answered} of {total} answered."
+        if missed:
+            reasoning += f" Missed probes: {', '.join(sorted(set(missed)))}."
+        evidence = [
+            str(question.get("evidence") or "")
+            for question in (detail if isinstance(detail, list) else [])
+            if isinstance(question, dict) and question.get("evidence")
+        ]
+        return DimensionGrade(
+            dimension_id=dimension_id, score=float(score), rating=rating,
+            reasoning=reasoning[:1000], evidence_citations=evidence[:10], weight=weight,
+        )
+
     def grade_dimension(
         self,
         dimension_id: str,
@@ -1166,6 +1245,12 @@ class RubricScorer:
                 # verification) from the final repo + process trace.
                 grade = self.grade_dimension_via_practice_outcome(
                     dim_id, artifacts, weight=weight, probe=dim_spec.get("probe"),
+                )
+            elif grader_kind == "comprehension_outcome":
+                # Deterministic, no Anthropic call. Reads the post-submit
+                # understanding check, which was auto-graded at answer time.
+                grade = self.grade_dimension_via_comprehension_outcome(
+                    dim_id, artifacts, weight=weight,
                 )
             else:
                 criteria = dim_spec.get("criteria") or {}

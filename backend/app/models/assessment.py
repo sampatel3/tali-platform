@@ -226,6 +226,23 @@ class Assessment(Base):
         server_default=text("false"),
         nullable=False,
     )
+    # --- Post-submit understanding check -------------------------------
+    # Multiple-choice comprehension questions generated from the candidate's
+    # OWN frozen artifact, answered after the work is frozen. Verifies the
+    # candidate understands what the agent produced (an Anthropic RCT found
+    # AI-assisted work scores ~17pp lower on follow-up comprehension).
+    #
+    # ``understanding_check_questions`` holds the correct option index and is
+    # therefore SERVER-ONLY — never serialize it to a candidate surface. Use
+    # understanding_check.candidate_question_view() for anything the browser
+    # can see.
+    understanding_check_status = Column(String(16), nullable=True, index=True)
+    understanding_check_questions = Column(JSON, nullable=True)
+    understanding_check_answers = Column(JSON, nullable=True)
+    understanding_check_score = Column(Float, nullable=True)
+    understanding_check_started_at = Column(DateTime(timezone=True), nullable=True)
+    understanding_check_expires_at = Column(DateTime(timezone=True), nullable=True)
+    understanding_check_completed_at = Column(DateTime(timezone=True), nullable=True)
     cv_file_url = Column(String, nullable=True)
     cv_filename = Column(String, nullable=True)
     cv_uploaded_at = Column(DateTime(timezone=True), nullable=True)
