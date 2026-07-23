@@ -2,7 +2,7 @@ export const AI_GENAI_PRODUCTION_READINESS_TASK = {
   name: 'GenAI Production Readiness Review',
   task_id: 'ai_eng_genai_production_readiness',
   duration_minutes: 30,
-  scenario: `You joined Deeplight as an AI Engineer embedded in a UAE-licensed bank's Customer Intelligence team. You have inherited a GenAI feature that summarises support tickets and recommends churn-risk actions for relationship managers.
+  scenario: `You joined a data & AI consultancy as an AI Engineer embedded in a UAE-licensed bank's Customer Intelligence team. You have inherited a GenAI feature that summarises support tickets and recommends churn-risk actions for relationship managers.
 
 **Message from the product director:**
 
