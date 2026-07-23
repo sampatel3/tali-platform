@@ -15,6 +15,7 @@ from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
 from ...services.evaluation_result_service import normalize_stored_evaluation_result
 from .task_snapshot import task_view_for_assessment
+from . import understanding_check
 
 
 # ---------------------------------------------------------------------------
@@ -597,6 +598,10 @@ def assessment_to_response(
         "role_name": role_name,
         "application_status": application_status,
         "evaluation_rubric": evaluation_rubric,
+        # Post-submit understanding check. Recruiter-facing surface only —
+        # this route is behind recruiter auth, and the candidate runtime never
+        # reads it, so per-question correct answers are safe to include here.
+        "understanding_check": understanding_check.summarize(assessment),
         "manual_evaluation": evaluation_result,
         "evaluation_result": evaluation_result,
         "interview_debrief_generated_at": getattr(assessment, "interview_debrief_generated_at", None),

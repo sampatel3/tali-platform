@@ -76,6 +76,7 @@ const AXIS_KEYS = new Set(FLUENCY_4D_AXES.map((a) => a.key));
 const GRADER_AXES = {
   interrogation_outcome: 'delegation', // decision-ownership
   practice_outcome: 'description', // observed AI-native practice
+  comprehension_outcome: 'discernment', // post-submit understanding check
 };
 const LENS_AXES = {
   decision: 'delegation',

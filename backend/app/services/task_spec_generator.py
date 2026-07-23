@@ -123,12 +123,17 @@ TOP-LEVEL REQUIRED KEYS:
       ARTIFACT, source grounding, and role-relevant outcome on their merits.
       Criteria MUST say to credit good output regardless of who typed it, and
       that nothing shipped = poor.
-    * EXACTLY these three, verbatim ids — they cover the remaining axes and
+    * EXACTLY these four, verbatim ids — they cover the remaining axes and
       contribute workspace/process evidence. Together with deliverable-lens
       dimensions, at least 0.70 of total rubric weight MUST map to work evidence:
-      - "output_scrutiny" {"weight": 0.15, "lens": "discernment", "criteria": {...}}
+      - "output_scrutiny" {"weight": 0.08, "lens": "discernment", "criteria": {...}}
         → did they critically evaluate the agent's output and override what was
         wrong? Write criteria around THIS scenario's real failure modes.
+      - "submission_comprehension" {"weight": 0.07, "grader": "comprehension_outcome",
+        "part": "applied"} (NO criteria, NO lens — graded deterministically from
+        the post-submit understanding check). Shares the Discernment budget with
+        output_scrutiny: one dimension asks whether they caught what was wrong,
+        the other whether they can read back what shipped.
       - "verification_before_done" {"weight": 0.15, "lens": "diligence", "criteria": {...}}
         → did they verify (run the tests / check the artifact against the brief)
         before claiming done?
@@ -174,8 +179,9 @@ TOP-LEVEL REQUIRED KEYS:
 
 HARD RULES:
 - evaluation_rubric weights sum to EXACTLY 1.0.
-- evaluation_rubric MUST include output_scrutiny, verification_before_done and
-  ai_native_practice so all five fluency axes are graded.
+- evaluation_rubric MUST include output_scrutiny, submission_comprehension,
+  verification_before_done and ai_native_practice so all five fluency axes are
+  graded.
 - jd_to_signal_map covers EVERY rubric dimension (one entry each).
 - deliverable.primary_artifact MUST be a key in repo_structure.files.
 - deliverable.required MUST be true, no_artifact_outcome MUST be "incomplete",

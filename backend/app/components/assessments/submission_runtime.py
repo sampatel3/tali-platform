@@ -56,6 +56,7 @@ from .repository import (
     utcnow,
 )
 from .task_snapshot import task_view_for_assessment
+from . import understanding_check
 
 logger = logging.getLogger("taali.assessments")
 
@@ -1087,7 +1088,115 @@ def build_submission_receipt(
             "required": True,
             "status": "satisfied" if artifact_delta["work_present"] else "incomplete",
         },
+        # Tells the browser whether to route to the understanding check or
+        # straight to the confirmation screen. Status only — the questions
+        # themselves come from the check route, one at a time.
+        "understanding_check_pending": understanding_check.is_window_open(assessment),
     }
+
+
+def _reserve_understanding_check(assessment: Assessment, db: Session) -> None:
+    """Open the understanding-check window without generating anything yet.
+
+    Deliberately does no model work. Generating five questions from a ~25k-token
+    context is a 20-30s Sonnet call, and submit is the one request that must
+    stay fast: the candidate is watching it, and a timeout on the call that
+    freezes their work would be the worst possible place to spend that latency.
+    The questions are generated on the first check fetch instead, behind the
+    loading state the check screen already shows.
+
+    Never raises. A failure here lands on ``skip_window`` so the assessment
+    grades normally without a check.
+    """
+    try:
+        understanding_check.reserve_window(assessment)
+        append_assessment_timeline_event(
+            assessment,
+            "understanding_check_reserved",
+            {"expires_at": assessment.understanding_check_expires_at.isoformat()},
+        )
+        db.commit()
+    except Exception:
+        logger.exception(
+            "Failed to reserve understanding check assessment_id=%s", assessment.id
+        )
+        db.rollback()
+        try:
+            understanding_check.skip_window(assessment, reason="reserve_failed")
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Failed to mark understanding check skipped assessment_id=%s",
+                assessment.id,
+            )
+            db.rollback()
+
+
+def generate_understanding_check_questions(
+    assessment: Assessment,
+    task: Task,
+    db: Session,
+    *,
+    settings_obj: Any,
+) -> None:
+    """Fill a reserved window with questions. Called from the check route.
+
+    Reads the frozen submission artifact rather than a live sandbox, so it works
+    long after the candidate's workspace has been retired. Never raises: an
+    empty or failed generation marks the check skipped, which reads as "not
+    assessed" on the report and releases grading.
+    """
+    try:
+        artifact = _durable_submission_artifact(assessment)
+        repo_files = dict(artifact["files"]) if isinstance(artifact, dict) else {}
+        task_extra = task.extra_data if isinstance(task.extra_data, dict) else {}
+        raw_dps = task_extra.get("decision_points")
+        outcome = understanding_check.generate_questions(
+            api_key=getattr(settings_obj, "ANTHROPIC_API_KEY", "") or "",
+            organization_id=int(assessment.organization_id),
+            git_evidence=(
+                assessment.git_evidence
+                if isinstance(assessment.git_evidence, dict)
+                else {}
+            ),
+            repo_files=repo_files,
+            prompt_transcript=list(assessment.ai_prompts or []),
+            decision_points=[dp for dp in (raw_dps or []) if isinstance(dp, dict)],
+            task_scenario=task.scenario or "",
+            candidate_role=str(getattr(task, "role", "") or ""),
+            assessment_id=int(assessment.id),
+            role_id=int(assessment.role_id) if assessment.role_id else None,
+            trace_id=get_request_id(),
+        )
+        if not outcome.questions:
+            understanding_check.skip_window(
+                assessment, reason=outcome.error or "no_questions_generated"
+            )
+        else:
+            understanding_check.open_window(assessment, outcome.questions)
+            append_assessment_timeline_event(
+                assessment,
+                "understanding_check_opened",
+                {
+                    "questions_total": len(outcome.questions),
+                    "model_used": outcome.model_used,
+                },
+            )
+        db.commit()
+    except Exception:
+        logger.exception(
+            "Failed to generate understanding check assessment_id=%s", assessment.id
+        )
+        db.rollback()
+        try:
+            understanding_check.skip_window(assessment, reason="generation_failed")
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Failed to mark understanding check skipped assessment_id=%s",
+                assessment.id,
+            )
+            db.rollback()
 
 
 def submit_assessment_impl(
@@ -1367,6 +1476,13 @@ def submit_assessment_impl(
         )
 
     if defer_scoring:
+        # Open the post-submit understanding-check window. Deliberately AFTER
+        # the freeze commit — the candidate's work is already durable and
+        # idempotently recoverable here, so anything that goes wrong with the
+        # check costs the comprehension signal and nothing else. Reserve only:
+        # the questions are generated on the first check fetch so this request
+        # doesn't carry a 20-30s model call.
+        _reserve_understanding_check(assessment, db)
         # The immutable database artifact is now authoritative. Retire the
         # mutable candidate sandbox only after that commit; capture failures
         # above deliberately leave it running so the candidate can retry.
@@ -1747,6 +1863,7 @@ def submit_assessment_impl(
                 git_evidence=(assessment.git_evidence or {}) if isinstance(assessment.git_evidence, dict) else {},
                 traps=traps_for_grader,
                 process_features=process_features,
+                understanding_check=understanding_check.summarize(assessment),
             )
             scorer = RubricScorer(
                 api_key=settings_obj.ANTHROPIC_API_KEY,

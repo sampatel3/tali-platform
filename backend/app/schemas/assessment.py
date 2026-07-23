@@ -134,6 +134,9 @@ class AssessmentResponse(BaseModel):
     clone_command: Optional[str] = None
     # Manual evaluator: task rubric + saved category scores/evidence
     evaluation_rubric: Optional[Dict[str, Any]] = None
+    # Post-submit understanding check (understanding_check.summarize).
+    # Recruiter-facing only — carries the correct answer per question.
+    understanding_check: Optional[Dict[str, Any]] = None
     manual_evaluation: Optional[Dict[str, Any]] = None
     evaluation_result: Optional[Dict[str, Any]] = None
     interview_debrief_generated_at: Optional[datetime] = None
@@ -284,6 +287,23 @@ class SubmitRequest(BaseModel):
     # routes reject non-empty snapshots.
     repo_files: List[RepoFileSnapshotEntry] = Field(default_factory=list, max_length=100)
     tab_switch_count: int = Field(default=0, ge=0, le=100_000)
+
+    model_config = {"extra": "forbid"}
+
+
+class UnderstandingCheckAnswerRequest(BaseModel):
+    """One answer to one post-submit comprehension question.
+
+    ``selected_index=None`` is a deliberate skip — the per-question deadline
+    elapsed in the browser. It scores as incorrect but stays distinguishable
+    from a wrong pick on the recruiter report, so "ran out of time on Q4" never
+    reads as "did not understand Q4".
+    """
+
+    question_id: str = Field(min_length=1, max_length=64)
+    selected_index: Optional[int] = Field(default=None, ge=0, le=32)
+    elapsed_ms: Optional[int] = Field(default=None, ge=0, le=3_600_000)
+    tab_switches: int = Field(default=0, ge=0, le=10_000)
 
     model_config = {"extra": "forbid"}
 
