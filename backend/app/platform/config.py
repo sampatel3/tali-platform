@@ -149,18 +149,18 @@ class Settings(BaseSettings):
     # with the usage meter in shadow mode, but /health reports the meter as
     # unready/degraded. Keep False outside a time-bounded metering incident.
     USAGE_METER_ALLOW_PRODUCTION_SHADOW_EMERGENCY: bool = False
-    # Anthropic Admin API key for provisioning per-org workspace keys.
-    # Empty = workspace provisioning disabled, all calls fall back to
-    # ANTHROPIC_API_KEY (the shared Taali key).
+    # Anthropic Admin API key. Used ONLY for reading usage reports during
+    # reconciliation (see anthropic_admin/usage_reports.py). Empty =
+    # reconciliation short-circuits. It cannot mint API keys: the Admin API
+    # has no create-key endpoint.
     ANTHROPIC_ADMIN_API_KEY: str = ""
     # Master gate for per-org Anthropic WORKSPACE-KEY routing. OFF (default) =
-    # every call uses the shared Taali key (current behaviour); ON = billable
-    # calls with an org context route through that org's workspace key (lazily
-    # provisioned via the Admin API, graceful shared-key fallback on any
-    # failure). Routing per-org makes Anthropic's Admin API report cost
-    # per-workspace, which is what enables TRUE per-org reconciliation (vs the
-    # allocation in anthropic_reconciliation_allocation). Keep OFF until
-    # ANTHROPIC_ADMIN_API_KEY is set and provisioning has been validated.
+    # every call uses the shared Taali key; ON = billable calls with an org
+    # context route through that org's workspace key IF one is stored on the
+    # org row, else shared key. Keys are NOT provisioned automatically —
+    # ``POST /v1/organizations/api_keys`` returns 405, so a workspace key can
+    # only be minted by hand in the Console and stored on the org. Until that
+    # is done for an org, ON and OFF behave identically for it.
     ANTHROPIC_WORKSPACE_KEYS_ENABLED: bool = False
     # Route background CV parsing through the Message Batches API (50% of
     # standard pricing). When ON, freshly-ingested applications are swept
