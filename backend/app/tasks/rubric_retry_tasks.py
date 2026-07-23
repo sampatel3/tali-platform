@@ -135,7 +135,10 @@ def retry_incomplete_rubric_scoring(assessment_id: int) -> dict[str, Any]:
         # sweep of its own: this is the one place that must observe the closed
         # window before grading reads the answers, so a separate sweep could
         # only ever race it.
-        if getattr(assessment, "understanding_check_status", None) == understanding_check.STATUS_PENDING:
+        if (
+            getattr(assessment, "understanding_check_status", None)
+            in understanding_check.OPEN_STATUSES
+        ):
             understanding_check.close_window(
                 assessment,
                 status=understanding_check.STATUS_EXPIRED,

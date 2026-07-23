@@ -20,7 +20,10 @@ from ...components.assessments.task_snapshot import (
     task_view_for_assessment,
 )
 from ...components.assessments import understanding_check
-from ...components.assessments.submission_runtime import build_submission_receipt
+from ...components.assessments.submission_runtime import (
+    build_submission_receipt,
+    generate_understanding_check_questions,
+)
 from ...components.assessments.service import (
     CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE,
     _enforce_artifact_first_task,
@@ -767,6 +770,31 @@ def get_understanding_check(
         # Covers never-opened, skipped, completed and expired alike. The
         # candidate surface only needs to know there is nothing left to answer.
         return _check_state_payload(assessment, question=None)
+
+    if assessment.understanding_check_status == understanding_check.STATUS_GENERATING:
+        # Submit reserved the window without spending a model call on the
+        # request the candidate was watching. Generate now, behind the check
+        # screen's loading state. The row lock serializes a double-fetch (two
+        # tabs, a retry) so only the first caller pays for generation and the
+        # second reads the questions it wrote.
+        assessment = (
+            db.query(Assessment)
+            .filter(Assessment.id == assessment.id)
+            .with_for_update()
+            .one()
+        )
+        if assessment.understanding_check_status == understanding_check.STATUS_GENERATING:
+            generate_understanding_check_questions(
+                assessment,
+                _load_assessment_task(assessment, db),
+                db,
+                settings_obj=settings,
+            )
+        if not understanding_check.is_window_open(assessment):
+            # Generation produced nothing usable; the check is skipped and
+            # grading is free to run.
+            return _check_state_payload(assessment, question=None)
+
     question = understanding_check.next_question(assessment)
     if question is None:
         return _check_state_payload(assessment, question=None)

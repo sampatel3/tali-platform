@@ -77,12 +77,23 @@ WINDOW_MINUTES = 15
 
 # Status values for ``Assessment.understanding_check_status``. NULL means the
 # run predates the feature and is graded as not-assessed, never as zero.
+# Window is open but the questions do not exist yet. Submit sets this and
+# returns immediately: generating five questions from a ~25k-token context is a
+# 20-30s Sonnet call, and putting that inside the submit request would make the
+# candidate watch a spinner on the one action that must feel instant — and risk
+# the request timing out on the single call that freezes their work. Generation
+# happens on the first check fetch instead, behind the loading state the check
+# screen already shows.
+STATUS_GENERATING = "generating"
 STATUS_PENDING = "pending"
 STATUS_COMPLETED = "completed"
 STATUS_EXPIRED = "expired"
 STATUS_SKIPPED = "skipped"
 
 TERMINAL_STATUSES = frozenset({STATUS_COMPLETED, STATUS_EXPIRED, STATUS_SKIPPED})
+# Both states hold grading back — a window waiting on generation is still a
+# window the candidate may answer in.
+OPEN_STATUSES = frozenset({STATUS_GENERATING, STATUS_PENDING})
 
 OPTION_COUNT = 4
 
@@ -523,7 +534,7 @@ def is_window_open(assessment: Any, *, now: Optional[datetime] = None) -> bool:
     Grading waits on exactly this predicate, so it is deliberately strict: an
     absent expiry reads as closed rather than as open forever.
     """
-    if getattr(assessment, "understanding_check_status", None) != STATUS_PENDING:
+    if getattr(assessment, "understanding_check_status", None) not in OPEN_STATUSES:
         return False
     expires_at = getattr(assessment, "understanding_check_expires_at", None)
     if not isinstance(expires_at, datetime):
@@ -713,19 +724,44 @@ def score_answers(assessment: Any) -> Optional[float]:
     return round(100.0 * correct / len(questions), 1)
 
 
+def reserve_window(assessment: Any, *, now: Optional[datetime] = None) -> None:
+    """Open the window at submit time, before any question exists.
+
+    Pure field assignment — no model call — so submit stays as fast as it is
+    today. The expiry clock starts here rather than at generation so a
+    candidate who never opens the check still expires on schedule instead of
+    parking grading indefinitely.
+    """
+    started = now or utcnow()
+    assessment.understanding_check_questions = []
+    assessment.understanding_check_answers = []
+    assessment.understanding_check_status = STATUS_GENERATING
+    assessment.understanding_check_started_at = started
+    assessment.understanding_check_expires_at = started + timedelta(minutes=WINDOW_MINUTES)
+    assessment.understanding_check_completed_at = None
+    assessment.understanding_check_score = None
+
+
 def open_window(
     assessment: Any,
     questions: List[Dict[str, Any]],
     *,
     now: Optional[datetime] = None,
 ) -> None:
-    """Put a freshly frozen assessment into the pending state."""
+    """Attach generated questions and make the window answerable.
+
+    Safe to call on a reserved window or directly on a fresh row; the expiry is
+    only set when it isn't already, so filling in questions never extends a
+    clock that has been running since submit.
+    """
     started = now or utcnow()
     assessment.understanding_check_questions = questions
     assessment.understanding_check_answers = []
     assessment.understanding_check_status = STATUS_PENDING
-    assessment.understanding_check_started_at = started
-    assessment.understanding_check_expires_at = started + timedelta(minutes=WINDOW_MINUTES)
+    if not isinstance(getattr(assessment, "understanding_check_started_at", None), datetime):
+        assessment.understanding_check_started_at = started
+    if not isinstance(getattr(assessment, "understanding_check_expires_at", None), datetime):
+        assessment.understanding_check_expires_at = started + timedelta(minutes=WINDOW_MINUTES)
     assessment.understanding_check_completed_at = None
     assessment.understanding_check_score = None
 
@@ -849,8 +885,11 @@ __all__ = [
     "STATUS_SKIPPED",
     "TERMINAL_STATUSES",
     "WINDOW_MINUTES",
+    "OPEN_STATUSES",
+    "STATUS_GENERATING",
     "GenerationOutcome",
     "answered_ids",
+    "reserve_window",
     "candidate_question_view",
     "close_window",
     "generate_questions",

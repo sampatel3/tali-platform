@@ -215,6 +215,32 @@ def test_score_is_none_when_nothing_was_ever_asked():
 # --- window lifecycle ------------------------------------------------------
 
 
+def test_reserve_window_opens_without_questions_and_costs_no_model_call():
+    """Submit must stay fast; generation happens on the first check fetch."""
+    assessment = _assessment()
+    now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    uc.reserve_window(assessment, now=now)
+    assert assessment.understanding_check_status == uc.STATUS_GENERATING
+    assert assessment.understanding_check_questions == []
+    # A window awaiting generation still holds grading back.
+    assert uc.is_window_open(assessment, now=now) is True
+
+
+def test_a_reserved_window_expires_on_the_submit_clock_not_the_generation_clock():
+    """Otherwise a candidate who never opens the check parks grading forever."""
+    assessment = _assessment()
+    submitted = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)
+    uc.reserve_window(assessment, now=submitted)
+
+    # Questions arrive ten minutes later; the expiry must not move.
+    generated = submitted + timedelta(minutes=10)
+    uc.open_window(assessment, [_question()], now=generated)
+    assert assessment.understanding_check_expires_at == submitted + timedelta(
+        minutes=uc.WINDOW_MINUTES
+    )
+    assert assessment.understanding_check_started_at == submitted
+
+
 def test_open_window_sets_pending_with_a_bounded_expiry():
     assessment = _assessment()
     now = datetime(2026, 7, 23, 12, 0, tzinfo=timezone.utc)

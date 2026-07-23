@@ -1095,21 +1095,60 @@ def build_submission_receipt(
     }
 
 
-def _open_understanding_check(
+def _reserve_understanding_check(assessment: Assessment, db: Session) -> None:
+    """Open the understanding-check window without generating anything yet.
+
+    Deliberately does no model work. Generating five questions from a ~25k-token
+    context is a 20-30s Sonnet call, and submit is the one request that must
+    stay fast: the candidate is watching it, and a timeout on the call that
+    freezes their work would be the worst possible place to spend that latency.
+    The questions are generated on the first check fetch instead, behind the
+    loading state the check screen already shows.
+
+    Never raises. A failure here lands on ``skip_window`` so the assessment
+    grades normally without a check.
+    """
+    try:
+        understanding_check.reserve_window(assessment)
+        append_assessment_timeline_event(
+            assessment,
+            "understanding_check_reserved",
+            {"expires_at": assessment.understanding_check_expires_at.isoformat()},
+        )
+        db.commit()
+    except Exception:
+        logger.exception(
+            "Failed to reserve understanding check assessment_id=%s", assessment.id
+        )
+        db.rollback()
+        try:
+            understanding_check.skip_window(assessment, reason="reserve_failed")
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Failed to mark understanding check skipped assessment_id=%s",
+                assessment.id,
+            )
+            db.rollback()
+
+
+def generate_understanding_check_questions(
     assessment: Assessment,
     task: Task,
     db: Session,
     *,
     settings_obj: Any,
-    repo_files: Dict[str, str],
 ) -> None:
-    """Generate the comprehension questions and open the answering window.
+    """Fill a reserved window with questions. Called from the check route.
 
-    Never raises. Every failure path lands on ``skip_window``, which records
-    "not assessed" and leaves grading free to proceed on the next sweep tick —
-    a submitted assessment must never be stranded by this feature.
+    Reads the frozen submission artifact rather than a live sandbox, so it works
+    long after the candidate's workspace has been retired. Never raises: an
+    empty or failed generation marks the check skipped, which reads as "not
+    assessed" on the report and releases grading.
     """
     try:
+        artifact = _durable_submission_artifact(assessment)
+        repo_files = dict(artifact["files"]) if isinstance(artifact, dict) else {}
         task_extra = task.extra_data if isinstance(task.extra_data, dict) else {}
         raw_dps = task_extra.get("decision_points")
         outcome = understanding_check.generate_questions(
@@ -1141,17 +1180,16 @@ def _open_understanding_check(
                 {
                     "questions_total": len(outcome.questions),
                     "model_used": outcome.model_used,
-                    "expires_at": assessment.understanding_check_expires_at.isoformat(),
                 },
             )
         db.commit()
     except Exception:
         logger.exception(
-            "Failed to open understanding check assessment_id=%s", assessment.id
+            "Failed to generate understanding check assessment_id=%s", assessment.id
         )
         db.rollback()
         try:
-            understanding_check.skip_window(assessment, reason="open_failed")
+            understanding_check.skip_window(assessment, reason="generation_failed")
             db.commit()
         except Exception:
             logger.exception(
@@ -1438,18 +1476,13 @@ def submit_assessment_impl(
         )
 
     if defer_scoring:
-        # Open the post-submit understanding check against the artifact we just
-        # froze. Deliberately AFTER the freeze commit: the candidate's work is
-        # already durable and idempotently recoverable at this point, so a
-        # generator outage — or a candidate who closes the tab on the first
-        # question — costs the comprehension signal and nothing else.
-        _open_understanding_check(
-            assessment,
-            task,
-            db,
-            settings_obj=settings_obj,
-            repo_files=sandbox_repo_files,
-        )
+        # Open the post-submit understanding-check window. Deliberately AFTER
+        # the freeze commit — the candidate's work is already durable and
+        # idempotently recoverable here, so anything that goes wrong with the
+        # check costs the comprehension signal and nothing else. Reserve only:
+        # the questions are generated on the first check fetch so this request
+        # doesn't carry a 20-30s model call.
+        _reserve_understanding_check(assessment, db)
         # The immutable database artifact is now authoritative. Retire the
         # mutable candidate sandbox only after that commit; capture failures
         # above deliberately leave it running so the candidate can retry.
