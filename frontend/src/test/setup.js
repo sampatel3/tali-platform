@@ -1,5 +1,12 @@
 import '@testing-library/jest-dom';
-import { act, cleanup } from '@testing-library/react';
+import { act, cleanup, configure } from '@testing-library/react';
+
+// findBy/waitFor default to 1s, which is not long enough for the tests that
+// mount a whole page under a parallel run on a loaded machine — they assert
+// against a surface still showing its loading spinner. Separate from Vitest's
+// testTimeout in vite.config.js; that one bounds the test, this one bounds a
+// single query, and a run needs both raised to be stable.
+configure({ asyncUtilTimeout: 5000 });
 
 class ResizeObserverMock {
   observe() {}
