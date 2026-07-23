@@ -44,8 +44,13 @@ def _valid_spec(**overrides):
             "risk_assessment": {"weight": 0.15, "lens": "decision", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
             "guardrails": {"weight": 0.25, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
             "production": {"weight": 0.2, "lens": "diligence", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
-            "judgment": {"weight": 0.2, "lens": "discernment", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "judgment": {"weight": 0.13, "lens": "discernment", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
             "communication": {"weight": 0.2, "lens": "practice", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            # Required by the publication contract — see
+            # _validate_comprehension_dim. Shares the Discernment budget with
+            # ``judgment`` (0.20 -> 0.13 + 0.07) exactly as the canonical specs
+            # split output_scrutiny.
+            "submission_comprehension": {"weight": 0.07, "grader": "comprehension_outcome", "part": "applied"},
         },
         "expected_candidate_journey": {
             "phase_one": ["Read docs"],
@@ -84,6 +89,7 @@ def _valid_spec(**overrides):
                 {"job_requirement": "production", "task_artifact": "tests", "rubric_dimension": "production"},
                 {"job_requirement": "judgment", "task_artifact": "scenario", "rubric_dimension": "judgment"},
                 {"job_requirement": "communication", "task_artifact": "summary", "rubric_dimension": "communication"},
+                {"job_requirement": "maintains what was shipped", "task_artifact": "understanding check answers", "rubric_dimension": "submission_comprehension"},
             ],
         },
         "human_testing_checklist": {
@@ -415,9 +421,14 @@ def test_publication_contract_accepts_exact_weight_boundaries():
             "criteria": {"excellent": "x", "good": "y", "poor": "z"},
         },
         "discernment": {
-            "weight": 0.15,
+            "weight": 0.08,
             "lens": "discernment",
             "criteria": {"excellent": "x", "good": "y", "poor": "z"},
+        },
+        "submission_comprehension": {
+            "weight": 0.07,
+            "grader": "comprehension_outcome",
+            "part": "applied",
         },
         "workspace_practice": {
             "weight": 0.15,
@@ -518,3 +529,76 @@ def test_candidate_rubric_view_excludes_criteria():
         "exploration": {"weight": 0.25, "criteria": {"excellent": "secret"}},
     })
     assert safe == [{"category": "exploration", "weight": 0.25}]
+
+
+def test_publication_contract_requires_a_comprehension_dimension():
+    """The check runs on every assessment; the rubric decides if it's scored.
+
+    Without this, a generated task asks the candidate five questions, shows the
+    answers on the report, and silently drops them out of Discernment — which
+    is exactly what shipped on the org-scoped generated tasks.
+    """
+    spec = _valid_spec()
+    del spec["evaluation_rubric"]["submission_comprehension"]
+    spec["evaluation_rubric"]["judgment"]["weight"] = 0.2
+    spec["role_alignment"]["jd_to_signal_map"] = [
+        entry
+        for entry in spec["role_alignment"]["jd_to_signal_map"]
+        if entry["rubric_dimension"] != "submission_comprehension"
+    ]
+
+    result = validate_task_spec(spec)
+
+    assert result.valid is False
+    assert any("comprehension_outcome" in error for error in result.errors)
+
+
+def test_publication_contract_rejects_two_comprehension_dimensions():
+    """Two dims grading one check would double-count it against Discernment."""
+    spec = _valid_spec()
+    spec["evaluation_rubric"]["judgment"] = {
+        "weight": 0.13,
+        "grader": "comprehension_outcome",
+        "part": "applied",
+    }
+    result = validate_task_spec(spec)
+
+    assert result.valid is False
+    assert any("double-counted" in error for error in result.errors)
+
+
+def test_legacy_reads_do_not_require_a_comprehension_dimension():
+    """Stored tasks predating the check must stay readable."""
+    spec = _valid_spec()
+    del spec["evaluation_rubric"]["submission_comprehension"]
+    spec["evaluation_rubric"]["judgment"]["weight"] = 0.2
+    spec["role_alignment"]["jd_to_signal_map"] = [
+        entry
+        for entry in spec["role_alignment"]["jd_to_signal_map"]
+        if entry["rubric_dimension"] != "submission_comprehension"
+    ]
+
+    result = validate_task_spec(spec, mode=TaskSpecValidationMode.LEGACY)
+
+    assert result.valid is True, result.errors
+
+
+def test_comprehension_requirement_is_opt_out_for_the_runtime_start_gate():
+    """Starting an assessment must not 503 over a missing scored axis.
+
+    ``_enforce_artifact_first_task`` runs the publication contract when a
+    candidate starts. A task missing this dimension still asks the questions
+    and still shows the answers on the report — only the Discernment rollup is
+    short — so it is an authoring bug, not a reason to block the candidate.
+    """
+    spec = _valid_spec()
+    del spec["evaluation_rubric"]["submission_comprehension"]
+    spec["evaluation_rubric"]["judgment"]["weight"] = 0.2
+    spec["role_alignment"]["jd_to_signal_map"] = [
+        entry
+        for entry in spec["role_alignment"]["jd_to_signal_map"]
+        if entry["rubric_dimension"] != "submission_comprehension"
+    ]
+
+    assert validate_task_spec(spec).valid is False
+    assert validate_task_spec(spec, require_comprehension_dim=False).valid is True

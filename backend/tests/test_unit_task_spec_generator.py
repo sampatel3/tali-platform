@@ -59,7 +59,8 @@ def _valid_spec() -> dict:
         "evaluation_rubric": {
             "problem_diagnosis": {"weight": 0.10, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
             "design_decisions_articulated": {"weight": 0.15, "grader": "interrogation_outcome"},
-            "output_scrutiny": {"weight": 0.15, "lens": "discernment", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "output_scrutiny": {"weight": 0.08, "lens": "discernment", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
+            "submission_comprehension": {"weight": 0.07, "grader": "comprehension_outcome", "part": "applied"},
             "verification_before_done": {"weight": 0.15, "lens": "diligence", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
             "ai_native_practice": {"weight": 0.10, "grader": "practice_outcome", "part": "applied", "fluency": "description"},
             "triage_correctness": {"weight": 0.20, "lens": "deliverable", "criteria": {"excellent": "x", "good": "y", "poor": "z"}},
@@ -107,6 +108,7 @@ def _valid_spec() -> dict:
                 {"job_requirement": "scrutinise", "task_artifact": "transcript", "rubric_dimension": "output_scrutiny"},
                 {"job_requirement": "verify", "task_artifact": "process trace", "rubric_dimension": "verification_before_done"},
                 {"job_requirement": "work AI-natively", "task_artifact": "repo + process trace", "rubric_dimension": "ai_native_practice"},
+                {"job_requirement": "maintain what shipped", "task_artifact": "understanding check answers", "rubric_dimension": "submission_comprehension"},
             ],
         },
         "human_testing_checklist": {

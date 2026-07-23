@@ -81,6 +81,12 @@ def _enforce_artifact_first_task(task: Task) -> None:
     result = validate_task_spec(
         reconstruct_generated_task_spec(task),
         mode=TaskSpecValidationMode.PUBLICATION,
+        # A missing comprehension dimension costs a scored axis, not the
+        # candidate's ability to do the task: the understanding check still
+        # runs and still lands on the report, only the Discernment rollup is
+        # short. That is an authoring bug to fix at generation, not a reason to
+        # 503 a candidate who is trying to start their assessment.
+        require_comprehension_dim=False,
     )
     errors = result.errors
     if not errors:
