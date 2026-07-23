@@ -95,3 +95,12 @@ export const recordingFlagLabel = ({
   if (workspaceProtectionEnabled) return WORKSPACE_SIGNALS_FLAG;
   return SESSION_TRANSCRIPT_ONLY_FLAG;
 };
+
+// Short form for the pre-start "what to expect" checklist. Same rule as the
+// flag: it may only claim transcript-only review once the workspace-control
+// layer is actually off.
+export const reviewedChecklistItem = ({ workspaceProtectionEnabled = false } = {}) => (
+  workspaceProtectionEnabled
+    ? 'Your session transcript and the advisory workspace signals are reviewed — never your screen, mic, or camera.'
+    : 'Your session transcript is reviewed — never your screen, mic, or camera.'
+);

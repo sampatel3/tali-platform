@@ -16,6 +16,7 @@ import {
   WORKSPACE_SIGNALS_FLAG,
   WORK_RECORD_SENTENCE,
   recordingFlagLabel,
+  reviewedChecklistItem,
 } from './sessionDisclosure';
 
 // Repo paths, resolved from this file (frontend/src/shared/assessment/).
@@ -113,5 +114,31 @@ describe('assessment session disclosure', () => {
       expect(source, `${rel} must show the workspace signals`).toContain('WORKSPACE_SIGNAL_SENTENCE');
     }
     expect(WORK_RECORD_SENTENCE).toMatch(/prompts/);
+  });
+
+  it('leaves no recording claim hardcoded on a candidate surface', () => {
+    // The first pass at this fix missed a second transcript-only claim in the
+    // welcome-page checklist, because it was phrased differently ("screen, mic,
+    // or camera"). Any claim about what is or is not recorded has to come from
+    // this module, so a reworded one cannot hide from the disclosure again.
+    const claim = /transcript is reviewed|not your screen|screen, mic|do not record your/i;
+    for (const rel of [
+      'frontend/src/features/assessment_runtime/AssessmentPageContent.jsx',
+      'frontend/src/features/assessment_runtime/CandidateWelcomePage.jsx',
+    ]) {
+      const hardcoded = read(rel).match(claim);
+      expect(hardcoded, `${rel} hardcodes a recording claim: ${hardcoded?.[0]}`).toBeNull();
+    }
+  });
+
+  it('only promises transcript-only review when the workspace layer is off', () => {
+    expect(reviewedChecklistItem({ workspaceProtectionEnabled: true }))
+      .toMatch(/transcript and the advisory workspace signals are reviewed/);
+    expect(reviewedChecklistItem({ workspaceProtectionEnabled: false }))
+      .toMatch(/^Your session transcript is reviewed/);
+    for (const enabled of [true, false]) {
+      expect(reviewedChecklistItem({ workspaceProtectionEnabled: enabled }))
+        .toMatch(/never your screen, mic, or camera/);
+    }
   });
 });

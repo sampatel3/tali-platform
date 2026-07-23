@@ -17,6 +17,7 @@ import {
   WORKSPACE_SIGNAL_CAVEAT,
   WORKSPACE_SIGNAL_SENTENCE,
   WORK_RECORD_SENTENCE,
+  reviewedChecklistItem,
 } from '../../shared/assessment/sessionDisclosure';
 import { getOrCreateCandidateSessionKey } from './assessmentSessionBinding';
 import {
@@ -266,7 +267,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
                   'A real prompt, not a riddle.',
                   'Work normally inside the workspace with Claude, an AI assistant, and the live repo. Copy and paste continue to work between its editor and chat.',
                   'You are scored on how you steer and the design decisions you make — not on whether you reach working code. The agent can write code; the judgment is yours to show.',
-                  'The session transcript is reviewed — not your screen, mic, or camera.',
+                  reviewedChecklistItem({ workspaceProtectionEnabled: !previewData?.allow_external_clipboard }),
                 ].map((item) => (
                   <div key={item} className="flex items-start gap-3 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3">
                     <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-[var(--purple)]" />
