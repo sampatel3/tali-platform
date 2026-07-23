@@ -64,9 +64,25 @@ export const PrivacyPage = () => (
     <h2>4. Automated decision-making</h2>
     <p>
       Taali produces rule-based advance/reject recommendations against role criteria defined
-      by the recruiter. Every recommendation is queued for human review by the recruiting team
-      before any action is taken, and every decision records the rule path and any human
-      override.
+      by the recruiter, and every decision records the rule path and any human override.
+    </p>
+    <p>
+      <strong>Advancing</strong> a candidate &mdash; progressing them, sending an assessment, or
+      any other positive step &mdash; is always queued for a person on the recruiting team to
+      confirm before it happens.
+    </p>
+    <p>
+      <strong>Rejection at the pre-screen stage can be automatic.</strong> Where a candidate
+      does not meet the screening rules the recruiter wrote, or scores below the pre-screen
+      threshold the recruiter set, the recruiting organisation can have that rejection applied
+      without a person confirming it individually. This setting is on by default and each
+      recruiting organisation can turn it off for any role. Pre-screen scoring is assisted by
+      an AI model; the reject rule applied to it is deterministic.
+    </p>
+    <p>
+      If a decision about you was made this way, you have the right to obtain human review of
+      it. Contact the recruiting organisation, or use the route below and we will pass your
+      request to them.
     </p>
     <p>Candidates are entitled to:</p>
     <ul>

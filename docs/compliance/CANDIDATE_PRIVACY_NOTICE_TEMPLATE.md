@@ -38,8 +38,11 @@ We use your data to assess your application and decide about your candidacy. Our
 
 We use Taali to help screen and evaluate applications. In plain English:
 
-- Taali scores your application against the role criteria and produces a **rule-based recommendation** (for example, advance or do not advance), with the specific evidence it relied on.
-- **A person on our team reviews the recommendation before we act on it.** That reviewer can see the evidence and can change the outcome.
+- Taali scores your application against the role criteria we set and produces a **rule-based recommendation** (for example, advance or do not advance), with the specific evidence it relied on. Pre-screen scoring is assisted by an AI model; the rule applied to that score is deterministic.
+- **Advancing you is always queued for a person on our team to confirm.** Progressing your application, sending you an assessment, or any other positive step waits for a human decision. That reviewer can see the evidence and can change the outcome.
+- **Rejection at the pre-screen stage can be automatic.** Where you do not meet the screening rules we wrote, or you score below the pre-screen threshold we set, that rejection can be applied without a person confirming it individually. `[CUSTOMER — this setting is on by default; state here whether you leave it on or have turned it off for this role, and delete the branch that does not apply.]`
+- **If a decision about you was made that way, you have the right to obtain human review of it.** Ask us and a person will look at your application again.
+- Every decision, automatic or confirmed by a person, is recorded with the reasons for it, and can be reviewed and reversed.
 - You have the right to:
   - **(a) obtain information** about the recommendation and the logic involved;
   - **(b) make representations** — tell us anything you think we should take into account;

@@ -14,7 +14,7 @@
 | File | Purpose | Roadmap item |
 |---|---|---|
 | `DPA_TEMPLATE.md` | Controller→processor Data Processing Agreement (Art 28) with SCC/UK-Addendum transfer modules, subprocessor authorization, DSR/breach terms, UAE annex stub, Fireflies-consent allocation | H1.1 |
-| `DPIA_VENDOR.md` | Taali's own DPIA — filled in; the Art 22/SCHUFA analysis; degree/stage of human involvement; risk register R1–R14 with mitigation status; residual-risk statement | H1.4 |
+| `DPIA_VENDOR.md` | Taali's own DPIA — filled in; the Art 22/SCHUFA analysis, including **R0: default-on automatic pre-screen rejection**; degree/stage of human involvement; risk register R0–R14 with mitigation status; residual-risk statement | H1.4 |
 | `DPIA_CUSTOMER_TEMPLATE.md` | Fill-in-the-blanks DPIA a customer (deployer/controller) adapts before procuring — sales collateral | H1.4 |
 | `ROPA.md` | Records of processing (Art 30): Taali-as-processor and Taali-as-controller tables | H1.5 |
 | `CANDIDATE_PRIVACY_NOTICE_TEMPLATE.md` | Template notice customers give candidates; plain-English ADM description + UK Art 22C checklist + transfers + rights | H1.3 |
@@ -46,6 +46,7 @@ Nothing in this pack is cleared until counsel signs. Track here:
 
 ## Open `⚖ COUNSEL` questions carried by this pack (map to roadmap §8)
 
+0. **Default-on automatic pre-screen rejection — ask this one first (§8 Q0)** — DPIA §4.1, R0. Advances always wait for a human; pre-screen rejections apply automatically by default, switchable off per role. No EU Art 22(2) gateway exists today; the UK route needs the Art 22C safeguard set. The product decision is open at roadmap §5 H1 item 0.
 1. SCHUFA extension to hiring — is Taali's design safe? (§8 Q1) — DPIA §4
 2. EU explicit-consent gateway architecture (§8 Q2) — DPIA §4
 3. Controller/processor line on calibration/re-scoring (§8 Q3) — role matrix + ROPA

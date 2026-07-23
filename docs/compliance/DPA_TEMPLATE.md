@@ -31,9 +31,9 @@ Terms not defined here take the meaning given in the applicable data-protection 
 
 Full details are in **Annex I**. In summary:
 
-- **Subject matter:** provision of Taali's agentic hiring platform — AI pre-screening, CV↔job scoring with cited evidence, deterministic advance/reject verdicts queued for the Customer's human sign-off, AI work-sample assessments, interview-transcript ingestion (where the Customer connects Fireflies), candidate reports, and ATS two-way sync.
+- **Subject matter:** provision of Taali's agentic hiring platform — AI pre-screening, CV↔job scoring with cited evidence, deterministic advance/reject verdicts (advances are queued for the Customer's human sign-off; pre-screen rejections are applied automatically where the Customer leaves that setting enabled, which is the default, and can be turned off per role), AI work-sample assessments, interview-transcript ingestion (where the Customer connects Fireflies), candidate reports, and ATS two-way sync.
 - **Duration:** for the term of the Principal Agreement, plus the deletion/return window in clause 12.
-- **Nature and purpose:** processing candidate data on the Customer's documented instructions to help the Customer screen, evaluate and make hiring decisions about candidates. Taali does not decide who is hired; the Customer's authorised humans do.
+- **Nature and purpose:** processing candidate data on the Customer's documented instructions to help the Customer screen, evaluate and make hiring decisions about candidates. Taali does not decide who is hired; the Customer's authorised humans do. Where the Customer leaves automatic pre-screen rejection enabled, Taali applies that rejection against the Customer's own screening rules and threshold without individual human confirmation; the Customer remains the controller for that decision and is responsible for its Art 22 / UK Art 22C position (see `DPIA_VENDOR.md` §4.1 and `DPIA_CUSTOMER_TEMPLATE.md` §C).
 
 ## 4. Categories of data and data subjects (Annex I summary)
 

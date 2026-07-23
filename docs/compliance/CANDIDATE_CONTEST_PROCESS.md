@@ -12,7 +12,12 @@
 
 ## Scope
 
-Covers a candidate who wants to understand, respond to, or challenge a rule-based recommendation Taali produced about them. Delivers all four UK Art 22C(2) safeguards — **(a) information, (b) representations, (c) human intervention, (d) contest** — and the equivalent EU Art 22(3) / WP251 expectations.
+Covers a candidate who wants to understand, respond to, or challenge a rule-based verdict Taali produced about them. This includes both cases:
+
+- a **recommendation a human acted on** — every advance and other positive step is confirmed by a person before it happens; and
+- a **rejection applied automatically at pre-screen** — where no person confirmed the individual decision (see `DPIA_VENDOR.md` §4.1). This is the population most likely to contest, and the one where the human-intervention safeguard does the most work.
+
+Delivers all four UK Art 22C(2) safeguards — **(a) information, (b) representations, (c) human intervention, (d) contest** — and the equivalent EU Art 22(3) / WP251 expectations.
 
 ## Intake channels
 
@@ -39,6 +44,19 @@ The reviewer must be a person with **authority and competence to change the outc
 
 This is the point at which "meaningful human review" is real. The Horizon-2 evidence pack (measured override rates, reviewer authority definition) will make this demonstrable to a regulator (roadmap R1/R2).
 
+## Automatically rejected candidates
+
+Where the customer leaves automatic pre-screen rejection on (the default), the candidate was rejected without a person confirming the individual decision. For these cases:
+
+1. **Treat the request as the human-intervention safeguard itself**, not as a review of someone else's judgement. No human formed a view before the rejection, so the reviewer is making the first human decision on the case.
+2. Establish and tell the candidate **which path rejected them** — a screening rule they did not meet (a recruiter-authored knockout answer) or a pre-screen score below the customer's threshold — and what that rule or threshold was. The auto-reject state, reason and timestamp are recorded against the application.
+3. Where the score drove it, say plainly that the score was produced with AI assistance and the reject rule applied to it is deterministic.
+4. Apply the same duties as above: full evidence, representations considered, independent judgement, authority to reinstate the candidate.
+
+The reviewer must be able to **reinstate** the candidate, not only explain the rejection. If they cannot, escalate — an explanation without the power to change the outcome does not satisfy Art 22C(c)/(d) or Art 22(3).
+
+`[BRACKET — H2: surface the human-review route to the candidate at the point of rejection rather than only on request. Roadmap §5 H1 item 0, option A.]`
+
 ## Logging
 
 - Log every contest/representation as a request record, reusing the existing pattern in `backend/app/domains/compliance/` (`data_subject_service.py` / the `data_subject_requests` table) so the request and its outcome are **durable evidence that survives even an erasure**.
@@ -53,4 +71,4 @@ This is the point at which "meaningful human review" is real. The Horizon-2 evid
 
 ## What the candidate gets back
 
-A response in **plain language** that gives the **outcome** (recommendation upheld or changed) and the **reasoning** — what the recommendation was based on and how their representations were considered — at a level that is meaningful without exposing other candidates' data or trade-secret internals beyond what transparency law requires. `⚖ COUNSEL` on how much logic detail must be disclosed.
+A response in **plain language** that gives the **outcome** (the verdict or rejection upheld, or changed) and the **reasoning** — what the recommendation was based on and how their representations were considered — at a level that is meaningful without exposing other candidates' data or trade-secret internals beyond what transparency law requires. `⚖ COUNSEL` on how much logic detail must be disclosed.

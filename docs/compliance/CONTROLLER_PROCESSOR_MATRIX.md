@@ -14,7 +14,7 @@ For each activity: who is **controller**, who is **processor**, and notes. "Cust
 | ATS sync | Customer | Taali | Taali syncs candidate data on the customer's instruction into/out of the customer's ATS |
 | AI pre-screen | Customer | Taali | Screening against the customer's role criteria |
 | CV↔JD scoring | Customer | Taali | Scoring + cited evidence on the customer's candidates |
-| Deterministic verdicts | Customer | Taali | Taali generates the recommendation; the customer's human makes and owns the decision. **Note:** under SCHUFA the verdict can itself be an Art 22 decision *at Taali* even so — this matrix records data-protection **role**, not whether Art 22 is engaged (see `DPIA_VENDOR.md` §4) |
+| Deterministic verdicts | Customer | Taali | Taali generates the verdict against the customer's criteria; the customer owns the decision either way. For **advances** the customer's human confirms it. For **pre-screen rejections** Taali applies it automatically where the customer leaves that setting on (the default, switchable off per role) — the customer is still controller, but no human of theirs confirms the individual decision (`DPIA_VENDOR.md` §4.1, R0). **Note:** under SCHUFA the verdict can itself be an Art 22 decision *at Taali* even so — this matrix records data-protection **role**, not whether Art 22 is engaged (see `DPIA_VENDOR.md` §4) |
 | AI work-sample assessments | Customer | Taali | Assessment run and telemetry captured on the customer's behalf |
 | Interview transcripts | Customer | Taali | Only if the customer connects Fireflies; **customer is responsible for the lawful recording basis** (DPA Annex VI) `⚖ COUNSEL` |
 | Candidate reports / shortlists | Customer | Taali | Reports shared to the customer via revocable links |

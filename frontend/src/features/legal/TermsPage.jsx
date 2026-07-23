@@ -3,9 +3,11 @@ import React from 'react';
 import { LegalLayout } from './LegalLayout';
 import { PageLink } from '../../shared/ui/PageLink';
 
-// NOTE: Pre-counsel draft — review pending before publication. Bracketed items
-// (liability cap, governing law) mark commercial/legal decisions that still
-// need to be confirmed by the business and reviewed by counsel.
+// NOTE: Pre-counsel draft — counsel review still pending. The liability cap
+// (12-month fees) and governing law (England and Wales) are stated as settled
+// business positions rather than placeholders, because this page is linked from
+// signup and users accept it. Both remain on the counsel-review list in
+// docs/COMPLIANCE_RISK_AND_ROADMAP.md §8.
 
 export const TermsPage = () => (
   <LegalLayout kicker="Legal" title="Terms of Service" updated="23 July 2026">
@@ -13,14 +15,22 @@ export const TermsPage = () => (
       These terms govern your use of Taali. By creating an account or using the service, you
       agree to them on behalf of your organisation.
     </p>
+    <p>
+      Where your organisation has signed a separate agreement with Taali &mdash; for a pilot or
+      an enterprise deployment &mdash; that agreement governs and prevails over these terms to
+      the extent they conflict.
+    </p>
 
     <h2>1. The service</h2>
     <p>
       Taali is an AI-assisted hiring platform. It helps recruiting teams screen applicants,
       run AI-native work-sample assessments, and reach hiring decisions. Taali produces
       recommendations against criteria you define; human decision control stays with you.
-      Every recommendation is queued for review, and no advance or reject action is taken
-      without a person on your team confirming it.
+      Advancing a candidate always requires a person on your team to confirm it. Rejections at
+      the pre-screen stage can be applied automatically where a candidate does not meet the
+      screening rules or score threshold your team set for a role &mdash; this setting is on by
+      default and can be turned off per role. Every decision, automatic or confirmed, is logged
+      with its reasons and can be reviewed and reversed by your team.
     </p>
 
     <h2>2. Accounts and acceptable use</h2>
@@ -86,10 +96,9 @@ export const TermsPage = () => (
     <p>
       To the fullest extent permitted by law, neither party is liable for indirect,
       incidental, or consequential losses, and each party&apos;s total liability arising out
-      of or relating to these terms is{' '}
-      <strong>[capped at the fees you paid to Taali in the 12 months before the event giving
-      rise to the claim]</strong>. Nothing in these terms limits liability that cannot be
-      limited by law.
+      of or relating to these terms is capped at the fees you paid to Taali in the 12 months
+      before the event giving rise to the claim. Nothing in these terms limits liability that
+      cannot be limited by law.
     </p>
 
     <h2>10. Termination</h2>
@@ -110,10 +119,9 @@ export const TermsPage = () => (
 
     <h2>12. Governing law</h2>
     <p>
-      These terms are governed by the laws of{' '}
-      <strong>[England and Wales — pending confirmation by counsel]</strong>, and the courts of
-      that jurisdiction have exclusive jurisdiction over any dispute, except where mandatory
-      local law provides otherwise.
+      These terms are governed by the laws of England and Wales, and the courts of that
+      jurisdiction have exclusive jurisdiction over any dispute, except where mandatory local
+      law provides otherwise.
     </p>
 
     <hr />

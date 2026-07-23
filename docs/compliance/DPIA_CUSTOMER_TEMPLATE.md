@@ -23,7 +23,7 @@ Taali is your **processor** (and, under the EU AI Act, the **provider**); you ar
 | ATS sync | Two-way sync with your ATS (Workable / Bullhorn) |
 | AI pre-screen | Screens applications against role criteria |
 | CV↔JD scoring | Scores candidate vs. job with cited verbatim evidence (Claude) |
-| Deterministic verdict | Rule-based advance/reject verdict, **queued for your human sign-off** |
+| Deterministic verdict | Rule-based advance/reject verdict. **Advances are queued for your human sign-off. Pre-screen rejections are applied automatically by default** — you can turn that off per role (see §C) |
 | AI work-sample assessment | Candidate completes a task; session telemetry captured (**no screen, microphone, or camera**) |
 | Interview transcripts | Only if **you** connect Fireflies |
 | Candidate reports | Reports/shortlists shared via time-limited, revocable links |
@@ -37,9 +37,11 @@ Taali is your **processor** (and, under the EU AI Act, the **provider**); you ar
 
 ## C. Automated decision-making design (pre-filled)
 
-- Taali produces a **deterministic, rule-based** advance/reject verdict from defined role criteria, with cited evidence and a recorded rule path — not a free-form AI judgement.
-- **A human review step sits before any consequential action.** No advance or reject is written back to your ATS without a human sign-off. The reviewer sees the cited evidence, the rule path, the score provenance, and the assessment record, and can override; overrides are recorded; decision history is exportable.
-- **This design supports your Art 22 / UK Art 22C position but does not, by itself, satisfy it.** Regulators treat "human in the loop" as meaningful only if your reviewer genuinely has authority, competence and time to change the outcome — not a rubber stamp. **Your reviewer process (§G) is what makes the safeguard real.** See `⚖ COUNSEL` in §H.
+- Taali produces a **deterministic, rule-based** advance/reject verdict from defined role criteria, with cited evidence and a recorded rule path — not a free-form AI judgement. The pre-screen score the rule is applied to is produced with AI assistance.
+- **Advances always wait for a person.** Progressing a candidate, sending an assessment, or any other positive step is queued for a human on your team to confirm before anything is written back to your ATS. The reviewer sees the cited evidence, the rule path, the score provenance, and the assessment record, and can override; overrides are recorded; decision history is exportable.
+- **Pre-screen rejections can be applied automatically, and this is ON by default for your roles.** Where a candidate fails a screening rule you wrote, or scores below the pre-screen threshold you set, Taali applies the rejection without a person confirming it individually. The setting (`auto_reject_pre_screen`) is **on by default** and you can **turn it off per role**, in which case the rejection becomes a card for one of your humans to action instead. Every automatic rejection records its state, reason and timestamp, and remains reviewable and reversible.
+- **What that means for your position as controller.** An automatic pre-screen rejection is a **solely automated decision with a similarly significant effect** — it is the GDPR's own named example (Recital 71, "e-recruiting practices without any human intervention"). In the **EU**, Art 22(1) prohibits this in principle unless you have an Art 22(2) gateway (contractual necessity, Member-State law, or explicit consent); **Taali does not provide one**. In the **UK**, DUAA Arts 22A–22D permit it on an ordinary lawful basis **provided you deliver the Art 22C safeguards** — information, representations, human intervention, contest. If special-category data is relied on, Art 22B applies and needs explicit consent. **Record your decision in §E.** `⚖ COUNSEL`
+- **This design supports your Art 22 / UK Art 22C position but does not, by itself, satisfy it.** Regulators treat "human in the loop" as meaningful only if your reviewer genuinely has authority, competence and time to change the outcome — not a rubber stamp. On the advance path, **your reviewer process (§G) is what makes the safeguard real**. On the reject path there is no reviewer by default, so your §E decision and the Art 22C safeguards are what make it lawful. See `⚖ COUNSEL` in §H.
 
 ## D. Candidate transparency and rights features (pre-filled)
 
@@ -56,6 +58,7 @@ Taali is your **processor** (and, under the EU AI Act, the **provider**); you ar
 - **Purpose of processing:** `[CUSTOMER — e.g. screening applicants for role X]`
 - **Lawful basis (Art 6):** `[CUSTOMER — e.g. legitimate interests; attach your legitimate-interests assessment / balancing test]`
 - **If any solely automated significant decision is possible:** identify your Art 22 / UK Art 22C gateway and safeguards. `⚖ COUNSEL`
+- **Automatic pre-screen rejection — record your decision (this applies to you by default, see §C):** `[CUSTOMER — state whether you LEAVE IT ON or TURN IT OFF per role, and on what basis. If ON: name the jurisdictions your candidates are in; for EU candidates identify your Art 22(2) gateway; for UK candidates set out your Art 22C safeguard set (how you inform the candidate, take representations, provide human intervention, and allow contest) and who delivers each. If OFF: confirm every rejection becomes a human-actioned decision, and for which roles.]` `⚖ COUNSEL`
 - **Special-category basis (Art 9), if engaged:** `[CUSTOMER — normally none; if your process could rely on special-category data, or you run a demographic survey, state the Art 9 condition and any explicit consent]`
 - **Transparency:** `[CUSTOMER — confirm you will issue the candidate privacy notice and name yourself as controller]`
 
@@ -78,6 +81,7 @@ Assess the risks to candidates for **your** deployment. Common ones (adapt sever
 
 | Risk | `[CUSTOMER]` mitigation |
 |---|---|
+| **Candidate rejected at pre-screen with no human involved (ON by default)** | `[CUSTOMER — record your §E decision. If left on: Art 22C safeguards delivered and, for EU candidates, an Art 22(2) gateway identified. If not: turn it off for the affected roles]` `⚖ COUNSEL` |
 | Over-reliance on AI verdict (rubber-stamp review) | `[CUSTOMER — reviewer authority + evidence-first review per §G]` `⚖ COUNSEL` |
 | Indirect discrimination via role criteria | `[CUSTOMER — criteria review; bias monitoring; you remain liable under Equality Act]` |
 | Special-category leakage in free-text inputs | `[CUSTOMER — input hygiene; awaiting Taali H2 masking analysis]` `⚖ COUNSEL` |
