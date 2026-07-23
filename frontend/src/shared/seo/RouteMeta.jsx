@@ -47,6 +47,21 @@ const PUBLIC_META = {
     description:
       'Writing from Taali on AI-native work, agentic hiring, and how high-performing teams use AI in engineering and beyond.',
   },
+  '/privacy': {
+    title: 'Privacy Notice — Taali',
+    description:
+      'How Taali handles personal data — as controller of customer and site data, and as processor of candidate data on behalf of the organisations that hire with Taali.',
+  },
+  '/terms': {
+    title: 'Terms of Service — Taali',
+    description:
+      'The terms that govern use of Taali, the AI-assisted hiring platform: accounts, usage-based billing, data ownership, and human decision control.',
+  },
+  '/subprocessors': {
+    title: 'Subprocessors — Taali',
+    description:
+      'The subprocessors Taali uses to deliver the service, their function and location, and the transfer mechanism for UK/EU personal data.',
+  },
 };
 
 // /showcase renders the same page as /demo; /demo-walkthrough is the legacy

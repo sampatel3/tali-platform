@@ -1,0 +1,187 @@
+/* Legal pages (/privacy, /terms, /subprocessors) — clean, text-first prose on
+   the marketing CSS variables (--bg, --ink, --ink-2, --mute, --purple, --line,
+   --bg-2, fonts). Scoped to `.legal-*` so nothing leaks into app surfaces.
+   Models the blog prose treatment; the sticky header reuses the shared
+   `.app-nav` bar. Light theme, purple tones only. */
+
+.legal-wrap {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+/* Sub-nav tabs that live inside the shared `.app-nav` header, switching
+   between the three legal pages. */
+.legal-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.legal-tab {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--mute);
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  transition: color 0.15s ease, background 0.15s ease;
+  white-space: nowrap;
+}
+
+.legal-tab:hover {
+  color: var(--ink);
+  background: var(--bg-3);
+}
+
+.legal-tab.is-active {
+  color: var(--purple-2);
+  background: var(--purple-soft);
+}
+
+.legal-container {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.legal-head {
+  padding: 56px 0 28px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 36px;
+}
+
+.legal-kicker {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--purple);
+}
+
+.legal-head h1 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: clamp(30px, 4.5vw, 46px);
+  line-height: 1.04;
+  letter-spacing: -0.03em;
+  margin: 14px 0 14px;
+}
+
+.legal-lede {
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 44rem;
+  margin: 0;
+}
+
+.legal-meta {
+  margin-top: 18px;
+  font-size: 0.8125rem;
+  color: var(--mute);
+}
+
+/* ---- prose body ---- */
+.legal-prose {
+  font-size: 1rem;
+  line-height: 1.72;
+  color: var(--ink-2);
+  padding-bottom: 8px;
+}
+
+.legal-prose h2 {
+  font-family: var(--font-display);
+  color: var(--ink);
+  font-size: 1.3rem;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  margin: 2.2em 0 0.5em;
+}
+
+.legal-prose h3 {
+  font-family: var(--font-display);
+  color: var(--ink);
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  margin: 1.6em 0 0.4em;
+}
+
+.legal-prose p { margin: 0 0 1.1em; }
+.legal-prose strong { color: var(--ink); font-weight: 600; }
+.legal-prose em { font-style: italic; }
+
+.legal-prose a {
+  color: var(--purple);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.legal-prose a:hover { opacity: 0.8; }
+
+.legal-prose ul,
+.legal-prose ol { margin: 0 0 1.1em; padding-left: 1.3em; }
+.legal-prose li { margin: 0.35em 0; }
+.legal-prose li::marker { color: var(--purple); }
+
+.legal-prose hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 2.2em 0;
+}
+
+/* ---- data table (subprocessor list) ---- */
+.legal-table-wrap {
+  overflow-x: auto;
+  margin: 1.4em 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.legal-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  min-width: 720px;
+}
+
+.legal-table th,
+.legal-table td {
+  text-align: left;
+  vertical-align: top;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.legal-table thead th {
+  background: var(--bg-2);
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  position: sticky;
+  top: 0;
+}
+
+.legal-table tbody tr:last-child td { border-bottom: 0; }
+.legal-table tbody tr:hover { background: var(--bg-3); }
+.legal-table td:first-child { color: var(--ink); font-weight: 600; }
+
+/* ---- footer ---- */
+.legal-footer {
+  border-top: 1px solid var(--line);
+  margin-top: 56px;
+  padding: 28px 0 56px;
+  color: var(--mute);
+  font-size: 0.8125rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
+}
+.legal-footer a { color: var(--ink-2); text-decoration: none; }
+.legal-footer a:hover { color: var(--purple); }
+.legal-footer .sep { color: var(--line-2); }

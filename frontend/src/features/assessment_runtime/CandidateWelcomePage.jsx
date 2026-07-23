@@ -258,7 +258,7 @@ export const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
               <div className="mt-6 space-y-3">
                 {[
                   'A real prompt, not a riddle.',
-                  'Work normally inside the workspace with Claude and the live repo. Copy and paste continue to work between its editor and chat.',
+                  'Work normally inside the workspace with Claude, an AI assistant, and the live repo. Copy and paste continue to work between its editor and chat.',
                   'You are scored on how you steer and the design decisions you make — not on whether you reach working code. The agent can write code; the judgment is yours to show.',
                   'The session transcript is reviewed — not your screen, mic, or camera.',
                 ].map((item) => (

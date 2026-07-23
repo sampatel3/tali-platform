@@ -17,9 +17,11 @@ class FraudResult(BaseModel):
 
 
 class V2Result(BaseModel):
+    # NB: Never add sentiment/emotion analysis of candidates here or anywhere
+    # else. Inferring emotions of people in a work context is a prohibited
+    # practice under the EU AI Act (Art 5(1)(f), in force since Feb 2025).
     enabled: bool = False
     grammar_score: Optional[float] = None
-    sentiment_trajectory: Optional[Any] = None
     prompt_type_distribution: Optional[Any] = None
     learning_velocity: Optional[float] = None
     copy_from_stackoverflow: Optional[float] = None

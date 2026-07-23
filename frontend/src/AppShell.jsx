@@ -14,6 +14,7 @@ import { ToastProvider } from './context/ToastContext';
 import { JobStatusProvider } from './contexts/JobStatusContext';
 import { assessments as assessmentsApi } from './shared/api/assessmentsClient';
 import { createPageNavigator } from './app/pageNavigation';
+import { legalRoutes } from './app/legalRoutes';
 import {
   AssessmentLiveRoute,
   CandidateWelcomeRoute,
@@ -516,6 +517,11 @@ function AppContent() {
           </Suspense>
         )}
       />
+      {/* Public, no-auth legal pages — /privacy, /terms, /subprocessors.
+          Declared as a Route fragment (see app/legalRoutes) so this file stays
+          within its ratcheted line cap. */}
+      {legalRoutes}
+
       <Route path="/login" element={<Suspense fallback={lazyFallback}><LoginPage onNavigate={navigateToPage} /></Suspense>} />
       <Route path="/register" element={<Suspense fallback={lazyFallback}><RegisterPage onNavigate={navigateToPage} /></Suspense>} />
       <Route path="/forgot-password" element={<Suspense fallback={lazyFallback}><ForgotPasswordPage onNavigate={navigateToPage} /></Suspense>} />

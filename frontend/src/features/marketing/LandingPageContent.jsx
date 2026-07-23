@@ -77,6 +77,14 @@ const footerColumns = [
       { label: 'Contact', href: 'mailto:hello@taali.ai' },
     ],
   },
+  {
+    title: 'Legal',
+    items: [
+      { label: 'Privacy', page: 'privacy' },
+      { label: 'Terms', page: 'terms' },
+      { label: 'Subprocessors', page: 'subprocessors' },
+    ],
+  },
 ];
 
 export const LandingPage = ({ onNavigate }) => {
@@ -314,7 +322,7 @@ export const LandingPage = ({ onNavigate }) => {
 
       <footer className="border-t border-[var(--line)] bg-[var(--ink)] text-[var(--bg)]">
         <div className={`${containerClass} py-14`}>
-          <div className="grid gap-10 lg:grid-cols-[1.4fr_.9fr_.9fr]">
+          <div className="grid gap-10 lg:grid-cols-[1.4fr_.9fr_.9fr_.9fr]">
             <div>
               <TaaliLogo onClick={() => onNavigate('landing')} wordmarkClassName="!text-[var(--bg)]" />
               <p className="mt-5 max-w-[17.5rem] text-[0.9375rem] leading-7 text-[var(--taali-inverse-text)] opacity-70">
