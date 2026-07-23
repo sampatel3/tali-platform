@@ -430,8 +430,8 @@ const getSyncSummaryValue = (summary, keys, fallback = 0) => {
 // OFF state on this page guides the user to open a role. Pause/Resume here is
 // a workspace override: it gates every enabled role without rewriting any
 // role's own ON/PAUSED/OFF choice.
-const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
-  const { status, refetch } = orgStatusResult;
+const useJobsHeaderAgent = (isShowcase, orgStatusResult) => {
+  const { status, error, refetch } = orgStatusResult;
   const agent = useMemo(() => {
     if (isShowcase) {
       return {
@@ -445,17 +445,16 @@ const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
         controlScope: 'workspace',
       };
     }
-    const anyEnabled = roles.some((role) => role?.agentic_mode_enabled);
     if (!status) {
-      // Pre-fetch placeholder. Show OFF until the org-aggregate payload lands.
+      // The org poll is the only thing that knows the workspace agent state,
+      // so until it lands we know nothing. This used to render a synthetic
+      // OFF, which is indistinguishable from a recruiter having genuinely
+      // turned their agents off — a slow or failing poll then reported "agents
+      // off" over a workspace with roles actively running. Say "unknown"
+      // instead; AgentHeader has its own copy for both cases.
       return {
-        on: false,
-        paused: false,
-        pending: 0,
-        spentCents: 0,
-        budgetCents: anyEnabled ? 5000 : 0,
-        tick: null,
-        inFlight: false,
+        loading: !error,
+        unavailable: Boolean(error),
         controlScope: 'workspace',
       };
     }
@@ -463,7 +462,7 @@ const useJobsHeaderAgent = (roles, isShowcase, orgStatusResult) => {
       isEnabled: status.active_role_count > 0,
       controlScope: 'workspace',
     });
-  }, [status, roles, isShowcase]);
+  }, [status, error, isShowcase]);
   return { agent, refetch };
 };
 
@@ -497,6 +496,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   // at AGENT_SPEND_FANOUT_LIMIT to keep the request count bounded; orgs with
   // more agentic roles fall back to the cap-only display.
   const [agentSpendByRole, setAgentSpendByRole] = useState({});
+  // Whether the breakdown above has actually answered. An empty map means "no
+  // pending work" only once it has; before that it means "we don't know yet",
+  // and the tiles must not read the difference as a clear queue. A workspace
+  // with no agent-enabled roles has nothing to ask for and counts as known.
+  const [agentSpendLoaded, setAgentSpendLoaded] = useState(false);
   // Org-level KPIs from /agent/org-status — the SAME source the Home hub reads,
   // so "Org budget · MTD" is the canonical org figure (total credits this month
   // vs sum of ALL role caps), not a truncated per-role sum.
@@ -687,8 +691,10 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           };
         });
         setAgentSpendByRole(next);
+        setAgentSpendLoaded(true);
       } catch {
-        // Quiet failure — tile falls back to cap-only.
+        // Quiet failure — the tiles stay on their "unknown" rendering rather
+        // than reporting the absent numbers as zero.
       }
     };
     void fetchSpend();
@@ -897,7 +903,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   }, [isShowcase, rolesApi]);
 
   const { agent: headerAgent, refetch: refetchAgentStatus } = useJobsHeaderAgent(
-    roles,
     isShowcase,
     orgStatusResult,
   );
@@ -1107,6 +1112,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           // cap — which is why Jobs and Home disagreed.
           const orgBudgetCapCents = Number(orgKpis?.org_budget_cap_cents || 0);
           const budget = budgetTile(Number(orgKpis?.org_budget_spent_cents || 0), orgBudgetCapCents);
+          // Both of these read a poll that can be slow or down. A missing
+          // payload is not a zero: "queue clear" and "no cap set" are claims
+          // about the workspace, and neither is ours to make until the numbers
+          // arrive.
+          const budgetKnown = Boolean(orgKpis);
+          const awaitingKnown = agentSpendLoaded
+            || !roles.some((role) => role?.agentic_mode_enabled);
           return (
             <Reveal delay={0.08} style={{ marginBottom: 18 }}>
             <KpiStrip
@@ -1127,19 +1139,21 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                 {
                   key: 'awaiting',
                   label: 'Awaiting you',
-                  value: formatCount(awaitingCount),
-                  emph: awaitingCount > 0,
-                  sub: awaitingCount === 0
-                    ? 'queue clear'
-                    : `across ${formatCount(awaitingRoleCount)} role${awaitingRoleCount === 1 ? '' : 's'}`,
+                  value: awaitingKnown ? formatCount(awaitingCount) : '—',
+                  emph: awaitingKnown && awaitingCount > 0,
+                  sub: !awaitingKnown
+                    ? 'status unavailable'
+                    : awaitingCount === 0
+                      ? 'queue clear'
+                      : `across ${formatCount(awaitingRoleCount)} role${awaitingRoleCount === 1 ? '' : 's'}`,
                 },
                 {
                   key: 'budget',
                   label: 'Org budget · MTD',
-                  value: budget.value,
-                  unit: budget.unit,
-                  bar: orgBudgetCapCents > 0 ? budget : null,
-                  sub: budget.sub,
+                  value: budgetKnown ? budget.value : '—',
+                  unit: budgetKnown ? budget.unit : null,
+                  bar: budgetKnown && orgBudgetCapCents > 0 ? budget : null,
+                  sub: budgetKnown ? budget.sub : 'status unavailable',
                 },
               ]}
             />

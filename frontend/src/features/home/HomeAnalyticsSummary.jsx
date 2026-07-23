@@ -21,7 +21,15 @@ const PulseValue = ({ to, format, unit }) => (
   </div>
 );
 
-export const HomeAnalyticsSummary = ({ kpis = {}, orgBudget = null, onNavigate }) => {
+export const HomeAnalyticsSummary = ({
+  kpis = {},
+  orgBudget = null,
+  // Every value here comes from the org-status poll. When it has not landed
+  // (slow or failing), the cells must not fabricate $0 / 0% — the whole strip
+  // reads "unavailable" together, matching the header.
+  known = true,
+  onNavigate,
+}) => {
   const cells = [
     { k: 'Decisions today', to: kpis.today || 0, format: formatCount },
     { k: 'Auto-advanced', to: kpis.auto_applied_today || 0, format: formatCount },
@@ -48,7 +56,11 @@ export const HomeAnalyticsSummary = ({ kpis = {}, orgBudget = null, onNavigate }
         {cells.map((c) => (
           <div className="home-pulse-stat" key={c.k}>
             <div className="home-pulse-k">{c.k}</div>
-            <PulseValue to={c.to} format={c.format} unit={c.unit} />
+            {known ? (
+              <PulseValue to={c.to} format={c.format} unit={c.unit} />
+            ) : (
+              <div className="home-pulse-v home-pulse-v-muted" aria-label="status unavailable">—</div>
+            )}
           </div>
         ))}
       </div>

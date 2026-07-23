@@ -41,6 +41,14 @@ from ...services.logical_event_membership import apply_live_logical_event_scope
 FEEDBACK_REVERT_GRACE = timedelta(hours=1)
 SNOOZE_DURATION = timedelta(hours=1)
 RANGE_TO_DAYS = {"24h": 1, "7d": 7, "30d": 30}
+# How many of the newest agent/recruiter events the header tick considers
+# before the live-logical scope filter runs (see ``org_header_extras``). The
+# tick reports the latest visible activity, so anything older than this window
+# could never have been shown anyway. The scope filter costs roughly 15ms per
+# row it inspects, and on live data it excludes ~none of the recent ones, so a
+# small window keeps the poll cheap. Worst case — every candidate row is
+# filtered out — the tick renders blank rather than wrong.
+ACTIVITY_SCAN_LIMIT = 25
 
 
 # ---------------------------------------------------------------------------
@@ -462,38 +470,61 @@ def org_header_extras(
     # Most recent agent/recruiter activity org-wide, with candidate + role name,
     # pre-annotated with a ``summary`` sentence so the bar's tick renders as a
     # sentence without any per-role fan-out.
-    activity_query = apply_live_logical_event_scope(
-        db,
-        db.query(CandidateApplicationEvent, Candidate, Role.name)
-        .join(
-            CandidateApplication,
-            CandidateApplication.id == CandidateApplicationEvent.application_id,
-        )
-        .join(
-            Candidate,
-            Candidate.id == CandidateApplication.candidate_id,
-        )
-        # The event owns the logical product role.  The application join is
-        # evidence/candidate transport only and may point at an ATS owner role.
-        .outerjoin(
-            Role,
-            and_(
-                Role.id == CandidateApplicationEvent.role_id,
-                Role.organization_id == int(organization_id),
-                Role.deleted_at.is_(None),
-            ),
-        )
+    #
+    # The live-logical scope is a correlated EXISTS over the org's whole
+    # application roster, so it costs the same again for every event row it has
+    # to inspect. Ordering the full ledger by created_at made Postgres evaluate
+    # it thousands of times over — ~5 minutes on a large org, against a 10s
+    # poll budget, so org-status never returned and every surface reading it
+    # fell back to its empty state. Only the newest few events can ever win the
+    # tick, so narrow the candidate rows to those first and let the scope
+    # filter run over that handful instead.
+    recent_event_ids = [
+        row.id
+        for row in db.query(CandidateApplicationEvent.id)
         .filter(
+            CandidateApplicationEvent.organization_id == int(organization_id),
             CandidateApplicationEvent.actor_type.in_(("agent", "recruiter")),
-        ),
-        organization_id=int(organization_id),
-    )
-    activity_row = (
-        activity_query
+        )
         .order_by(desc(CandidateApplicationEvent.created_at))
-        .limit(1)
-        .first()
-    )
+        .limit(ACTIVITY_SCAN_LIMIT)
+        .all()
+    ]
+    activity_row = None
+    if recent_event_ids:
+        activity_query = apply_live_logical_event_scope(
+            db,
+            db.query(CandidateApplicationEvent, Candidate, Role.name)
+            .join(
+                CandidateApplication,
+                CandidateApplication.id == CandidateApplicationEvent.application_id,
+            )
+            .join(
+                Candidate,
+                Candidate.id == CandidateApplication.candidate_id,
+            )
+            # The event owns the logical product role.  The application join is
+            # evidence/candidate transport only and may point at an ATS owner role.
+            .outerjoin(
+                Role,
+                and_(
+                    Role.id == CandidateApplicationEvent.role_id,
+                    Role.organization_id == int(organization_id),
+                    Role.deleted_at.is_(None),
+                ),
+            )
+            .filter(
+                CandidateApplicationEvent.id.in_(recent_event_ids),
+                CandidateApplicationEvent.actor_type.in_(("agent", "recruiter")),
+            ),
+            organization_id=int(organization_id),
+        )
+        activity_row = (
+            activity_query
+            .order_by(desc(CandidateApplicationEvent.created_at))
+            .limit(1)
+            .first()
+        )
     last_activity = None
     if activity_row is not None:
         event, candidate, role_name = activity_row

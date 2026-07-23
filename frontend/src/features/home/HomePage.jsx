@@ -121,6 +121,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const [searchParams, setSearchParams] = useSearchParams();
   const {
     payload: sharedOrgStatus,
+    error: orgStatusError,
     refetch: refetchOrgStatus,
   } = useAgentStatusOrg(Boolean(user));
 
@@ -765,6 +766,17 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   const agentRunningCount = Number(kpis.active_role_count || 0);
   const agentPausedCount = Number(kpis.paused_role_count || 0);
   const headerAgent = useMemo(() => {
+    if (!orgStatus) {
+      // The `kpis` fallback below derives what it can from locally loaded
+      // decisions, but nothing local knows how many roles have the agent on —
+      // it hard-codes zero. Reporting that as OFF told recruiters their agents
+      // were off whenever the org poll was slow or failing. Report unknown.
+      return {
+        loading: !orgStatusError,
+        unavailable: Boolean(orgStatusError),
+        controlScope: 'workspace',
+      };
+    }
     const running = agentRunningCount;
     const paused = agentPausedCount;
     const enabled = running + paused;
@@ -802,6 +814,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
     kpis.local_paused_role_count,
     kpis.paused_reason,
     orgAgentAction,
+    orgStatus,
+    orgStatusError,
   ]);
 
   return (
@@ -876,7 +890,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             console (outcomes, fleet, teaching, A/B, decision log) moved to
             /analytics — keeps the hub's review loop focused, and keeps the
             expensive reporting queries off every home load. */}
-        <HomeAnalyticsSummary kpis={kpis} orgBudget={orgBudget} onNavigate={onNavigate} />
+        <HomeAnalyticsSummary kpis={kpis} orgBudget={orgBudget} known={Boolean(orgStatus)} onNavigate={onNavigate} />
       </div>
         </div>
         {/* The chat dock opens when an agent is selected (or in bulk mode). Its

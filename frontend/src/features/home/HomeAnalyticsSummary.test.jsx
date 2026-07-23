@@ -56,3 +56,18 @@ test('under reduced motion the pulse numbers render their final value immediatel
   expect(values[4]).toContain('$7');
   expect(values[4]).toContain('/ $50');
 });
+
+test('shows the pulse cells as unavailable, not $0/0%, when org-status has not landed', () => {
+  mockReducedMotion(true);
+  // known=false is the state during a slow or failing org-status poll: the
+  // page has no analytics to show, and must say so rather than render zeros.
+  const { container } = render(
+    <HomeAnalyticsSummary kpis={{}} orgBudget={null} known={false} />,
+  );
+  const muted = [...container.querySelectorAll('.home-pulse-v-muted')];
+  expect(muted).toHaveLength(5);
+  muted.forEach((cell) => expect(cell.textContent).toBe('—'));
+  expect(container.querySelector('.home-pulse-v:not(.home-pulse-v-muted)')).toBeNull();
+  expect(container.textContent).not.toContain('$0');
+  expect(container.textContent).not.toContain('0%');
+});
