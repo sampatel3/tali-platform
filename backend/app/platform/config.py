@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # Per-account login lockout: N consecutive failures locks the account for M minutes
     AUTH_LOCKOUT_THRESHOLD: int = 5
     AUTH_LOCKOUT_MINUTES: int = 15
+    # Public self-serve signup. OFF (default) = the ``POST /api/v1/auth/register``
+    # router is not mounted (404), so a new org can only be created by an operator
+    # via ``scripts/create_org.py``. Onboarding is sales-led: every org and its
+    # first owner are set up by hand. Flip ON only to reopen self-serve signup.
+    ALLOW_PUBLIC_REGISTRATION: bool = False
     # Per-key (or per-IP) rate limit for the public /mcp server. Since #890 the
     # /mcp mount accepts tali_* API keys, so it is internet-facing and needs a
     # limiter (route-level deps are bypassed by the ASGI mount). Bucketed on the

@@ -338,11 +338,17 @@ app.include_router(
     prefix="/api/v1/auth/jwt",
     tags=["auth"],
 )
-app.include_router(
-    fastapi_users.get_register_router(UserRead, UserCreate),
-    prefix="/api/v1/auth",
-    tags=["auth"],
-)
+# Self-serve signup is off by default: onboarding is sales-led, so a new org
+# is created only by an operator via scripts/create_org.py. Mounting the
+# register router is what makes public signup possible, so we gate the mount
+# itself — when the flag is off the endpoint 404s rather than existing-but-
+# refusing.
+if settings.ALLOW_PUBLIC_REGISTRATION:
+    app.include_router(
+        fastapi_users.get_register_router(UserRead, UserCreate),
+        prefix="/api/v1/auth",
+        tags=["auth"],
+    )
 app.include_router(
     fastapi_users.get_reset_password_router(),
     prefix="/api/v1/auth",

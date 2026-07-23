@@ -72,7 +72,6 @@ import {
   OutreachThanksPage,
   PipelineAnalyticsPage,
   PublicJobPage,
-  RegisterPage,
   ReportMotionPreview,
   RequisitionTemplatePage,
   RequisitionsPage,
@@ -527,7 +526,10 @@ function AppContent() {
       {legalRoutes}
 
       <Route path="/login" element={<Suspense fallback={lazyFallback}><LoginPage onNavigate={navigateToPage} /></Suspense>} />
-      <Route path="/register" element={<Suspense fallback={lazyFallback}><RegisterPage onNavigate={navigateToPage} /></Suspense>} />
+      {/* Self-serve signup is closed (onboarding is sales-led). Send any stale
+          /register link to the "request access" demo flow rather than a form
+          that the API now 404s. */}
+      <Route path="/register" element={<Navigate to="/demo-lead" replace />} />
       <Route path="/forgot-password" element={<Suspense fallback={lazyFallback}><ForgotPasswordPage onNavigate={navigateToPage} /></Suspense>} />
       <Route path="/reset-password" element={<Suspense fallback={lazyFallback}><ResetPasswordPage onNavigate={navigateToPage} token={resetPasswordToken} /></Suspense>} />
       <Route path="/verify-email" element={<Suspense fallback={lazyFallback}><VerifyEmailPage onNavigate={navigateToPage} token={verifyEmailToken} /></Suspense>} />
